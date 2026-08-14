@@ -8,12 +8,12 @@
 }
 
 .axis {
-  stroke: var(--dsw-alias-border-l1);
+  stroke: var(--dsw-alias-border-l2);
   stroke-width: 1;
 }
 
 .grid {
-  stroke: var(--dsw-alias-border-l1);
+  stroke: var(--dsw-alias-border-l2);
   stroke-width: 1;
   stroke-dasharray: 3 3;
 }
@@ -31,7 +31,7 @@
 }
 
 .tick {
-  fill: var(--dsw-alias-label-dimmed);
+  fill: var(--dsw-alias-label-secondary);
   font-size: 11px;
 }
 

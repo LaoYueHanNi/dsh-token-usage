@@ -25,7 +25,7 @@
 .muted {
   margin: 0;
   font-size: 12px;
-  color: var(--dsw-alias-label-dimmed);
+  color: var(--dsw-alias-label-secondary);
 }
 
 .error {
@@ -116,7 +116,7 @@
 
 .rangeSeparator {
   font-size: 12px;
-  color: var(--dsw-alias-label-dimmed);
+  color: var(--dsw-alias-label-secondary);
 }
 
 .quickButtons {
