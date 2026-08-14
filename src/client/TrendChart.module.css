@@ -12,6 +12,12 @@
   stroke-width: 1;
 }
 
+.grid {
+  stroke: var(--dsw-alias-border-l1);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+
 .line {
   fill: none;
   stroke: var(--dsw-alias-label-primary);

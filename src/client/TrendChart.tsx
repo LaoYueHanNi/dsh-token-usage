@@ -2,7 +2,9 @@
  * Daily total-token trend chart (browser half): a dependency-free SVG line
  * chart over the per-day rows of the already-filtered summary. The x axis
  * spans every calendar day of the active range — days without records plot
- * as zero — and an empty range renders a placeholder instead of an axis.
+ * as zero — with day labels first/middle/last; the y axis grid uses round
+ * 1/2/2.5/5 × 10ⁿ steps (K/M/B abbreviated). An empty range renders a
+ * placeholder instead of an axis.
  *
  * @module token-usage/client/TrendChart
  */
@@ -10,19 +12,42 @@
 import type { ReactNode } from 'react'
 import type { UsageDayRow } from '../wire.ts'
 import { daySeries } from './day.ts'
+import { formatTokens } from './format.ts'
 import styles from './TrendChart.module.css'
 
 /** SVG canvas metrics; the element scales to the section width via viewBox. */
 const WIDTH = 800
 const HEIGHT = 190
-const PAD = 16
-const AXIS_LABELS = 22
+const TOP = 12
+const BOTTOM = 16
+const LEFT = 44
+const RIGHT = 16
+const X_LABELS = 22
 
 /** X-axis label positions: first, middle, and last day for long ranges. */
 function labelIndices(length: number): number[] {
   if (length <= 3) return Array.from({ length }, (_, index) => index)
   const middle = Math.floor((length - 1) / 2)
   return [...new Set([0, middle, length - 1])]
+}
+
+/** The roundest step from 1/2/2.5/5 × 10ⁿ not below the rough target. */
+export function niceStep(rough: number): number {
+  const base = 10 ** Math.floor(Math.log10(rough))
+  const fraction = rough / base
+  const nice = fraction <= 1 ? 1 : fraction <= 2 ? 2 : fraction <= 2.5 ? 2.5 : fraction <= 5 ? 5 : 10
+  return nice * base
+}
+
+/** The y-axis tick values from one step up to the chart top (inclusive). */
+function tickValues(max: number): { top: number; ticks: number[] } {
+  if (max === 0) return { top: 1, ticks: [] }
+  const step = niceStep(max / 4)
+  const top = Math.ceil(max / step) * step
+  const ticks: number[] = []
+  for (let value = step; value < top; value += step) ticks.push(value)
+  ticks.push(top)
+  return { top, ticks }
 }
 
 /**
@@ -40,12 +65,13 @@ export function TrendChart({ rows, from, to }: {
   if (points.length === 0) {
     return <p className={styles.empty}>区间内暂无数据</p>
   }
-  const max = Math.max(...points.map(point => point.tokens), 1)
-  const innerWidth = WIDTH - PAD * 2
-  const innerHeight = HEIGHT - PAD * 2 - AXIS_LABELS
+  const max = Math.max(...points.map(point => point.tokens))
+  const { top, ticks } = tickValues(max)
+  const innerWidth = WIDTH - LEFT - RIGHT
+  const innerHeight = HEIGHT - TOP - BOTTOM - X_LABELS
   const step = points.length > 1 ? innerWidth / (points.length - 1) : 0
-  const x = (index: number): number => PAD + (points.length > 1 ? index * step : innerWidth / 2)
-  const y = (tokens: number): number => PAD + innerHeight - (tokens / max) * innerHeight
+  const x = (index: number): number => LEFT + (points.length > 1 ? index * step : innerWidth / 2)
+  const y = (tokens: number): number => TOP + innerHeight - (tokens / top) * innerHeight
   const path = points
     .map((point, index) => `${index === 0 ? 'M' : 'L'}${x(index).toFixed(1)},${y(point.tokens).toFixed(1)}`)
     .join(' ')
@@ -57,8 +83,16 @@ export function TrendChart({ rows, from, to }: {
       viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
       className={styles.chart}
     >
+      {ticks.map(tick => (
+        <g key={tick}>
+          <line x1={LEFT} y1={y(tick)} x2={WIDTH - RIGHT} y2={y(tick)} className={styles.grid} />
+          <text x={LEFT - 6} y={y(tick) + 3} textAnchor="end" className={styles.tick}>
+            {formatTokens(tick)}
+          </text>
+        </g>
+      ))}
       <line
-        x1={PAD} y1={PAD + innerHeight} x2={WIDTH - PAD} y2={PAD + innerHeight}
+        x1={LEFT} y1={y(0)} x2={WIDTH - RIGHT} y2={y(0)}
         className={styles.axis}
       />
       <path d={path} className={styles.line} />

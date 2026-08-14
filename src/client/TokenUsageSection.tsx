@@ -13,11 +13,17 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { SettingsSectionOwnerProps } from '@deepseek-ai/dsh-client-ui-settings/client'
-import type { UsageSummary, UsageTotals } from '../wire.ts'
+import type { UsageSummary } from '../wire.ts'
 import { STATS_PATH } from '../wire.ts'
 import { shiftedDayKey, totalTokens } from './day.ts'
+import { formatHitRate, formatTokens } from './format.ts'
 import { TrendChart } from './TrendChart.tsx'
 import styles from './TokenUsageSection.module.css'
+
+// Re-exported for tests and sibling consumers; the implementations live in
+// the leaf modules (day / format) so the chart can share them without a cycle.
+export { totalTokens } from './day.ts'
+export { formatTokens, formatHitRate } from './format.ts'
 
 type LoadState =
   | { status: 'loading' }
@@ -69,49 +75,6 @@ function quickRange(days: number): { from: string; to: string } {
 function isQuickActive(days: number, filters: Filters): boolean {
   const range = quickRange(days)
   return filters.from === range.from && filters.to === range.to
-}
-
-/**
- * Abbreviate a token count: raw below 1K, `xxK` below 1M, `xxM` below 1 亿
- * (1e8), `xxB` from 1 亿 up with B = 10 亿 (1e9) — 1 亿 is `0.1B`, 3 亿 is
- * `0.3B`, 10 亿 is `1B`, 30 亿 is `3B`. One decimal while the scaled value is
- * below 10, integer otherwise — `950K`, `1.5M`, `50M`, `0.5B`, `3B`.
- * @param count - a non-negative token count.
- * @returns the compact display string.
- */
-export function formatTokens(count: number): string {
-  if (count < 1_000) return String(count)
-  if (count < 1_000_000) return scale(count / 1_000) + 'K'
-  if (count < 100_000_000) return scale(count / 1_000_000) + 'M'
-  return scale(count / 1_000_000_000) + 'B'
-}
-
-/** One decimal below 10, integer otherwise, trailing `.0` stripped. */
-function scale(value: number): string {
-  if (value >= 10) return String(Math.round(value))
-  const oneDecimal = value.toFixed(1)
-  return oneDecimal.endsWith('.0') ? oneDecimal.slice(0, -2) : oneDecimal
-}
-
-/** Always one decimal (stripped when `.0`), unlike {@link scale}: percentages keep their precision. */
-function percent(value: number): string {
-  const oneDecimal = value.toFixed(1)
-  return oneDecimal.endsWith('.0') ? oneDecimal.slice(0, -2) : oneDecimal
-}
-
-/** Total tokens across the four buckets (billed input = input + cacheRead + cacheWrite). */
-export { totalTokens } from './day.ts'
-
-/**
- * Cache hit rate as display text: cache reads over served input
- * (missed input + cache reads). `—` when nothing was served.
- * @param totals - the aggregated totals.
- * @returns e.g. `87.5%`, or `—` for an empty denominator.
- */
-export function formatHitRate(totals: UsageTotals): string {
-  const served = totals.inputTokens + totals.cacheReadTokens
-  if (served === 0) return '—'
-  return `${percent(totals.cacheReadTokens / served * 100)}%`
 }
 
 /** One card in a metric row. */

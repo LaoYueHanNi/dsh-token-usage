@@ -116,7 +116,8 @@ describe('TokenUsageSection', () => {
     expect(screen.getByText('9.1%')).toBeTruthy()
     // Row 2 cards: the four buckets (labels also head the table columns).
     expect(screen.getAllByText('输入').length).toBeGreaterThan(0)
-    expect(screen.getByText('30')).toBeTruthy()
+    // '30' matches the card value and possibly a y-axis tick; at least the card is there.
+    expect(screen.getAllByText('30').length).toBeGreaterThan(0)
     expect(screen.getAllByText('输出').length).toBeGreaterThan(0)
     expect(screen.getByText('12')).toBeTruthy()
     expect(screen.getAllByText('缓存读').length).toBeGreaterThan(0)
@@ -252,7 +253,14 @@ describe('TokenUsageSection filtering', () => {
   it('renders the daily token chart from the day rows', async () => {
     stubFetch(async () => ({ ok: true, json: async () => SUMMARY }))
     render(<TokenUsageSection close={() => {}} />)
-    expect(await screen.findByRole('img', { name: '每日总 token 曲线' })).toBeTruthy()
+    const chart = await screen.findByRole('img', { name: '每日总 token 曲线' })
+    // Day totals are 31 and 16, so the y axis tops out at a round 40 (ticks 10..40).
+    for (const tick of ['10', '20', '30', '40']) {
+      expect(within(chart).getByText(tick)).toBeTruthy()
+    }
+    // Day labels (MM-DD) close the x axis.
+    expect(within(chart).getByText('01-15')).toBeTruthy()
+    expect(within(chart).getByText('01-16')).toBeTruthy()
   })
 })
 
