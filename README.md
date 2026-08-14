@@ -24,7 +24,8 @@ dsh plugin --profile web add github:LaoYueHanNi/dsh-token-usage
 ### 从本地目录安装（开发调试用）
 
 ```sh
-dsh plugin --profile web add link:E:/Documents/MyCode/oyw-dsh-plugin/dsh-token-usage
+dsh plugin --profile web add link:<插件目录绝对路径>
+# 示例：dsh plugin --profile web add link:D:/plugins/dsh-token-usage
 ```
 
 包声明了 `dsh.bundle`，`add` 会自动把插件加入该 profile 的层栈，**无需手动编辑任何配置文件**。首次启动会自动执行一次历史补齐（终端打印 `[token-usage] first-run sync: N added, M skipped`），之后纯实时记录。
@@ -46,7 +47,8 @@ dsh plugin --profile web remove dsh-token-usage
 ### 临时挂载（覆盖层，不动 profile）
 
 ```sh
-dsh web --patch E:/Documents/MyCode/oyw-dsh-plugin/dsh-token-usage/cordis.yml
+dsh web --patch <插件目录>/cordis.yml
+# 示例：dsh web --patch D:/plugins/dsh-token-usage/cordis.yml
 ```
 
 仅当次启动生效。`cordis.yml` 指向 built 产物 `lib/index.js`。
