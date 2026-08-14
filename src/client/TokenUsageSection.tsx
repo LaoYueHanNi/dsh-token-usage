@@ -87,18 +87,34 @@ function StatCard({ label, value }: { label: string; value: string }): ReactNode
   )
 }
 
-/** The filter bar: date range, model select, quick range buttons. */
+/** The filter bar: quick range select, day range, model select — one row. */
 function FilterBar({ filters, models, onChange }: {
   filters: Filters
   models: readonly string[]
   onChange: (next: Filters) => void
 }): ReactNode {
+  // 'custom' when the day inputs no longer hold one of the quick ranges.
+  const quickValue = QUICK_DAYS.find(days => isQuickActive(days, filters)) ?? 'custom'
   return (
     <div className={styles['filters']}>
+      <select
+        aria-label="快捷区间"
+        className={styles['control']}
+        value={quickValue}
+        onChange={event => {
+          const days = Number(event.target.value)
+          if (days > 0) onChange({ ...filters, ...quickRange(days) })
+        }}
+      >
+        <option value="1">1d</option>
+        <option value="7">7d</option>
+        <option value="30">30d</option>
+        <option value="custom">自定义</option>
+      </select>
       <input
         type="date"
         aria-label="开始日期"
-        className={styles['control']}
+        className={styles['dateControl']}
         value={filters.from}
         onChange={event => onChange({ ...filters, from: event.target.value })}
       />
@@ -106,32 +122,19 @@ function FilterBar({ filters, models, onChange }: {
       <input
         type="date"
         aria-label="结束日期"
-        className={styles['control']}
+        className={styles['dateControl']}
         value={filters.to}
         onChange={event => onChange({ ...filters, to: event.target.value })}
       />
       <select
         aria-label="模型"
-        className={styles['control']}
+        className={styles['modelControl']}
         value={filters.model}
         onChange={event => onChange({ ...filters, model: event.target.value })}
       >
         <option value="">全部模型</option>
         {models.map(model => <option key={model} value={model}>{model}</option>)}
       </select>
-      <div className={styles['quickButtons']}>
-        {QUICK_DAYS.map(days => (
-          <button
-            key={days}
-            type="button"
-            className={styles['button']}
-            aria-pressed={isQuickActive(days, filters)}
-            onClick={() => onChange({ ...filters, ...quickRange(days) })}
-          >
-            {`${String(days)}d`}
-          </button>
-        ))}
-      </div>
     </div>
   )
 }

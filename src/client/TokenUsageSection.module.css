@@ -90,21 +90,44 @@
   background: var(--dsw-interactive-bg-hover);
 }
 
-.button[aria-pressed='true'] {
-  color: var(--dsw-alias-bg-layer-2);
-  background: var(--dsw-alias-label-primary);
-  border-color: var(--dsw-alias-label-primary);
-}
-
 .filters {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 8px;
 }
 
 .control {
   box-sizing: border-box;
+  padding: 4px 8px;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsh-alias-bg-layer-2);
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 6px;
+}
+
+/* Fixed-narrow date inputs and a shrinkable model select keep the bar on one row. */
+.dateControl {
+  box-sizing: border-box;
+  flex: none;
+  width: 138px;
+  padding: 4px 6px;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-bg-layer-2);
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 6px;
+}
+
+.modelControl {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
   padding: 4px 8px;
   font-size: 13px;
   line-height: 20px;
@@ -117,11 +140,6 @@
 .rangeSeparator {
   font-size: 12px;
   color: var(--dsw-alias-label-secondary);
-}
-
-.quickButtons {
-  display: flex;
-  gap: 4px;
 }
 
 .cards {

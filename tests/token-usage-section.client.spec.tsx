@@ -182,21 +182,23 @@ describe('TokenUsageSection filtering', () => {
     expect(screen.queryByText('刷新')).toBeNull()
   })
 
-  it('renders the filter bar: two date inputs, the model select, quick buttons', async () => {
+  it('renders the filter bar: quick range select, two date inputs, model select', async () => {
     stubFetch(async () => ({ ok: true, json: async () => SUMMARY }))
     render(<TokenUsageSection close={() => {}} />)
     await screen.findAllByText('总 token')
+    const quick = screen.getByLabelText('快捷区间') as HTMLSelectElement
+    expect(quick.value).toBe('1')
+    for (const label of ['1d', '7d', '30d', '自定义']) {
+      expect(within(quick).getByText(label)).toBeTruthy()
+    }
     expect(screen.getByLabelText('开始日期')).toBeTruthy()
     expect(screen.getByLabelText('结束日期')).toBeTruthy()
     const select = screen.getByLabelText('模型')
     expect(within(select).getByText('全部模型')).toBeTruthy()
     expect(within(select).getByText('deepseek-reasoner')).toBeTruthy()
-    for (const label of ['1d', '7d', '30d']) {
-      expect(screen.getByRole('button', { name: label })).toBeTruthy()
-    }
   })
 
-  it('defaults to the 1d window: inputs and quick button reflect today', async () => {
+  it('defaults to the 1d window: inputs and quick select reflect today', async () => {
     const fetch = stubFetch(async () => ({ ok: true, json: async () => SUMMARY }))
     render(<TokenUsageSection close={() => {}} />)
     await screen.findAllByText('总 token')
@@ -205,23 +207,23 @@ describe('TokenUsageSection filtering', () => {
     expect(url.searchParams.get('to')).toBe(dayKey(0))
     expect(screen.getByLabelText('开始日期').getAttribute('value')).toBe(dayKey(0))
     expect(screen.getByLabelText('结束日期').getAttribute('value')).toBe(dayKey(0))
-    expect(screen.getByRole('button', { name: '1d' }).getAttribute('aria-pressed')).toBe('true')
+    expect((screen.getByLabelText('快捷区间') as HTMLSelectElement).value).toBe('1')
   })
 
-  it('fetches the 7d window (today minus 6 through today) when 7d is clicked', async () => {
+  it('fetches the 7d window (today minus 6 through today) when 7d is chosen', async () => {
     const fetch = stubFetch(async () => ({ ok: true, json: async () => SUMMARY }))
     render(<TokenUsageSection close={() => {}} />)
     await screen.findAllByText('总 token')
     expect(fetch).toHaveBeenCalledTimes(1)
 
-    fireEvent.click(screen.getByRole('button', { name: '7d' }))
+    fireEvent.change(screen.getByLabelText('快捷区间'), { target: { value: '7' } })
     await waitForCall(fetch, 2)
     const url = new URL(String(fetch.mock.calls[1]![0]), 'http://localhost')
     expect(url.searchParams.get('from')).toBe(dayKey(-6))
     expect(url.searchParams.get('to')).toBe(dayKey(0))
-    // Back in the ready state, the button reflects the active window.
+    // Back in the ready state, the select reflects the active window.
     await screen.findAllByText('总 token')
-    expect(screen.getByRole('button', { name: '7d' }).getAttribute('aria-pressed')).toBe('true')
+    expect((screen.getByLabelText('快捷区间') as HTMLSelectElement).value).toBe('7')
   })
 
   it('fetches with the model parameter when a model is chosen', async () => {
@@ -234,12 +236,21 @@ describe('TokenUsageSection filtering', () => {
     expect(url.searchParams.get('model')).toBe('deepseek-reasoner')
   })
 
+  it('marks the quick range custom once the day inputs diverge', async () => {
+    stubFetch(async () => ({ ok: true, json: async () => SUMMARY }))
+    render(<TokenUsageSection close={() => {}} />)
+    await screen.findAllByText('总 token')
+    fireEvent.change(screen.getByLabelText('开始日期'), { target: { value: dayKey(-3) } })
+    await screen.findAllByText('总 token')
+    expect((screen.getByLabelText('快捷区间') as HTMLSelectElement).value).toBe('custom')
+  })
+
   it('skips fetching while the range is mid-edit (from after to)', async () => {
     const fetch = stubFetch(async () => ({ ok: true, json: async () => SUMMARY }))
     render(<TokenUsageSection close={() => {}} />)
     await screen.findAllByText('总 token')
     // Start from the 7d quick window, then move the start past its end.
-    fireEvent.click(screen.getByRole('button', { name: '7d' }))
+    fireEvent.change(screen.getByLabelText('快捷区间'), { target: { value: '7' } })
     await waitForCall(fetch, 2)
     await screen.findAllByText('总 token')
     fireEvent.change(screen.getByLabelText('开始日期'), { target: { value: dayKey(5) } })
