@@ -77,7 +77,12 @@ export default {
         minify: true,
       })
       const classMap: Record<string, string> = {}
-      for (const [local, exp] of Object.entries(cssExports ?? {})) classMap[local] = exp.name
+      // Sort deterministically: lightningcss returns exports in a per-run
+      // order, which would make every rebuild churn lib/client.js.
+      for (const [local, exp] of Object.entries(cssExports ?? {})
+        .sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) {
+        classMap[local] = exp.name
+      }
       const tagId = `${PLUGIN_ID}/${basename(fileId)}`
       return [
         `const css = ${JSON.stringify(code.toString())};`,
