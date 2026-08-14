@@ -3,7 +3,9 @@
  * successful model request. On the FIRST startup the plugin auto-syncs the
  * historical session logs once (requests recorded before the plugin was
  * installed); every later sync is the user's decision, via the manual
- * `/token-usage-sync` command.
+ * `/token-usage-sync` command. When a webServer exists, the plugin also
+ * serves the stats route backing the web settings page (browser half in
+ * `src/client`).
  *
  * @module token-usage
  */

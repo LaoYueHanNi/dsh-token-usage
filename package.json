@@ -1,21 +1,34 @@
 {
   "name": "dsh-token-usage",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "dsh local plugin: persist per-request model token usage (live hook + manual history sync command)",
+  "description": "dsh local plugin: persist per-request model token usage (live hook + manual history sync command + web settings stats page)",
   "main": "lib/index.js",
   "exports": {
     ".": "./lib/index.js",
+    "./client": {
+      "types": "./lib/client/index.d.ts",
+      "default": "./lib/client.js"
+    },
     "./package.json": "./package.json"
   },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-settings"
+      ]
     }
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "build:client": "tsdown",
+    "prepare": "npm run build && npm run build:client",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run"
   },
@@ -24,11 +37,23 @@
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-client-runtime": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-client-ui-settings": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-client-ui-slots": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-client-web-react": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-commands": "^0.1.0-rc.5",
+    "@deepseek-ai/dsh-host-webserver": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-llm": "^0.1.0-rc.5",
     "@deepseek-ai/dsh-session": "^0.1.0-rc.5",
     "@deepseek-ai/dsh-session-persistence": "^0.1.0-rc.5",
+    "@testing-library/react": "^16.0.0",
     "@types/node": "^24.0.0",
+    "@types/react": "^18.3.1",
+    "jsdom": "^25.0.0",
+    "lightningcss": "^1.32.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tsdown": "^0.22.2",
     "typescript": "^5.8.0",
     "vitest": "^3.0.0"
   }

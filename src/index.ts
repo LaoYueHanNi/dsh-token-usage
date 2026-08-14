@@ -3,7 +3,9 @@
  * successful model request. On the FIRST startup the plugin auto-syncs the
  * historical session logs once (requests recorded before the plugin was
  * installed); every later sync is the user's decision, via the manual
- * `/token-usage-sync` command.
+ * `/token-usage-sync` command. When a webServer exists, the plugin also
+ * serves the stats route backing the web settings page (browser half in
+ * `src/client`).
  *
  * @module token-usage
  */
@@ -15,9 +17,12 @@ import type { CommandResult } from '@deepseek-ai/dsh-commands'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 // Type-only: pulls the ctx.sessionPersistence declaration merge into the program.
 import type {} from '@deepseek-ai/dsh-session-persistence'
+// Type-only: pulls the ctx.webServer declaration merge into the program.
+import type {} from '@deepseek-ai/dsh-host-webserver'
 import { UsageLog } from './usage-log.ts'
 import { recordFromEvent } from './usage-record.ts'
 import { autoSyncIfNeeded, syncHistory } from './sync.ts'
+import { createStatsRoute } from './stats-route.ts'
 
 export interface Config {
   /** Data directory; defaults to `$DSH_HOME/token-usage` (`~/.dsh/token-usage`). */
@@ -97,6 +102,14 @@ export function apply(ctx: Context, config: Config = {}) {
         throw error
       }
     },
+  })
+
+  // The stats endpoint backing the web settings page. Optional by design:
+  // profiles without a webserver (headless runs) keep the logging plugin and
+  // simply never mount the route; the browser half of this package shows the
+  // page only when the host half serves the route.
+  ctx.inject(['webServer'], (webCtx) => {
+    webCtx.effect(() => webCtx.webServer.register(createStatsRoute(dir)), 'token-usage: stats route')
   })
 
   console.log(`[token-usage] plugin loaded (data dir: ${dir})`)
