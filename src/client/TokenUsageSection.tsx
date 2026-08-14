@@ -42,8 +42,14 @@ async function fetchSummary(query: string): Promise<UsageSummary> {
   return value
 }
 
-/** The query string of one filter selection ('' when unconstrained). */
-function filterQuery(filters: Filters): string {
+/**
+ * The query string of one filter selection ('' when unconstrained), or null
+ * while the range is mid-edit (`from > to`): editing the two date inputs
+ * one at a time passes through inverted ranges, and fetching those would
+ * only flash an HTTP 400 — the request waits until the range settles.
+ */
+function filterQuery(filters: Filters): string | null {
+  if (filters.from !== '' && filters.to !== '' && filters.from > filters.to) return null
   const params = new URLSearchParams()
   if (filters.from !== '') params.set('from', filters.from)
   if (filters.to !== '') params.set('to', filters.to)
@@ -181,9 +187,12 @@ export function TokenUsageSection(_props: SettingsSectionOwnerProps): ReactNode 
   const retry = useCallback(() => { setAttempt(previous => previous + 1) }, [])
 
   useEffect(() => {
+    const query = filterQuery(filters)
+    // A mid-edit inverted range keeps the current data until it settles.
+    if (query === null) return
     let cancelled = false
     setState({ status: 'loading' })
-    void fetchSummary(filterQuery(filters))
+    void fetchSummary(query)
       .then((summary) => {
         if (cancelled) return
         setState({ status: 'ready', summary })

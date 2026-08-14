@@ -221,6 +221,25 @@ describe('TokenUsageSection filtering', () => {
     expect(url.searchParams.get('model')).toBe('deepseek-reasoner')
   })
 
+  it('skips fetching while the range is mid-edit (from after to)', async () => {
+    const fetch = stubFetch(async () => ({ ok: true, json: async () => SUMMARY }))
+    render(<TokenUsageSection close={() => {}} />)
+    await screen.findAllByText('总 token')
+    // Start from the 7d quick window, then move the start past its end.
+    fireEvent.click(screen.getByRole('button', { name: '7d' }))
+    await waitForCall(fetch, 2)
+    await screen.findAllByText('总 token')
+    fireEvent.change(screen.getByLabelText('开始日期'), { target: { value: dayKey(5) } })
+    await new Promise(resolve => setTimeout(resolve, 50))
+    expect(fetch).toHaveBeenCalledTimes(2)
+    // Settling the end date past the start resumes fetching.
+    fireEvent.change(screen.getByLabelText('结束日期'), { target: { value: dayKey(10) } })
+    await waitForCall(fetch, 3)
+    const url = new URL(String(fetch.mock.calls[2]![0]), 'http://localhost')
+    expect(url.searchParams.get('from')).toBe(dayKey(5))
+    expect(url.searchParams.get('to')).toBe(dayKey(10))
+  })
+
   it('orders the per-model columns with the hit rate last', async () => {
     stubFetch(async () => ({ ok: true, json: async () => SUMMARY }))
     render(<TokenUsageSection close={() => {}} />)
