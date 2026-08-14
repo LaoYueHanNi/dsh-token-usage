@@ -3,10 +3,11 @@
  * Token-usage settings page component tests: renders the loading, error, and
  * ready states over a stubbed fetch, exercises the filter bar (day range,
  * model select, quick range buttons), pins the per-model table column order,
- * and pins the token-abbreviation and cache-hit-rate formatting.
+ * pins the token-abbreviation and cache-hit-rate formatting, and covers the
+ * per-model pricing dialog (open/close, full rule-chain rows).
  */
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import { formatHitRate, formatTokens, TokenUsageSection, totalTokens } from '../src/client/TokenUsageSection.tsx'
 import { zh } from '../src/client/locales.ts'
@@ -28,7 +29,7 @@ const t = ((key: string, params?: Record<string, unknown>): string => {
   return text.replace(/\{(\w+)\}/g, (_, name: string) => String(params?.[name] ?? ''))
 }) as TranslateNS<'token-usage'>
 
-/** A fully populated summary fixture. */
+/** A fully populated summary fixture (reasoner priced at ¥4/¥16/¥1 per million). */
 const SUMMARY: UsageSummary = {
   dataDir: 'C:/data/token-usage',
   total: {
@@ -37,6 +38,16 @@ const SUMMARY: UsageSummary = {
     outputTokens: 12,
     cacheReadTokens: 3,
     cacheWriteTokens: 2,
+  },
+  totalCost: 0.0014,
+  unpricedModels: [],
+  pricing: {
+    'deepseek-reasoner': {
+      base: { inputPerMillion: 4, outputPerMillion: 16, cacheReadPerMillion: 1 },
+      contextTiers: [],
+      dailySlots: [],
+      timeRules: [],
+    },
   },
   byDay: [
     { day: '2026-01-15', totals: { requests: 2, inputTokens: 20, outputTokens: 8, cacheReadTokens: 2, cacheWriteTokens: 1 } },
@@ -52,10 +63,11 @@ const SUMMARY: UsageSummary = {
       cacheReadTokens: 40,
       cacheWriteTokens: 0,
     },
+    cost: 0.0014,
   }],
-  byDayModel: [
-    { day: '2026-01-15', model: 'deepseek-chat', totals: { requests: 1, inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 } },
-    { day: '2026-01-16', model: 'deepseek-reasoner', totals: { requests: 1, inputTokens: 100, outputTokens: 60, cacheReadTokens: 40, cacheWriteTokens: 0 } },
+  rateRows: [
+    { day: '2026-01-15', model: 'deepseek-chat', rate: { ruleStart: 0, ruleEnd: 0, tier: 0, slot: -1 }, totals: { requests: 1, inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 } },
+    { day: '2026-01-16', model: 'deepseek-reasoner', rate: { ruleStart: 0, ruleEnd: 0, tier: 0, slot: -1 }, totals: { requests: 1, inputTokens: 100, outputTokens: 60, cacheReadTokens: 40, cacheWriteTokens: 0 } },
   ],
   recent: [],
 }
@@ -65,6 +77,17 @@ function stubFetch(impl: () => Promise<unknown>): ReturnType<typeof vi.fn> {
   vi.stubGlobal('fetch', mock)
   return mock
 }
+
+// jsdom ships no dialog methods; stub the pair showModal/close so the
+// pricing dialog behaves like a browser (close fires the `close` event
+// the component's onClose listens for).
+beforeAll(() => {
+  HTMLDialogElement.prototype.showModal = function (this: HTMLDialogElement) { this.open = true }
+  HTMLDialogElement.prototype.close = function (this: HTMLDialogElement) {
+    this.open = false
+    this.dispatchEvent(new Event('close'))
+  }
+})
 
 afterEach(() => {
   cleanup()
@@ -127,30 +150,36 @@ describe('TokenUsageSection', () => {
     expect(screen.getByText('加载中…')).toBeTruthy()
     // '总 token' appears twice: the card label and the table column header.
     expect(await screen.findAllByText('总 token')).toHaveLength(2)
-    // Row 1 cards: requests / total tokens (47) / hit rate (9.1%).
+    // Row 1 cards: requests / cost / total tokens (47) / hit rate (9.1%).
     expect(screen.getAllByText('请求数').length).toBeGreaterThan(0)
     expect(screen.getByText('4')).toBeTruthy()
+    // The cost card and the per-model cost column share the same ¥ figure.
+    expect(screen.getAllByText('¥0.00').length).toBeGreaterThan(0)
     expect(screen.getByText('47')).toBeTruthy()
     expect(screen.getByText('9.1%')).toBeTruthy()
     // Row 2 cards: the four buckets (labels also head the table columns).
-    expect(screen.getAllByText('输入').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('入').length).toBeGreaterThan(0)
     // '30' matches the card value and possibly a y-axis tick; at least the card is there.
     expect(screen.getAllByText('30').length).toBeGreaterThan(0)
-    expect(screen.getAllByText('输出').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('出').length).toBeGreaterThan(0)
     expect(screen.getByText('12')).toBeTruthy()
-    expect(screen.getAllByText('缓存读').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('缓').length).toBeGreaterThan(0)
     expect(screen.getByText('3')).toBeTruthy()
-    expect(screen.getAllByText('缓存写').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('写').length).toBeGreaterThan(0)
     expect(screen.getByText('2')).toBeTruthy()
     // Per-model table: one row with the model's own totals (200 total, 28.6% hit rate).
     expect(screen.getByText('按模型')).toBeTruthy()
-    const table = screen.getByRole('table')
+    const table = screen.getByRole('table', { name: '按模型' })
     expect(within(table).getByText('deepseek-reasoner')).toBeTruthy()
     expect(within(table).getByText('200')).toBeTruthy()
     expect(within(table).getByText('28.6%')).toBeTruthy()
     expect(within(table).getByText('100')).toBeTruthy()
     expect(within(table).getByText('60')).toBeTruthy()
     expect(within(table).getByText('40')).toBeTruthy()
+    expect(within(table).getByText('¥0.00')).toBeTruthy()
+    // The priced model row carries the pricing affordance; no dialog yet.
+    expect(within(table).getByRole('button', { name: '查看 deepseek-reasoner 定价' })).toBeTruthy()
+    expect(screen.queryByRole('dialog')).toBeNull()
     // No per-day / recent sections.
     expect(screen.queryByText('按日')).toBeNull()
     expect(screen.queryByText('最近请求')).toBeNull()
@@ -167,6 +196,29 @@ describe('TokenUsageSection', () => {
     }))
     render(<TokenUsageSection close={() => {}} t={t} />)
     expect(await screen.findByText(/暂无数据/)).toBeTruthy()
+    // No model rows without a selection, so no pricing affordance either.
+    expect(screen.queryByRole('button', { name: /定价/ })).toBeNull()
+  })
+
+  it('warns about unpriced models and dashes their cost', async () => {
+    stubFetch(async () => ({
+      ok: true,
+      json: async () => ({
+        ...SUMMARY,
+        totalCost: 0.0014,
+        unpricedModels: ['deepseek-reasoner'],
+        pricing: {},
+        byModel: [{ ...SUMMARY.byModel[0]!, cost: 0 }],
+      }),
+    }))
+    render(<TokenUsageSection close={() => {}} t={t} />)
+    expect(await screen.findByText(/1 个模型未定价：deepseek-reasoner/)).toBeTruthy()
+    const table = screen.getByRole('table', { name: '按模型' })
+    expect(within(table).getByText('未定价')).toBeTruthy()
+    // Unpriced cost cells render an em dash, not a fake ¥0.00, and the
+    // row carries no pricing affordance.
+    expect(within(table).getByText('—')).toBeTruthy()
+    expect(within(table).queryByRole('button', { name: /定价/ })).toBeNull()
   })
 
   it('shows the failure and retries the fetch', async () => {
@@ -198,6 +250,26 @@ describe('TokenUsageSection filtering', () => {
     render(<TokenUsageSection close={() => {}} t={t} />)
     await screen.findAllByText('总 token')
     expect(screen.queryByText('刷新')).toBeNull()
+  })
+
+  it('mirrors the shell root color-scheme and follows theme switches', async () => {
+    stubFetch(async () => ({ ok: true, json: async () => SUMMARY }))
+    render(<TokenUsageSection close={() => {}} t={t} />)
+    await screen.findAllByText('总 token')
+    // The shell projects the active scheme onto documentElement.style only;
+    // the section mirrors it so its form controls render natively dark.
+    // (MutationObserver delivers asynchronously, hence the awaits.)
+    document.documentElement.style.colorScheme = 'dark'
+    await new Promise(resolve => setTimeout(resolve, 0))
+    const root = screen.getByText('Token 用量').closest('div')
+    expect(root?.style.colorScheme).toBe('dark')
+    // A theme switch rewrites the root inline style; the mirror follows.
+    document.documentElement.style.colorScheme = 'light'
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(root?.style.colorScheme).toBe('light')
+    document.documentElement.style.removeProperty('color-scheme')
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(root?.style.colorScheme).toBe('')
   })
 
   it('renders the filter bar: quick range select, two date inputs, model select', async () => {
@@ -282,13 +354,122 @@ describe('TokenUsageSection filtering', () => {
     expect(url.searchParams.get('to')).toBe(dayKey(10))
   })
 
-  it('orders the per-model columns with the hit rate last', async () => {
+  it('orders the per-model columns with the cost and hit rate last-but-one / last', async () => {
     stubFetch(async () => ({ ok: true, json: async () => SUMMARY }))
     render(<TokenUsageSection close={() => {}} t={t} />)
     await screen.findAllByText('总 token')
-    const headers = within(screen.getByRole('table')).getAllByRole('columnheader')
+    const headers = within(screen.getByRole('table', { name: '按模型' })).getAllByRole('columnheader')
     expect(headers.map(cell => cell.textContent)).toEqual(
-      ['模型', '请求数', '总 token', '输入', '输出', '缓存读', '缓存写', '缓存命中率'])
+      ['模型', '请求数', '费用', '总 token', '入', '出', '缓', '写', '命中率'])
+  })
+
+  it('opens a pricing dialog from the model row: each billing condition on its own row', async () => {
+    // 2026-01-01 / 2026-02-01 at 12:00 UTC: the same local date in every
+    // realistic timezone, so the window text is stable on any runner.
+    const RULE_START = 1_767_268_800
+    const RULE_END = 1_769_947_200
+    stubFetch(async () => ({
+      ok: true,
+      json: async () => ({
+        ...SUMMARY,
+        pricing: {
+          'glm-5.2': {
+            base: { inputPerMillion: 2, outputPerMillion: 8 },
+            contextTiers: [{ threshold: 512000, rates: { inputPerMillion: 6, outputPerMillion: 24 } }],
+            dailySlots: [{
+              label: '峰时',
+              windows: [{ startMinute: 540, endMinute: 720 }, { startMinute: 840, endMinute: 1080 }],
+              rates: { inputPerMillion: 4, outputPerMillion: 16 },
+            }],
+            timeRules: [{
+              label: '原价',
+              startTime: RULE_START,
+              endTime: RULE_END,
+              rates: { inputPerMillion: 1, outputPerMillion: 2 },
+              contextTiers: [{ threshold: 128000, rates: { inputPerMillion: 3, outputPerMillion: 6 } }],
+              dailySlots: [{
+                label: '峰时',
+                windows: [{ startMinute: 600, endMinute: 660 }],
+                rates: { inputPerMillion: 1.5, outputPerMillion: 3 },
+              }],
+            }],
+          },
+          'deepseek-reasoner': SUMMARY.pricing['deepseek-reasoner']!,
+          // Priced, but absent from the filter selection: no affordance.
+          'unused-model': SUMMARY.pricing['deepseek-reasoner']!,
+        },
+        byModel: [
+          { model: 'glm-5.2', totals: { requests: 5, inputTokens: 10, outputTokens: 10, cacheReadTokens: 0, cacheWriteTokens: 0 }, cost: 0.5 },
+          ...SUMMARY.byModel,
+        ],
+      }),
+    }))
+    render(<TokenUsageSection close={() => {}} t={t} />)
+    await screen.findAllByText('总 token')
+
+    // The unused priced model never surfaces an affordance.
+    expect(screen.queryByRole('button', { name: /unused-model/ })).toBeNull()
+
+    // Open the rule-carrier's dialog from its row.
+    fireEvent.click(screen.getByRole('button', { name: '查看 glm-5.2 定价' }))
+    const dialog = await screen.findByRole('dialog')
+    expect((dialog as HTMLDialogElement).open).toBe(true)
+    expect(within(dialog).getByText('glm-5.2')).toBeTruthy()
+    const glmTable = within(dialog).getByRole('table')
+
+    // The rule-carrier: condition column first, four rate columns after.
+    expect(within(glmTable).getAllByRole('columnheader').map(cell => cell.textContent))
+      .toEqual(['计费条件', '入/M', '出/M', '缓/M', '写/M'])
+    // The regular group (outside the rule window) opens the table…
+    expect(within(glmTable).getByText('常规（规则期外）')).toBeTruthy()
+    // …default rates (cache falls back to the input rate), then the context
+    // tier, then the root peak slot with both of its windows.
+    expect(within(glmTable).getAllByText('默认')[0]!.closest('tr')!.textContent).toBe('默认¥2¥8¥2¥2')
+    expect(within(glmTable).getByText('上下文 ≥512K').closest('tr')!.textContent).toBe('上下文 ≥512K¥6¥24¥6¥6')
+    expect(within(glmTable).getByText('峰时 09:00-12:00、14:00-18:00').closest('tr')!.textContent)
+      .toBe('峰时 09:00-12:00、14:00-18:00¥4¥16¥4¥4')
+    // …then the time rule gets its own group with its date window, an
+    // isolated default, its own tier, and its own peak slot.
+    expect(within(glmTable).getByText('原价 2026-01-01 ~ 2026-02-01')).toBeTruthy()
+    expect(within(glmTable).getAllByText('默认')).toHaveLength(2)
+    expect(within(glmTable).getAllByText('默认')[1]!.closest('tr')!.textContent).toBe('默认¥1¥2¥1¥1')
+    expect(within(glmTable).getByText('上下文 ≥128K').closest('tr')!.textContent).toBe('上下文 ≥128K¥3¥6¥3¥3')
+    expect(within(glmTable).getByText('峰时 10:00-11:00').closest('tr')!.textContent).toBe('峰时 10:00-11:00¥1.50¥3¥1.50¥1.50')
+
+    // The close button dismisses the dialog.
+    fireEvent.click(within(dialog).getByRole('button', { name: '关闭' }))
+    expect(screen.queryByRole('dialog')).toBeNull()
+
+    // The flat model: one default row, explicit cache read rate, cache
+    // write falling back to the input rate, no group divider.
+    fireEvent.click(screen.getByRole('button', { name: '查看 deepseek-reasoner 定价' }))
+    const flatDialog = await screen.findByRole('dialog')
+    const flatTable = within(flatDialog).getByRole('table')
+    expect(within(flatTable).queryByText('常规（规则期外）')).toBeNull()
+    expect(within(flatTable).getByText('默认').closest('tr')!.textContent).toBe('默认¥4¥16¥1¥4')
+  })
+
+  it('drops the bogus 1970 start of a since-forever time rule', async () => {
+    stubFetch(async () => ({
+      ok: true,
+      json: async () => ({
+        ...SUMMARY,
+        pricing: {
+          'deepseek-reasoner': {
+            base: { inputPerMillion: 2, outputPerMillion: 8 },
+            contextTiers: [],
+            dailySlots: [],
+            timeRules: [{ label: '原价', startTime: 0, endTime: 1_786_881_600, rates: { inputPerMillion: 1, outputPerMillion: 2 } }],
+          },
+        },
+      }),
+    }))
+    render(<TokenUsageSection close={() => {}} t={t} />)
+    await screen.findAllByText('总 token')
+    fireEvent.click(screen.getByRole('button', { name: '查看 deepseek-reasoner 定价' }))
+    const dialog = await screen.findByRole('dialog')
+    // “~ <end>”, not “1970-01-01 ~ <end>”.
+    expect(within(dialog).getByText('原价 ~ 2026-08-16')).toBeTruthy()
   })
 
   it('renders the daily token chart from the day rows', async () => {
@@ -308,6 +489,32 @@ describe('TokenUsageSection filtering', () => {
     // Day labels (MM-DD) close the x axis.
     expect(within(chart).getByText('01-15')).toBeTruthy()
     expect(within(chart).getByText('01-16')).toBeTruthy()
+  })
+
+  it('floats a day label when a chart point is hovered or focused', async () => {
+    stubFetch(async () => ({ ok: true, json: async () => SUMMARY }))
+    render(<TokenUsageSection close={() => {}} t={t} />)
+    await screen.findAllByText('总 token')
+    fireEvent.change(screen.getByLabelText('开始日期'), { target: { value: '' } })
+    await screen.findAllByText('总 token')
+    fireEvent.change(screen.getByLabelText('结束日期'), { target: { value: '' } })
+    const chart = await screen.findByRole('img', { name: '每日总 token 曲线' })
+
+    // No label before any interaction.
+    expect(within(chart).queryByText(/总量/)).toBeNull()
+
+    // Hovering a day's hit zone floats its date + total (day 2 totals 16).
+    fireEvent.mouseEnter(within(chart).getByLabelText('2026-01-16 总量 16'))
+    expect(within(chart).getByText('2026-01-16 总量 16')).toBeTruthy()
+    // Hovering the other day swaps the label (day 1 totals 31).
+    fireEvent.mouseEnter(within(chart).getByLabelText('2026-01-15 总量 31'))
+    expect(within(chart).getByText('2026-01-15 总量 31')).toBeTruthy()
+
+    // Keyboard focus works the same way; leaving the chart clears the label.
+    fireEvent.focus(within(chart).getByLabelText('2026-01-16 总量 16'))
+    expect(within(chart).getByText('2026-01-16 总量 16')).toBeTruthy()
+    fireEvent.mouseLeave(chart)
+    expect(within(chart).queryByText(/总量/)).toBeNull()
   })
 })
 

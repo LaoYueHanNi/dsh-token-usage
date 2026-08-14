@@ -1,4 +1,5 @@
-import { mkdtemp, readFile, readdir } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -109,11 +110,98 @@ describe('plugin integration', () => {
       ctx = undefined
     }
     vi.unstubAllEnvs()
+    vi.unstubAllGlobals()
   })
 
-  it('loads the plugin and registers the sync command', async () => {
+  it('loads the plugin and registers the sync and pricing commands', async () => {
     const mounted = await mount()
-    expect(mounted.commands.registered.map(definition => definition.name)).toEqual(['token-usage-sync'])
+    expect(mounted.commands.registered.map(definition => definition.name))
+      .toEqual(['token-usage-sync', 'token-usage-pricing', 'token-usage-pricing-sync'])
+  })
+
+  it('lists the maintained pricing table through the pricing command', async () => {
+    const mounted = await mount()
+    await waitForState(mounted.dir)
+    await writeFile(join(mounted.dir, 'pricing.json'), JSON.stringify({
+      'deepseek-chat': { inputPerMillion: 2, outputPerMillion: 8, cacheReadPerMillion: 0.5 },
+    }))
+    const definition = mounted.commands.registered.find(candidate => candidate.name === 'token-usage-pricing')!
+    const result = await definition.handler(invocation())
+    expect(result.kind).toBe('success')
+    expect(result.text).toContain('deepseek-chat: input 2, output 8, cache read 0.5')
+  })
+
+  it('explains the pricing file when no pricing is configured', async () => {
+    const mounted = await mount()
+    await waitForState(mounted.dir)
+    const definition = mounted.commands.registered.find(candidate => candidate.name === 'token-usage-pricing')!
+    const result = await definition.handler(invocation())
+    expect(result.kind).toBe('success')
+    expect(result.text).toContain('no pricing configured')
+  })
+
+  it('mirrors the cloud feed through the pricing-sync command and shows the merged table', async () => {
+    const feed = JSON.stringify({
+      version: 4,
+      updatedAt: 1_780_000_000,
+      currency: 'RMB',
+      models: [
+        { modelId: 'deepseek-chat', inputCostPerMillion: 2, outputCostPerMillion: 8, aliases: ['deepseek-v3'] },
+      ],
+    })
+    const fetch = vi.fn(async () => new Response(feed))
+    vi.stubGlobal('fetch', fetch)
+    const mounted = await mount()
+    await waitForState(mounted.dir)
+    const definition = mounted.commands.registered.find(candidate => candidate.name === 'token-usage-pricing-sync')!
+    const result = await definition.handler(invocation())
+    expect(result.kind).toBe('success')
+    expect(result.text).toContain('version 4')
+    expect(result.text).toContain('1 models, 1 aliases')
+    expect(result.text).toContain('pricing.ccsa.json')
+    // The merged pricing table reflects the mirror (id + alias).
+    const show = await mounted.commands.registered
+      .find(candidate => candidate.name === 'token-usage-pricing')!.handler(invocation())
+    expect(show.kind).toBe('success')
+    expect(show.text).toContain('deepseek-chat: input 2, output 8')
+    expect(show.text).toContain('deepseek-v3: input 2, output 8')
+  })
+
+  it('reports a failed pricing sync as an error result', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('nope', { status: 500 })))
+    const mounted = await mount()
+    await waitForState(mounted.dir)
+    const definition = mounted.commands.registered.find(candidate => candidate.name === 'token-usage-pricing-sync')!
+    const result = await definition.handler(invocation())
+    expect(result.kind).toBe('error')
+    expect(result.text).toContain('failed')
+  })
+
+  it('refreshes the cloud pricing mirror on every startup', async () => {
+    const feed = JSON.stringify({
+      version: 4,
+      updatedAt: 1_780_000_000,
+      currency: 'RMB',
+      models: [
+        { modelId: 'deepseek-chat', inputCostPerMillion: 2, outputCostPerMillion: 8 },
+      ],
+    })
+    const fetch = vi.fn(async () => new Response(feed))
+    vi.stubGlobal('fetch', fetch)
+    const mounted = await mount()
+    await waitForState(mounted.dir)
+    // The startup auto-sync fetches the feed and lands the mirror.
+    const deadline = Date.now() + 2_000
+    while (Date.now() < deadline) {
+      if (existsSync(join(mounted.dir, 'pricing.ccsa.json'))) break
+      await new Promise(resolve => setTimeout(resolve, 20))
+    }
+    expect(await readFile(join(mounted.dir, 'pricing.ccsa.json'), 'utf8')).toBe(`${feed}\n`)
+    // A second startup fetches again (every restart, not just the first).
+    ctx!.registry.delete(plugin)
+    ctx = undefined
+    await mount()
+    expect(fetch.mock.calls.length).toBeGreaterThanOrEqual(2)
   })
 
   it('writes one live row per assistant/message event', async () => {

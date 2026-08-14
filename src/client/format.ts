@@ -1,7 +1,8 @@
 /**
  * Browser-side display formatting of the token-usage settings page: token
- * abbreviation (K/M/B) and the cache hit rate. Pure functions only, shared
- * by the section and the trend chart.
+ * abbreviation (K/M/B), the cache hit rate, and the cost/rate figures of the
+ * pricing layer (¥ amounts and per-million-token rates). Pure functions only,
+ * shared by the section and the trend chart.
  *
  * @module token-usage/client/format
  */
@@ -47,4 +48,36 @@ export function formatHitRate(totals: UsageTotals): string {
   const served = totals.inputTokens + totals.cacheReadTokens
   if (served === 0) return '—'
   return `${percent(totals.cacheReadTokens / served * 100)}%`
+}
+
+/** Currency symbol of the pricing layer; costs are billed in RMB. */
+const COST_SYMBOL = '¥'
+
+/**
+ * Cost as display text: `¥` plus two decimals, following the analyzer's cost
+ * formatting (`¥1.25`, `¥0.00`). A cost is always shown, never omitted.
+ * @param cost - a non-negative cost in ¥.
+ * @returns e.g. `¥1.25`.
+ */
+export function formatCost(cost: number): string {
+  return `${COST_SYMBOL}${cost.toFixed(2)}`
+}
+
+/**
+ * A per-million-token rate as display text: integral rates stay bare (`8`),
+ * fractional ones keep up to four decimals with trailing zeros stripped and a
+ * two-decimal minimum (`0.50`, `0.25`, `0.025`). The caller appends the `/M`
+ * unit where needed.
+ * @param rate - a non-negative rate in ¥ per million tokens.
+ * @returns the display string.
+ */
+export function formatRate(rate: number): string {
+  if (Number.isInteger(rate)) return String(rate)
+  let s = rate.toFixed(4)
+  const dot = s.indexOf('.')
+  s = s.replace(/0+$/u, '')
+  if (s.endsWith('.')) s += '00'
+  const minEnd = dot + 3
+  while (s.length < minEnd) s += '0'
+  return s
 }

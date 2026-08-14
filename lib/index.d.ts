@@ -13,6 +13,9 @@ import type { Context } from '@deepseek-ai/cordis';
 export interface Config {
     /** Data directory; defaults to `$DSH_HOME/token-usage` (`~/.dsh/token-usage`). */
     path?: string;
+    /** Cloud pricing feed URL for /token-usage-pricing-sync; defaults to the
+     * model-price-table repository the analyzer also pulls from. */
+    pricingUrl?: string;
 }
 /** Reject stale or misspelled config keys before defaults can hide them. */
 export declare function validateConfig(config: Config): void;

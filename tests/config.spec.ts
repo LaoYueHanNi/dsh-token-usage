@@ -16,6 +16,14 @@ describe('validateConfig', () => {
     expect(() => validateConfig({ path: 'C:/data/token-usage' })).not.toThrow()
   })
 
+  it('accepts a string pricingUrl', () => {
+    expect(() => validateConfig({ pricingUrl: 'https://example.com/pricing.json' })).not.toThrow()
+  })
+
+  it('rejects a blank pricingUrl', () => {
+    expect(() => validateConfig({ pricingUrl: '' })).toThrow(/non-empty string/)
+  })
+
   it('rejects unknown keys', () => {
     expect(() => validateConfig({ foo: 1 } as unknown as Config)).toThrow(/unknown key "foo"/)
   })

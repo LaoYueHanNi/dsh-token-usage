@@ -161,6 +161,103 @@ describe('createStatsRoute', () => {
     await route.handler(fakeRequest({ url: `${STATS_PATH}?from=2026-01-12&to=2026-01-10` }), res)
     expect(captured.status).toBe(400)
   })
+
+  it('serves an empty cost layer without a pricing table', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'token-usage-route-'))
+    await writeFile(join(dir, 'usage-2026-01-15.jsonl'), `${JSON.stringify(fixtureRecord(100))}\n`)
+    const route = createStatsRoute(dir)
+    const { res, captured } = fakeResponse()
+    await route.handler(fakeRequest(), res)
+    const body = JSON.parse(captured.body) as {
+      totalCost: number
+      unpricedModels: string[]
+      pricing: Record<string, unknown>
+      byModel: Array<{ model: string; cost: number }>
+    }
+    expect(body.totalCost).toBe(0)
+    expect(body.unpricedModels).toEqual(['deepseek-chat'])
+    expect(body.pricing).toEqual({})
+    expect(body.byModel).toEqual([{ model: 'deepseek-chat', totals: expect.anything(), cost: 0 }])
+  })
+
+  it('computes costs from the user-maintained pricing table', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'token-usage-route-'))
+    await writeFile(join(dir, 'usage-2026-01-15.jsonl'), `${JSON.stringify(fixtureRecord(100))}\n`)
+    await writeFile(join(dir, 'pricing.json'), JSON.stringify({
+      'deepseek-chat': { inputPerMillion: 2, outputPerMillion: 8, cacheReadPerMillion: 0.5 },
+    }))
+    const route = createStatsRoute(dir)
+    const { res, captured } = fakeResponse()
+    await route.handler(fakeRequest(), res)
+    const body = JSON.parse(captured.body) as {
+      totalCost: number
+      unpricedModels: string[]
+      pricing: Record<string, unknown>
+      byModel: Array<{ model: string; cost: number }>
+    }
+    // 10 input × ¥2 + 5 output × ¥8 + 3 cache read × ¥0.5, per million.
+    expect(body.totalCost).toBe(0.0000615)
+    expect(body.unpricedModels).toEqual([])
+    expect(body.pricing).toEqual({
+      'deepseek-chat': {
+        base: { inputPerMillion: 2, outputPerMillion: 8, cacheReadPerMillion: 0.5 },
+        contextTiers: [],
+        dailySlots: [],
+        timeRules: [],
+      },
+    })
+    expect(body.byModel[0]!.cost).toBe(0.0000615)
+  })
+
+  it('bills each record through the cloud rule chain at its own timestamp', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'token-usage-route-'))
+    // Two records on one day, local time: 10:00 falls inside the peak window
+    // (09:00–12:00 local minutes), 20:00 is off-peak.
+    const peak = { ...fixtureRecord(new Date(2026, 0, 15, 10).getTime()), requestId: 'peak' }
+    const off = { ...fixtureRecord(new Date(2026, 0, 15, 20).getTime()), requestId: 'off' }
+    await writeFile(join(dir, 'usage-2026-01-15.jsonl'), `${JSON.stringify(peak)}\n${JSON.stringify(off)}\n`)
+    await writeFile(join(dir, 'pricing.ccsa.json'), JSON.stringify({
+      version: 57, updatedAt: 1, currency: 'RMB',
+      models: [{
+        modelId: 'deepseek-chat',
+        inputCostPerMillion: 1, outputCostPerMillion: 2, cacheReadCostPerMillion: 0.1,
+        dailySlots: [{ windows: [{ startMinute: 540, endMinute: 720 }], inputCostPerMillion: 3, outputCostPerMillion: 6, cacheReadCostPerMillion: 0.3 }],
+      }],
+    }))
+    const route = createStatsRoute(dir)
+    const { res, captured } = fakeResponse()
+    await route.handler(fakeRequest(), res)
+    const body = JSON.parse(captured.body) as {
+      totalCost: number
+      rateRows: Array<{ rate: { slot: number }; totals: { inputTokens: number } }>
+    }
+    // Peak row: 10×3 + 5×6 + 3×0.3 = 60.9 per million tokens; off-peak:
+    // 10×1 + 5×2 + 3×0.1 = 20.3 — two distinct rate rows on one day.
+    expect(body.totalCost).toBeCloseTo((60.9 + 20.3) / 1_000_000, 12)
+    expect(body.rateRows).toHaveLength(2)
+    // Sorted by rate identity (slot -1 before 0), not by record time.
+    expect(body.rateRows.map(row => row.rate.slot)).toEqual([-1, 0])
+  })
+
+  it('recomputes costs after filtering, dropping other models from the totals', async () => {
+    const dir = await filteredDataDir()
+    // Only chat is priced; reasoner stays unpriced.
+    await writeFile(join(dir, 'pricing.json'), JSON.stringify({
+      'deepseek-chat': { inputPerMillion: 2, outputPerMillion: 8, cacheReadPerMillion: 0.5 },
+    }))
+    const route = createStatsRoute(dir)
+    const { res, captured } = fakeResponse()
+    await route.handler(fakeRequest({ url: `${STATS_PATH}?model=deepseek-chat&from=2026-01-10&to=2026-01-12` }), res)
+    const body = JSON.parse(captured.body) as {
+      totalCost: number
+      unpricedModels: string[]
+      byModel: Array<{ model: string; cost: number }>
+    }
+    expect(body.byModel.map(row => row.model)).toEqual(['deepseek-chat'])
+    expect(body.unpricedModels).toEqual([])
+    expect(body.totalCost).toBeGreaterThan(0)
+    expect(body.byModel[0]!.cost).toBe(body.totalCost)
+  })
 })
 
 describe('isSameOriginFetch', () => {

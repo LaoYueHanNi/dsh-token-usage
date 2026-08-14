@@ -15,7 +15,7 @@ import { readFile, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { coerceRecord } from './usage-record.ts'
 import type { UsageRecord } from './usage-record.ts'
-import type { UsageDayModelRow, UsageDayRow, UsageModelRow, UsageTotals } from './wire.ts'
+import type { RateKey, UsageDayRow, UsageModelRow, UsageRateRow, UsageTotals } from './wire.ts'
 
 const ROLLUP_FILE = 'rollup.json'
 const TMP_FILE = 'rollup.json.tmp'
@@ -30,8 +30,10 @@ export interface RollupFile {
   byDay: UsageDayRow[]
   /** Per-model rows of the absorbed records, descending on request count. */
   byModel: UsageModelRow[]
-  /** Per-day × per-model rows of the absorbed records, day then model ascending. */
-  byDayModel: UsageDayModelRow[]
+  /** Per-(day, model, rate identity) rows of the absorbed records — rule
+   * identities, never prices, so an updated pricing table re-prices the
+   * absorbed history without a rebuild. */
+  rateRows: UsageRateRow[]
   /** The newest absorbed records, descending by time (bounded window). */
   recent: UsageRecord[]
 }
@@ -57,11 +59,17 @@ function isModelRow(value: unknown): value is UsageModelRow {
   return typeof row.model === 'string' && isTotals(row.totals)
 }
 
-function isDayModelRow(value: unknown): value is UsageDayModelRow {
+function isRateKey(value: unknown): value is RateKey {
+  if (typeof value !== 'object' || value === null) return false
+  const key = value as Record<string, unknown>
+  return ['ruleStart', 'ruleEnd', 'tier', 'slot'].every(field => typeof key[field] === 'number' && Number.isFinite(key[field]))
+}
+
+function isRateRow(value: unknown): value is UsageRateRow {
   if (typeof value !== 'object' || value === null) return false
   const row = value as Record<string, unknown>
   return typeof row.day === 'string' && DAY_KEY.test(row.day)
-    && typeof row.model === 'string' && isTotals(row.totals)
+    && typeof row.model === 'string' && isRateKey(row.rate) && isTotals(row.totals)
 }
 
 function isRollupFile(value: unknown): value is RollupFile {
@@ -71,7 +79,7 @@ function isRollupFile(value: unknown): value is RollupFile {
     && isTotals(rollup.total)
     && Array.isArray(rollup.byDay) && rollup.byDay.every(isDayRow)
     && Array.isArray(rollup.byModel) && rollup.byModel.every(isModelRow)
-    && Array.isArray(rollup.byDayModel) && rollup.byDayModel.every(isDayModelRow)
+    && Array.isArray(rollup.rateRows) && rollup.rateRows.every(isRateRow)
     && Array.isArray(rollup.recent)
 }
 

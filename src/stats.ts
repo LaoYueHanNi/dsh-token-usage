@@ -1,26 +1,47 @@
 /**
  * Stats computation of the token-usage plugin: read the day files and fold
  * the records into totals, per-day rows, per-model rows, and a bounded recent
- * window. Frozen (pre-today) day files are served from the on-disk rollup
- * (see rollup.ts); only today's file is read on every call. Pure aggregation
- * lives apart from the file walk so the web route and tests share one
- * implementation.
+ * window — keeping one row per (day, model, rate identity) so every record
+ * is billed at the rate its own timestamp resolved through (see
+ * pricing.resolveRate). Frozen (pre-today) day files are served from the
+ * on-disk rollup (see rollup.ts); only today's file is read on every call.
+ * Pure aggregation lives apart from the file walk so the web route and tests
+ * share one implementation.
  *
  * @module token-usage/stats
  */
 
 import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { costOf, ratesForKey } from './pricing.ts'
 import { parseRecord } from './usage-record.ts'
 import type { UsageFields, UsageRecord } from './usage-record.ts'
 import { readRollup, writeRollup } from './rollup.ts'
 import type { RollupFile } from './rollup.ts'
-import type { UsageDayModelRow, UsageDayRow, UsageModelRow, UsageSummary, UsageTotals } from './wire.ts'
+import type {
+  CostedModelRow,
+  PricingTable,
+  RateKey,
+  TokenSummary,
+  UsageDayRow,
+  UsageModelRow,
+  UsageRateRow,
+  UsageSummary,
+  UsageTotals,
+} from './wire.ts'
+import { UNPRICED_KEY } from './wire.ts'
 
 const DAY_FILE = /^usage-(\d{4}-\d{2}-\d{2})\.jsonl$/u
 
 /** Bounded recent window length: only the newest records cross the wire. */
 export const RECENT_LIMIT = 20
+
+/**
+ * Resolves the rate identity one record was billed at. The route builds this
+ * from the pricing table (pricing.resolveRate over the record's model, time,
+ * and input-side tokens); the neutral default leaves every record unpriced.
+ */
+export type RateResolver = (record: UsageRecord) => RateKey
 
 /** The date part of a day-file name, or null for a foreign name. */
 function fileDay(name: string): string | null {
@@ -29,7 +50,7 @@ function fileDay(name: string): string | null {
 
 /** Empty rollup used as the merge base when no rollup exists on disk yet. */
 function emptyRollup(): RollupFile {
-  return { upto: '', total: emptyTotals(), byDay: [], byModel: [], byDayModel: [], recent: [] }
+  return { upto: '', total: emptyTotals(), byDay: [], byModel: [], rateRows: [], recent: [] }
 }
 
 /** Zeroed totals; requests counts rows, the token buckets sum reported usage. */
@@ -67,15 +88,23 @@ function modelRows(models: Map<string, UsageTotals>): UsageModelRow[] {
       right.totals.requests - left.totals.requests || left.model.localeCompare(right.model))
 }
 
-/** Sort crossed rows day ascending then model name. */
-function dayModelRows(rows: Iterable<UsageDayModelRow>): UsageDayModelRow[] {
-  return [...rows].sort((left, right) =>
-    left.day < right.day ? -1 : left.day > right.day ? 1 : left.model.localeCompare(right.model))
+/** Deterministic rate-identity order: rule window, tier, slot. */
+function compareKeys(left: RateKey, right: RateKey): number {
+  return left.ruleStart - right.ruleStart || left.ruleEnd - right.ruleEnd
+    || left.tier - right.tier || left.slot - right.slot
 }
 
-/** Map key of one crossed (day, model) cell. */
-function crossKey(day: string, model: string): string {
-  return `${day}\n${model}`
+/** Sort rate rows day ascending, then model name, then rate identity. */
+function rateRowsSorted(rows: Iterable<UsageRateRow>): UsageRateRow[] {
+  return [...rows].sort((left, right) =>
+    left.day < right.day ? -1 : left.day > right.day ? 1
+      : left.model < right.model ? -1 : left.model > right.model ? 1
+        : compareKeys(left.rate, right.rate))
+}
+
+/** Map key of one (day, model, rate) cell. */
+function rateRowKey(day: string, model: string, rate: RateKey): string {
+  return `${day}\n${model}\n${rate.ruleStart}-${rate.ruleEnd}-${rate.tier}-${rate.slot}`
 }
 
 /**
@@ -98,17 +127,19 @@ function dayKey(time: number): string {
 }
 
 /**
- * Fold records into the summary shape. The recent window keeps the last
+ * Fold records into the token summary shape, one rate row per (day, model,
+ * rate identity) the resolver assigns. The recent window keeps the last
  * {@link RECENT_LIMIT} records in input order (day files are chronological)
  * and then sorts them by time descending.
  * @param records - parsed records in day-file order.
- * @returns totals, day rows, model rows, and the recent window.
+ * @param resolve - the rate resolver; defaults to leaving every record unpriced.
+ * @returns totals, day rows, model rows, rate rows, and the recent window.
  */
-export function summarizeRecords(records: readonly UsageRecord[]): Omit<UsageSummary, 'dataDir'> {
+export function summarizeRecords(records: readonly UsageRecord[], resolve: RateResolver = () => UNPRICED_KEY): TokenSummary {
   const total = emptyTotals()
   const days = new Map<string, UsageTotals>()
   const models = new Map<string, UsageTotals>()
-  const crossed = new Map<string, UsageDayModelRow>()
+  const rated = new Map<string, UsageRateRow>()
   const recent: UsageRecord[] = []
   for (const record of records) {
     addUsage(total, record.usage)
@@ -119,41 +150,42 @@ export function summarizeRecords(records: readonly UsageRecord[]): Omit<UsageSum
     const modelTotals = models.get(record.model) ?? emptyTotals()
     addUsage(modelTotals, record.usage)
     models.set(record.model, modelTotals)
-    const cell = crossed.get(crossKey(day, record.model))
-      ?? { day, model: record.model, totals: emptyTotals() }
+    const rate = resolve(record)
+    const rowKey = rateRowKey(day, record.model, rate)
+    const cell = rated.get(rowKey)
+      ?? { day, model: record.model, rate, totals: emptyTotals() }
     addUsage(cell.totals, record.usage)
-    crossed.set(crossKey(day, record.model), cell)
+    rated.set(rowKey, cell)
     if (recent.length === RECENT_LIMIT) recent.shift()
     recent.push(record)
   }
   const byDay: UsageDayRow[] = dayRows(days)
   const byModel: UsageModelRow[] = modelRows(models)
-  const byDayModel: UsageDayModelRow[] = dayModelRows(crossed.values())
   recent.sort((left, right) => right.time - left.time)
-  return { total, byDay, byModel, byDayModel, recent }
+  return { total, byDay, byModel, rateRows: rateRowsSorted(rated.values()), recent }
 }
 
 /**
  * Merge two summaries into one: totals and model rows add up, day rows fold
  * by day key (a same-day record set landing in a later file must join the
- * earlier bucket, never replace it), crossed rows fold by their (day, model)
- * key, and the recent window keeps the newest {@link RECENT_LIMIT} records
- * across both sides. Order-independent and associative: merging partial
- * summaries equals summarizing the concatenated records.
+ * earlier bucket, never replace it), rate rows fold by their (day, model,
+ * rate) key, and the recent window keeps the newest {@link RECENT_LIMIT}
+ * records across both sides. Order-independent and associative: merging
+ * partial summaries equals summarizing the concatenated records.
  * @param left - one partial summary.
  * @param right - the other partial summary.
  * @returns the folded summary.
  */
 export function mergeSummaries(
-  left: Omit<UsageSummary, 'dataDir'>,
-  right: Omit<UsageSummary, 'dataDir'>,
-): Omit<UsageSummary, 'dataDir'> {
+  left: TokenSummary,
+  right: TokenSummary,
+): TokenSummary {
   const total = emptyTotals()
   addTotals(total, left.total)
   addTotals(total, right.total)
   const days = new Map<string, UsageTotals>()
   const models = new Map<string, UsageTotals>()
-  const crossed = new Map<string, UsageDayModelRow>()
+  const rated = new Map<string, UsageRateRow>()
   for (const row of [...left.byDay, ...right.byDay]) {
     const day = days.get(row.day) ?? emptyTotals()
     addTotals(day, row.totals)
@@ -164,11 +196,12 @@ export function mergeSummaries(
     addTotals(model, row.totals)
     models.set(row.model, model)
   }
-  for (const row of [...left.byDayModel, ...right.byDayModel]) {
-    const cell = crossed.get(crossKey(row.day, row.model))
-      ?? { day: row.day, model: row.model, totals: emptyTotals() }
+  for (const row of [...left.rateRows, ...right.rateRows]) {
+    const key = rateRowKey(row.day, row.model, row.rate)
+    const cell = rated.get(key)
+      ?? { day: row.day, model: row.model, rate: row.rate, totals: emptyTotals() }
     addTotals(cell.totals, row.totals)
-    crossed.set(crossKey(row.day, row.model), cell)
+    rated.set(key, cell)
   }
   const recent = [...left.recent, ...right.recent]
     .sort((a, b) => b.time - a.time)
@@ -177,7 +210,7 @@ export function mergeSummaries(
     total,
     byDay: dayRows(days),
     byModel: modelRows(models),
-    byDayModel: dayModelRows(crossed.values()),
+    rateRows: rateRowsSorted(rated.values()),
     recent,
   }
 }
@@ -190,8 +223,8 @@ function dayStart(day: string): number {
 
 /**
  * Re-aggregate a summary under an optional inclusive day range and model
- * filter, drawing every dimension from the crossed (day × model) rows so no
- * file is reread. The recent window filters on its record timestamps
+ * filter, drawing every dimension from the rate rows so no file is reread.
+ * The recent window filters on its record timestamps
  * ([from 00:00, to 23:59:59.999] local). No filters returns the input as-is.
  * @param summary - the unfiltered summary.
  * @param from - first day key (`YYYY-MM-DD`), inclusive.
@@ -200,13 +233,13 @@ function dayStart(day: string): number {
  * @returns the filtered summary.
  */
 export function filterSummary(
-  summary: UsageSummary,
+  summary: TokenSummary & { dataDir: string },
   from?: string,
   to?: string,
   model?: string,
-): UsageSummary {
+): TokenSummary & { dataDir: string } {
   if (from === undefined && to === undefined && model === undefined) return summary
-  const rows = summary.byDayModel.filter(row =>
+  const rows = summary.rateRows.filter(row =>
     (from === undefined || row.day >= from)
     && (to === undefined || row.day <= to)
     && (model === undefined || row.model === model))
@@ -228,7 +261,49 @@ export function filterSummary(
     (start === undefined || record.time >= start)
     && (end === undefined || record.time <= end)
     && (model === undefined || record.model === model))
-  return { dataDir: summary.dataDir, total, byDay: dayRows(days), byModel: modelRows(models), byDayModel: rows, recent }
+  return { dataDir: summary.dataDir, total, byDay: dayRows(days), byModel: modelRows(models), rateRows: rateRowsSorted(rows), recent }
+}
+
+/**
+ * Attach the cost layer to a token-only summary: each rate row is priced at
+ * the prices its rate identity resolves to under the current table, folded
+ * into per-model costs, the total, the unpriced model list, and the table
+ * itself. Purely additive — totals, day rows, and the recent window are
+ * returned untouched, so the token aggregation (and the rollup format)
+ * never carries currency, and an updated table re-prices history for free.
+ * @param summary - the aggregated summary (build or filtered).
+ * @param pricing - the active pricing table.
+ * @returns the same summary plus the cost fields.
+ */
+export function attachCosts(summary: TokenSummary & { dataDir: string }, pricing: PricingTable): UsageSummary {
+  const costs = new Map<string, number>()
+  let totalCost = 0
+  for (const row of summary.rateRows) {
+    const rules = pricing[row.model]
+    if (rules === undefined) continue
+    const cost = costOf(row.totals, ratesForKey(rules, row.rate))
+    costs.set(row.model, (costs.get(row.model) ?? 0) + cost)
+    totalCost += cost
+  }
+  const byModel: CostedModelRow[] = summary.byModel.map(row => ({
+    model: row.model,
+    totals: row.totals,
+    cost: costs.get(row.model) ?? 0,
+  }))
+  const unpricedModels = summary.byModel
+    .filter(row => pricing[row.model] === undefined)
+    .map(row => row.model)
+  return {
+    dataDir: summary.dataDir,
+    total: summary.total,
+    totalCost,
+    unpricedModels,
+    pricing,
+    byDay: summary.byDay,
+    byModel,
+    rateRows: summary.rateRows,
+    recent: summary.recent,
+  }
 }
 
 /**
@@ -286,12 +361,19 @@ export async function readAllRecords(dir: string): Promise<UsageRecord[]> {
  * named at or after today but already absorbed by a later rollup `upto` are
  * skipped, so a clock stepping back cannot count an absorbed file twice.
  * A failed rollup write logs and does not block the response — the next read
- * retries the absorption.
+ * retries the absorption. The resolver prices each record as it is absorbed,
+ * so the rollup carries rate identities (never prices) and a table update
+ * re-prices history without rebuilding anything.
  * @param dir - the plugin's data directory.
  * @param now - clock source for the frozen/today boundary (test seam).
+ * @param resolve - the rate resolver (see {@link RateResolver}).
  * @returns the summary served to the web settings page.
  */
-export async function buildSummary(dir: string, now: () => Date = () => new Date()): Promise<UsageSummary> {
+export async function buildSummary(
+  dir: string,
+  now: () => Date = () => new Date(),
+  resolve: RateResolver = () => UNPRICED_KEY,
+): Promise<TokenSummary & { dataDir: string }> {
   const today = dayKey(now().getTime())
   const rollup = (await readRollup(dir)) ?? emptyRollup()
   const cold: string[] = []
@@ -309,7 +391,7 @@ export async function buildSummary(dir: string, now: () => Date = () => new Date
     for (const name of cold) records.push(...await readDayFile(dir, name))
     absorbed = {
       upto: fileDay(cold[cold.length - 1]!)!,
-      ...mergeSummaries(rollup, summarizeRecords(records)),
+      ...mergeSummaries(rollup, summarizeRecords(records, resolve)),
     }
     await writeRollup(dir, absorbed).catch((error: unknown) => {
       console.error('[token-usage] cannot write rollup:', error)
@@ -317,5 +399,5 @@ export async function buildSummary(dir: string, now: () => Date = () => new Date
   }
   const fresh: UsageRecord[] = []
   for (const name of hot) fresh.push(...await readDayFile(dir, name))
-  return { dataDir: dir, ...mergeSummaries(absorbed, summarizeRecords(fresh)) }
+  return { dataDir: dir, ...mergeSummaries(absorbed, summarizeRecords(fresh, resolve)) }
 }

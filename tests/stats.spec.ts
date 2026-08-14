@@ -3,7 +3,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { readRollup, writeRollup } from '../src/rollup.ts'
-import { RECENT_LIMIT, buildSummary, filterSummary, mergeSummaries, readAllRecords, summarizeRecords } from '../src/stats.ts'
+import { RECENT_LIMIT, attachCosts, buildSummary, filterSummary, mergeSummaries, readAllRecords, summarizeRecords } from '../src/stats.ts'
+import type { RateResolver } from '../src/stats.ts'
+import type { PricingTable } from '../src/wire.ts'
 import type { UsageRecord } from '../src/usage-record.ts'
 
 /** One record with the given time and usage buckets (usage optional). */
@@ -64,7 +66,7 @@ describe('summarizeRecords', () => {
     expect([...times].sort((a, b) => b - a)).toEqual(times)
   })
 
-  it('crosses day and model into byDayModel rows, day then model ascending', () => {
+  it('crosses day, model, and rate into rate rows, day then model then rate ascending', () => {
     const first = new Date(2026, 0, 15, 12).getTime()
     const second = new Date(2026, 0, 16, 12).getTime()
     const summary = summarizeRecords([
@@ -73,11 +75,29 @@ describe('summarizeRecords', () => {
       record(first, 'deepseek-chat', { input: 1, output: 1 }),
       record(second, 'deepseek-chat', { input: 2, output: 2 }),
     ])
-    expect(summary.byDayModel).toEqual([
-      { day: '2026-01-15', model: 'deepseek-chat', totals: { requests: 2, inputTokens: 11, outputTokens: 6, cacheReadTokens: 0, cacheWriteTokens: 0 } },
-      { day: '2026-01-15', model: 'deepseek-reasoner', totals: { requests: 1, inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 } },
-      { day: '2026-01-16', model: 'deepseek-chat', totals: { requests: 1, inputTokens: 2, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0 } },
+    // Unresolved records fold into the neutral unpriced rate per (day, model).
+    const neutral = { ruleStart: 0, ruleEnd: 0, tier: 0, slot: -1 }
+    expect(summary.rateRows).toEqual([
+      { day: '2026-01-15', model: 'deepseek-chat', rate: neutral, totals: { requests: 2, inputTokens: 11, outputTokens: 6, cacheReadTokens: 0, cacheWriteTokens: 0 } },
+      { day: '2026-01-15', model: 'deepseek-reasoner', rate: neutral, totals: { requests: 1, inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 } },
+      { day: '2026-01-16', model: 'deepseek-chat', rate: neutral, totals: { requests: 1, inputTokens: 2, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0 } },
     ])
+  })
+
+  it('splits one model\'s day across the rates the resolver assigns per record', () => {
+    const at = new Date(2026, 0, 15, 10).getTime()
+    // Even-index records price at tier 0, odd ones at tier 512000.
+    const summary = summarizeRecords([
+      record(at, 'deepseek-chat', { input: 10, output: 5 }),
+      record(at, 'deepseek-chat', { input: 1, output: 1 }),
+    ], rec => (rec.usage?.inputTokens ?? 0) > 5
+      ? { ruleStart: 0, ruleEnd: 0, tier: 512_000, slot: -1 }
+      : { ruleStart: 0, ruleEnd: 0, tier: 0, slot: -1 })
+    expect(summary.rateRows).toHaveLength(2)
+    expect(summary.rateRows.map(row => row.rate.tier)).toEqual([0, 512_000])
+    // The token dimensions still fold the model into one row.
+    expect(summary.byModel).toHaveLength(1)
+    expect(summary.byModel[0]!.totals.requests).toBe(2)
   })
 })
 
@@ -294,5 +314,89 @@ describe('readAllRecords / buildSummary', () => {
     expect(summary.byDay).toEqual([])
     expect(summary.byModel).toEqual([])
     expect(summary.recent).toEqual([])
+  })
+})
+
+describe('attachCosts', () => {
+  const pricing: PricingTable = {
+    'deepseek-chat': {
+      base: { inputPerMillion: 2, outputPerMillion: 8, cacheReadPerMillion: 0.5 },
+      contextTiers: [],
+      dailySlots: [],
+      timeRules: [],
+    },
+  }
+
+  function tokenSummary(): ReturnType<typeof summarizeRecords> & { dataDir: string } {
+    return {
+      dataDir: 'C:/data',
+      ...summarizeRecords([
+        record(1, 'deepseek-chat', { input: 1_000_000, output: 500_000, cacheRead: 250_000 }),
+        record(2, 'deepseek-reasoner', { input: 1_000_000, output: 1_000_000 }),
+      ]),
+    }
+  }
+
+  it('bills per-model costs, the total, and the pricing table', () => {
+    const summary = attachCosts(tokenSummary(), pricing)
+    expect(summary.byModel).toEqual([
+      {
+        model: 'deepseek-chat',
+        totals: expect.objectContaining({ requests: 1 }),
+        cost: 2 + 4 + 0.125,
+      },
+      {
+        model: 'deepseek-reasoner',
+        totals: expect.objectContaining({ requests: 1 }),
+        cost: 0,
+      },
+    ])
+    expect(summary.totalCost).toBe(2 + 4 + 0.125)
+    expect(summary.unpricedModels).toEqual(['deepseek-reasoner'])
+    expect(summary.pricing).toEqual(pricing)
+  })
+
+  it('prices each rate row through its identity and re-prices after an update', () => {
+    // One record at the rule rate, one at the base rate: same model, same day.
+    const at = new Date(2026, 0, 15, 10).getTime()
+    const resolve: RateResolver = rec => rec.requestId.endsWith('r1')
+      ? { ruleStart: 0, ruleEnd: 4_102_415_999, tier: 0, slot: -1 }
+      : { ruleStart: 0, ruleEnd: 0, tier: 0, slot: -1 }
+    const r1 = { ...record(at, 'deepseek-chat', { input: 1_000_000, output: 0 }), requestId: 'r1' }
+    const r2 = { ...record(at, 'deepseek-chat', { input: 1_000_000, output: 0 }), requestId: 'r2' }
+    const base = {
+      dataDir: 'C:/data',
+      ...summarizeRecords([r1, r2], resolve),
+    }
+    const discounted: PricingTable = {
+      'deepseek-chat': {
+        base: { inputPerMillion: 2, outputPerMillion: 8 },
+        contextTiers: [],
+        dailySlots: [],
+        timeRules: [{ startTime: 0, endTime: 4_102_415_999, rates: { inputPerMillion: 1, outputPerMillion: 4 } }],
+      },
+    }
+    // Row r1 billed at the rule rate (¥1), row r2 at the base rate (¥2).
+    const summary = attachCosts(base, discounted)
+    expect(summary.byModel[0]!.cost).toBe(1 + 2)
+    expect(summary.totalCost).toBe(3)
+    // A price update re-prices the same identities with no re-aggregation.
+    const repriced = attachCosts(base, {
+      'deepseek-chat': {
+        ...discounted['deepseek-chat']!,
+        timeRules: [{ startTime: 0, endTime: 4_102_415_999, rates: { inputPerMillion: 0.5, outputPerMillion: 2 } }],
+      },
+    })
+    expect(repriced.totalCost).toBe(0.5 + 2)
+  })
+
+  it('leaves the token aggregation untouched', () => {
+    const before = tokenSummary()
+    const summary = attachCosts(before, pricing)
+    expect(summary.total).toEqual(before.total)
+    expect(summary.byDay).toEqual(before.byDay)
+    expect(summary.rateRows).toEqual(before.rateRows)
+    expect(summary.recent).toEqual(before.recent)
+    expect(summary.dataDir).toBe(before.dataDir)
   })
 })
