@@ -1,11 +1,11 @@
 /**
  * Token-usage settings page (browser half): fetches the stats summary from
- * the host route and renders the total-usage strip — requests / total tokens
- * / cache hit rate on one row, the four token buckets on the next — followed
- * by a per-model detail table (one row per model). Token counts are
- * abbreviated (K below 1M, M below 1 亿, B from 1 亿 with B = 10 亿); the page
- * owns no store because nothing outside it reads the summary, and a manual
- * refresh re-fetches after new requests land.
+ * the host route and renders the filter bar (inclusive day range, model
+ * select, 1d/7d/30d quick ranges where 1d spans today 00:00–23:59), the
+ * total-usage strip, the daily-token trend chart, and the per-model detail
+ * table with the hit rate last — all following the active filters. There is
+ * no refresh button: entering the page or changing a filter refetches (the
+ * route answers no-store); only the error state keeps a retry.
  *
  * @module token-usage/client/TokenUsageSection
  */
@@ -15,6 +15,8 @@ import type { ReactNode } from 'react'
 import type { SettingsSectionOwnerProps } from '@deepseek-ai/dsh-client-ui-settings/client'
 import type { UsageSummary, UsageTotals } from '../wire.ts'
 import { STATS_PATH } from '../wire.ts'
+import { shiftedDayKey, totalTokens } from './day.ts'
+import { TrendChart } from './TrendChart.tsx'
 import styles from './TokenUsageSection.module.css'
 
 type LoadState =
@@ -22,15 +24,45 @@ type LoadState =
   | { status: 'error'; message: string }
   | { status: 'ready'; summary: UsageSummary }
 
-/** Fetch the summary; the caller owns the failure presentation. */
-async function fetchSummary(): Promise<UsageSummary> {
-  const response = await fetch(STATS_PATH)
+/** The active filter selection; '' means unconstrained. */
+interface Filters {
+  from: string
+  to: string
+  model: string
+}
+
+/** Fetch the summary for one query string; the caller owns the failure presentation. */
+async function fetchSummary(query: string): Promise<UsageSummary> {
+  const response = await fetch(STATS_PATH + query)
   if (!response.ok) throw new Error(`HTTP ${String(response.status)}`)
   const value = (await response.json()) as UsageSummary
   if (typeof value !== 'object' || value === null || typeof value.total !== 'object') {
     throw new Error('unexpected stats response')
   }
   return value
+}
+
+/** The query string of one filter selection ('' when unconstrained). */
+function filterQuery(filters: Filters): string {
+  const params = new URLSearchParams()
+  if (filters.from !== '') params.set('from', filters.from)
+  if (filters.to !== '') params.set('to', filters.to)
+  if (filters.model !== '') params.set('model', filters.model)
+  return Array.from(params).length > 0 ? `?${params.toString()}` : ''
+}
+
+/** Quick-range day span in days (1 = today only, inclusive on both ends). */
+const QUICK_DAYS = [1, 7, 30] as const
+
+/** The day keys of one quick range: today minus (days - 1) through today. */
+function quickRange(days: number): { from: string; to: string } {
+  return { from: shiftedDayKey(-(days - 1)), to: shiftedDayKey(0) }
+}
+
+/** Whether the filters exactly hold one quick range. */
+function isQuickActive(days: number, filters: Filters): boolean {
+  const range = quickRange(days)
+  return filters.from === range.from && filters.to === range.to
 }
 
 /**
@@ -62,9 +94,7 @@ function percent(value: number): string {
 }
 
 /** Total tokens across the four buckets (billed input = input + cacheRead + cacheWrite). */
-export function totalTokens(totals: UsageTotals): number {
-  return totals.inputTokens + totals.outputTokens + totals.cacheReadTokens + totals.cacheWriteTokens
-}
+export { totalTokens } from './day.ts'
 
 /**
  * Cache hit rate as display text: cache reads over served input
@@ -88,6 +118,55 @@ function StatCard({ label, value }: { label: string; value: string }): ReactNode
   )
 }
 
+/** The filter bar: date range, model select, quick range buttons. */
+function FilterBar({ filters, models, onChange }: {
+  filters: Filters
+  models: readonly string[]
+  onChange: (next: Filters) => void
+}): ReactNode {
+  return (
+    <div className={styles['filters']}>
+      <input
+        type="date"
+        aria-label="开始日期"
+        className={styles['control']}
+        value={filters.from}
+        onChange={event => onChange({ ...filters, from: event.target.value })}
+      />
+      <span className={styles['rangeSeparator']}>至</span>
+      <input
+        type="date"
+        aria-label="结束日期"
+        className={styles['control']}
+        value={filters.to}
+        onChange={event => onChange({ ...filters, to: event.target.value })}
+      />
+      <select
+        aria-label="模型"
+        className={styles['control']}
+        value={filters.model}
+        onChange={event => onChange({ ...filters, model: event.target.value })}
+      >
+        <option value="">全部模型</option>
+        {models.map(model => <option key={model} value={model}>{model}</option>)}
+      </select>
+      <div className={styles['quickButtons']}>
+        {QUICK_DAYS.map(days => (
+          <button
+            key={days}
+            type="button"
+            className={styles['button']}
+            aria-pressed={isQuickActive(days, filters)}
+            onClick={() => onChange({ ...filters, ...quickRange(days) })}
+          >
+            {`${String(days)}d`}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 /**
  * Render the Token 用量 section content column.
  * @param props - the settings shell's owner share (close is unused: the nav
@@ -96,21 +175,29 @@ function StatCard({ label, value }: { label: string; value: string }): ReactNode
  */
 export function TokenUsageSection(_props: SettingsSectionOwnerProps): ReactNode {
   const [state, setState] = useState<LoadState>({ status: 'loading' })
+  const [filters, setFilters] = useState<Filters>({ from: '', to: '', model: '' })
+  const [models, setModels] = useState<string[]>([])
   const [attempt, setAttempt] = useState(0)
-  const refresh = useCallback(() => { setAttempt(previous => previous + 1) }, [])
+  const retry = useCallback(() => { setAttempt(previous => previous + 1) }, [])
 
   useEffect(() => {
     let cancelled = false
     setState({ status: 'loading' })
-    void fetchSummary()
-      .then((summary) => { if (!cancelled) setState({ status: 'ready', summary }) })
+    void fetchSummary(filterQuery(filters))
+      .then((summary) => {
+        if (cancelled) return
+        setState({ status: 'ready', summary })
+        // While every model is shown, keep the option list from collapsing
+        // to the filtered selection.
+        if (filters.model === '') setModels(summary.byModel.map(row => row.model))
+      })
       .catch((error: unknown) => {
         if (!cancelled) {
           setState({ status: 'error', message: error instanceof Error ? error.message : String(error) })
         }
       })
     return () => { cancelled = true }
-  }, [attempt])
+  }, [filters, attempt])
 
   if (state.status === 'loading') {
     return (
@@ -125,7 +212,7 @@ export function TokenUsageSection(_props: SettingsSectionOwnerProps): ReactNode 
       <div className={styles['section']}>
         <div className={styles['head']}>
           <h2 className={styles['title']}>Token 用量</h2>
-          <button type="button" className={styles['button']} onClick={refresh}>重试</button>
+          <button type="button" className={styles['button']} onClick={retry}>重试</button>
         </div>
         <p className={styles['error']}>统计加载失败：{state.message}</p>
       </div>
@@ -133,15 +220,20 @@ export function TokenUsageSection(_props: SettingsSectionOwnerProps): ReactNode 
   }
 
   const { total } = state.summary
+  const filtered = filters.from !== '' || filters.to !== '' || filters.model !== ''
   return (
     <div className={styles['section']}>
-      <div className={styles['head']}>
-        <h2 className={styles['title']}>Token 用量</h2>
-        <button type="button" className={styles['button']} onClick={refresh}>刷新</button>
-      </div>
+      <h2 className={styles['title']}>Token 用量</h2>
       <p className={styles['muted']}>数据目录：{state.summary.dataDir}</p>
+      <FilterBar filters={filters} models={models} onChange={setFilters} />
       {total.requests === 0
-        ? <p className={styles['empty']}>暂无记录。模型请求成功后会自动写入，历史记录可通过命令面板的 /token-usage-sync 补齐。</p>
+        ? (
+          <p className={styles['empty']}>
+            {filtered
+              ? '所选范围内暂无数据。'
+              : '暂无记录。模型请求成功后会自动写入，历史记录可通过命令面板的 /token-usage-sync 补齐。'}
+          </p>
+        )
         : (
           <>
             <div className={styles['cards']}>
@@ -155,6 +247,11 @@ export function TokenUsageSection(_props: SettingsSectionOwnerProps): ReactNode 
               <StatCard label="缓存读" value={formatTokens(total.cacheReadTokens)} />
               <StatCard label="缓存写" value={formatTokens(total.cacheWriteTokens)} />
             </div>
+            <TrendChart
+              rows={state.summary.byDay}
+              {...filters.from !== '' ? { from: filters.from } : {}}
+              {...filters.to !== '' ? { to: filters.to } : {}}
+            />
             {state.summary.byModel.length > 0
               ? (
                 <>
@@ -165,11 +262,11 @@ export function TokenUsageSection(_props: SettingsSectionOwnerProps): ReactNode 
                         <th>模型</th>
                         <th>请求数</th>
                         <th>总 token</th>
-                        <th>命中率</th>
                         <th>输入</th>
                         <th>输出</th>
                         <th>缓存读</th>
                         <th>缓存写</th>
+                        <th>命中率</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -178,11 +275,11 @@ export function TokenUsageSection(_props: SettingsSectionOwnerProps): ReactNode 
                           <td>{row.model}</td>
                           <td>{row.totals.requests.toLocaleString()}</td>
                           <td>{formatTokens(totalTokens(row.totals))}</td>
-                          <td>{formatHitRate(row.totals)}</td>
                           <td>{formatTokens(row.totals.inputTokens)}</td>
                           <td>{formatTokens(row.totals.outputTokens)}</td>
                           <td>{formatTokens(row.totals.cacheReadTokens)}</td>
                           <td>{formatTokens(row.totals.cacheWriteTokens)}</td>
+                          <td>{formatHitRate(row.totals)}</td>
                         </tr>
                       ))}
                     </tbody>

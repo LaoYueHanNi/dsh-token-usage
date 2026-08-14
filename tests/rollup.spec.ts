@@ -66,4 +66,12 @@ describe('readRollup / writeRollup', () => {
     await writeRollup(dir, rollupWith('2026-01-15', []))
     await expect(readdir(dir)).resolves.not.toContain('rollup.json.tmp')
   })
+
+  it('reads null for a pre-byDayModel rollup so it rebuilds from the day files', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'token-usage-rollup-'))
+    const legacy = rollupWith('2026-01-15', [record(1_700_000_000_000, 'deepseek-chat')])
+    delete (legacy as Partial<typeof legacy>).byDayModel
+    await writeFile(join(dir, 'rollup.json'), JSON.stringify(legacy))
+    await expect(readRollup(dir)).resolves.toBeNull()
+  })
 })

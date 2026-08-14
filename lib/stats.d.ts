@@ -25,15 +25,27 @@ export declare function summarizeRecords(records: readonly UsageRecord[]): Omit<
 /**
  * Merge two summaries into one: totals and model rows add up, day rows fold
  * by day key (a same-day record set landing in a later file must join the
- * earlier bucket, never replace it), and the recent window keeps the newest
- * {@link RECENT_LIMIT} records across both sides. Order-independent and
- * associative: merging partial summaries equals summarizing the concatenated
- * records.
+ * earlier bucket, never replace it), crossed rows fold by their (day, model)
+ * key, and the recent window keeps the newest {@link RECENT_LIMIT} records
+ * across both sides. Order-independent and associative: merging partial
+ * summaries equals summarizing the concatenated records.
  * @param left - one partial summary.
  * @param right - the other partial summary.
  * @returns the folded summary.
  */
 export declare function mergeSummaries(left: Omit<UsageSummary, 'dataDir'>, right: Omit<UsageSummary, 'dataDir'>): Omit<UsageSummary, 'dataDir'>;
+/**
+ * Re-aggregate a summary under an optional inclusive day range and model
+ * filter, drawing every dimension from the crossed (day × model) rows so no
+ * file is reread. The recent window filters on its record timestamps
+ * ([from 00:00, to 23:59:59.999] local). No filters returns the input as-is.
+ * @param summary - the unfiltered summary.
+ * @param from - first day key (`YYYY-MM-DD`), inclusive.
+ * @param to - last day key (`YYYY-MM-DD`), inclusive.
+ * @param model - exact model id.
+ * @returns the filtered summary.
+ */
+export declare function filterSummary(summary: UsageSummary, from?: string, to?: string, model?: string): UsageSummary;
 /**
  * Read every day file into records, in day-file order. An absent data
  * directory (nothing written yet) yields an empty list.

@@ -1,0 +1,38 @@
+/* Daily token trend chart: tokens only (--dsw-* alias tokens from the web
+ * theme), no literal colors. */
+
+.chart {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.axis {
+  stroke: var(--dsw-alias-border-l1);
+  stroke-width: 1;
+}
+
+.line {
+  fill: none;
+  stroke: var(--dsw-alias-label-primary);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.dot {
+  fill: var(--dsw-alias-label-primary);
+}
+
+.tick {
+  fill: var(--dsw-alias-label-dimmed);
+  font-size: 11px;
+}
+
+.empty {
+  margin: 0;
+  padding: 24px 0;
+  font-size: 13px;
+  text-align: center;
+  color: var(--dsw-alias-label-secondary);
+}

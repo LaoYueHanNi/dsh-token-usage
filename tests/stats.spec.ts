@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { readRollup, writeRollup } from '../src/rollup.ts'
-import { RECENT_LIMIT, buildSummary, mergeSummaries, readAllRecords, summarizeRecords } from '../src/stats.ts'
+import { RECENT_LIMIT, buildSummary, filterSummary, mergeSummaries, readAllRecords, summarizeRecords } from '../src/stats.ts'
 import type { UsageRecord } from '../src/usage-record.ts'
 
 /** One record with the given time and usage buckets (usage optional). */
@@ -63,6 +63,22 @@ describe('summarizeRecords', () => {
     const times = summary.recent.map(row => row.time)
     expect([...times].sort((a, b) => b - a)).toEqual(times)
   })
+
+  it('crosses day and model into byDayModel rows, day then model ascending', () => {
+    const first = new Date(2026, 0, 15, 12).getTime()
+    const second = new Date(2026, 0, 16, 12).getTime()
+    const summary = summarizeRecords([
+      record(first, 'deepseek-reasoner', { input: 1, output: 1 }),
+      record(first, 'deepseek-chat', { input: 10, output: 5 }),
+      record(first, 'deepseek-chat', { input: 1, output: 1 }),
+      record(second, 'deepseek-chat', { input: 2, output: 2 }),
+    ])
+    expect(summary.byDayModel).toEqual([
+      { day: '2026-01-15', model: 'deepseek-chat', totals: { requests: 2, inputTokens: 11, outputTokens: 6, cacheReadTokens: 0, cacheWriteTokens: 0 } },
+      { day: '2026-01-15', model: 'deepseek-reasoner', totals: { requests: 1, inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 } },
+      { day: '2026-01-16', model: 'deepseek-chat', totals: { requests: 1, inputTokens: 2, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0 } },
+    ])
+  })
 })
 
 describe('mergeSummaries', () => {
@@ -116,6 +132,60 @@ describe('mergeSummaries', () => {
     const left = summarizeRecords(records.slice(0, 2))
     const right = summarizeRecords(records.slice(2))
     expect(mergeSummaries(left, right)).toEqual(summarizeRecords(records))
+  })
+})
+
+describe('filterSummary', () => {
+  /** Three days (01-14..01-16) × two models, recent spanning all three days. */
+  function fixture(): ReturnType<typeof summarizeRecords> & { dataDir: string } {
+    const rows: UsageRecord[] = [
+      record(new Date(2026, 0, 14, 10).getTime(), 'deepseek-chat', { input: 1, output: 1 }),
+      record(new Date(2026, 0, 14, 11).getTime(), 'deepseek-reasoner', { input: 2, output: 2 }),
+      record(new Date(2026, 0, 15, 10).getTime(), 'deepseek-chat', { input: 10, output: 10 }),
+      record(new Date(2026, 0, 15, 23, 59, 59, 999).getTime(), 'deepseek-chat', { input: 20, output: 20 }),
+      record(new Date(2026, 0, 16, 10).getTime(), 'deepseek-reasoner', { input: 100, output: 100 }),
+    ]
+    return { dataDir: 'C:/data', ...summarizeRecords(rows) }
+  }
+
+  it('returns the summary unchanged without filters', () => {
+    const summary = fixture()
+    expect(filterSummary(summary)).toEqual(summary)
+  })
+
+  it('keeps only the requested inclusive day range', () => {
+    const filtered = filterSummary(fixture(), '2026-01-15', '2026-01-15')
+    expect(filtered.total).toEqual({
+      requests: 2, inputTokens: 30, outputTokens: 30, cacheReadTokens: 0, cacheWriteTokens: 0,
+    })
+    expect(filtered.byDay.map(row => row.day)).toEqual(['2026-01-15'])
+    // Per-model rows re-aggregate from the crossed rows, not copied whole.
+    expect(filtered.byModel).toEqual([
+      { model: 'deepseek-chat', totals: { requests: 2, inputTokens: 30, outputTokens: 30, cacheReadTokens: 0, cacheWriteTokens: 0 } },
+    ])
+  })
+
+  it('keeps only the requested model', () => {
+    const filtered = filterSummary(fixture(), undefined, undefined, 'deepseek-reasoner')
+    expect(filtered.total.requests).toBe(2)
+    expect(filtered.byDay.map(row => row.day)).toEqual(['2026-01-14', '2026-01-16'])
+    expect(filtered.byModel.map(row => row.model)).toEqual(['deepseek-reasoner'])
+  })
+
+  it('combines the day range with the model', () => {
+    const filtered = filterSummary(fixture(), '2026-01-14', '2026-01-15', 'deepseek-reasoner')
+    expect(filtered.total.inputTokens).toBe(2)
+    expect(filtered.byDay.map(row => row.day)).toEqual(['2026-01-14'])
+  })
+
+  it('filters the recent window by the day range and model', () => {
+    const filtered = filterSummary(fixture(), '2026-01-15', '2026-01-16', 'deepseek-chat')
+    expect(filtered.recent).toHaveLength(2)
+    for (const row of filtered.recent) {
+      expect(row.model).toBe('deepseek-chat')
+      expect(row.time).toBeGreaterThanOrEqual(new Date(2026, 0, 15).getTime())
+      expect(row.time).toBeLessThanOrEqual(new Date(2026, 0, 16, 23, 59, 59, 999).getTime())
+    }
   })
 })
 

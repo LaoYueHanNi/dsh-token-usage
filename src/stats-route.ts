@@ -9,11 +9,42 @@
 
 import type { IncomingMessage } from 'node:http'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
-import { buildSummary } from './stats.ts'
+import { buildSummary, filterSummary } from './stats.ts'
 import { STATS_PATH } from './wire.ts'
 
 /** The stats endpoint path, exported for tests and the client half. */
 export { STATS_PATH } from './wire.ts'
+
+/** A day query key must be exactly `YYYY-MM-DD`. */
+const DAY_KEY = /^\d{4}-\d{2}-\d{2}$/u
+
+/**
+ * One filter dimension of the stats request: undefined when absent or blank,
+ * the raw string otherwise.
+ */
+interface RawFilter {
+  from: string | undefined
+  to: string | undefined
+  model: string | undefined
+}
+
+/** Read the filter query parameters off the request URL. */
+function readFilters(req: IncomingMessage): RawFilter {
+  const params = new URL(req.url ?? '/', 'http://localhost').searchParams
+  const pick = (key: string): string | undefined => {
+    const value = params.get(key)
+    return value === null || value === '' ? undefined : value
+  }
+  return { from: pick('from'), to: pick('to'), model: pick('model') }
+}
+
+/** Whether every present day key is well-formed and ordered. */
+function isValidRange(filter: RawFilter): boolean {
+  if (filter.from !== undefined && !DAY_KEY.test(filter.from)) return false
+  if (filter.to !== undefined && !DAY_KEY.test(filter.to)) return false
+  if (filter.from !== undefined && filter.to !== undefined && filter.from > filter.to) return false
+  return true
+}
 
 /**
  * Whether a request may read the stats: same-origin browser fetches only.
@@ -49,8 +80,15 @@ export function createStatsRoute(dir: string): WebRoute {
         res.end('forbidden')
         return
       }
+      const filter = readFilters(req)
+      if (!isValidRange(filter)) {
+        res.writeHead(400, { 'content-type': 'text/plain; charset=utf-8' })
+        res.end('invalid filter')
+        return
+      }
       try {
-        const summary = await buildSummary(dir)
+        const summary = filterSummary(
+          await buildSummary(dir), filter.from, filter.to, filter.model)
         res.writeHead(200, {
           'content-type': 'application/json; charset=utf-8',
           // Stats change with every request; the browser must not cache them.

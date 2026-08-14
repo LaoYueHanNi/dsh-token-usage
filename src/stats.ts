@@ -15,7 +15,7 @@ import { parseRecord } from './usage-record.ts'
 import type { UsageFields, UsageRecord } from './usage-record.ts'
 import { readRollup, writeRollup } from './rollup.ts'
 import type { RollupFile } from './rollup.ts'
-import type { UsageDayRow, UsageModelRow, UsageSummary, UsageTotals } from './wire.ts'
+import type { UsageDayModelRow, UsageDayRow, UsageModelRow, UsageSummary, UsageTotals } from './wire.ts'
 
 const DAY_FILE = /^usage-(\d{4}-\d{2}-\d{2})\.jsonl$/u
 
@@ -29,7 +29,7 @@ function fileDay(name: string): string | null {
 
 /** Empty rollup used as the merge base when no rollup exists on disk yet. */
 function emptyRollup(): RollupFile {
-  return { upto: '', total: emptyTotals(), byDay: [], byModel: [], recent: [] }
+  return { upto: '', total: emptyTotals(), byDay: [], byModel: [], byDayModel: [], recent: [] }
 }
 
 /** Zeroed totals; requests counts rows, the token buckets sum reported usage. */
@@ -67,6 +67,17 @@ function modelRows(models: Map<string, UsageTotals>): UsageModelRow[] {
       right.totals.requests - left.totals.requests || left.model.localeCompare(right.model))
 }
 
+/** Sort crossed rows day ascending then model name. */
+function dayModelRows(rows: Iterable<UsageDayModelRow>): UsageDayModelRow[] {
+  return [...rows].sort((left, right) =>
+    left.day < right.day ? -1 : left.day > right.day ? 1 : left.model.localeCompare(right.model))
+}
+
+/** Map key of one crossed (day, model) cell. */
+function crossKey(day: string, model: string): string {
+  return `${day}\n${model}`
+}
+
 /**
  * Fold one record into totals; a record without provider usage still counts a request. */
 function addUsage(totals: UsageTotals, usage: UsageFields | undefined): void {
@@ -97,31 +108,38 @@ export function summarizeRecords(records: readonly UsageRecord[]): Omit<UsageSum
   const total = emptyTotals()
   const days = new Map<string, UsageTotals>()
   const models = new Map<string, UsageTotals>()
+  const crossed = new Map<string, UsageDayModelRow>()
   const recent: UsageRecord[] = []
   for (const record of records) {
     addUsage(total, record.usage)
-    const day = days.get(dayKey(record.time)) ?? emptyTotals()
-    addUsage(day, record.usage)
-    days.set(dayKey(record.time), day)
-    const model = models.get(record.model) ?? emptyTotals()
-    addUsage(model, record.usage)
-    models.set(record.model, model)
+    const day = dayKey(record.time)
+    const dayTotals = days.get(day) ?? emptyTotals()
+    addUsage(dayTotals, record.usage)
+    days.set(day, dayTotals)
+    const modelTotals = models.get(record.model) ?? emptyTotals()
+    addUsage(modelTotals, record.usage)
+    models.set(record.model, modelTotals)
+    const cell = crossed.get(crossKey(day, record.model))
+      ?? { day, model: record.model, totals: emptyTotals() }
+    addUsage(cell.totals, record.usage)
+    crossed.set(crossKey(day, record.model), cell)
     if (recent.length === RECENT_LIMIT) recent.shift()
     recent.push(record)
   }
   const byDay: UsageDayRow[] = dayRows(days)
   const byModel: UsageModelRow[] = modelRows(models)
+  const byDayModel: UsageDayModelRow[] = dayModelRows(crossed.values())
   recent.sort((left, right) => right.time - left.time)
-  return { total, byDay, byModel, recent }
+  return { total, byDay, byModel, byDayModel, recent }
 }
 
 /**
  * Merge two summaries into one: totals and model rows add up, day rows fold
  * by day key (a same-day record set landing in a later file must join the
- * earlier bucket, never replace it), and the recent window keeps the newest
- * {@link RECENT_LIMIT} records across both sides. Order-independent and
- * associative: merging partial summaries equals summarizing the concatenated
- * records.
+ * earlier bucket, never replace it), crossed rows fold by their (day, model)
+ * key, and the recent window keeps the newest {@link RECENT_LIMIT} records
+ * across both sides. Order-independent and associative: merging partial
+ * summaries equals summarizing the concatenated records.
  * @param left - one partial summary.
  * @param right - the other partial summary.
  * @returns the folded summary.
@@ -135,6 +153,7 @@ export function mergeSummaries(
   addTotals(total, right.total)
   const days = new Map<string, UsageTotals>()
   const models = new Map<string, UsageTotals>()
+  const crossed = new Map<string, UsageDayModelRow>()
   for (const row of [...left.byDay, ...right.byDay]) {
     const day = days.get(row.day) ?? emptyTotals()
     addTotals(day, row.totals)
@@ -145,10 +164,71 @@ export function mergeSummaries(
     addTotals(model, row.totals)
     models.set(row.model, model)
   }
+  for (const row of [...left.byDayModel, ...right.byDayModel]) {
+    const cell = crossed.get(crossKey(row.day, row.model))
+      ?? { day: row.day, model: row.model, totals: emptyTotals() }
+    addTotals(cell.totals, row.totals)
+    crossed.set(crossKey(row.day, row.model), cell)
+  }
   const recent = [...left.recent, ...right.recent]
     .sort((a, b) => b.time - a.time)
     .slice(0, RECENT_LIMIT)
-  return { total, byDay: dayRows(days), byModel: modelRows(models), recent }
+  return {
+    total,
+    byDay: dayRows(days),
+    byModel: modelRows(models),
+    byDayModel: dayModelRows(crossed.values()),
+    recent,
+  }
+}
+
+/** Local-midnight epoch of a day key, matching the day-file convention. */
+function dayStart(day: string): number {
+  const [year, month, date] = day.split('-').map(Number)
+  return new Date(year!, month! - 1, date!).getTime()
+}
+
+/**
+ * Re-aggregate a summary under an optional inclusive day range and model
+ * filter, drawing every dimension from the crossed (day × model) rows so no
+ * file is reread. The recent window filters on its record timestamps
+ * ([from 00:00, to 23:59:59.999] local). No filters returns the input as-is.
+ * @param summary - the unfiltered summary.
+ * @param from - first day key (`YYYY-MM-DD`), inclusive.
+ * @param to - last day key (`YYYY-MM-DD`), inclusive.
+ * @param model - exact model id.
+ * @returns the filtered summary.
+ */
+export function filterSummary(
+  summary: UsageSummary,
+  from?: string,
+  to?: string,
+  model?: string,
+): UsageSummary {
+  if (from === undefined && to === undefined && model === undefined) return summary
+  const rows = summary.byDayModel.filter(row =>
+    (from === undefined || row.day >= from)
+    && (to === undefined || row.day <= to)
+    && (model === undefined || row.model === model))
+  const total = emptyTotals()
+  const days = new Map<string, UsageTotals>()
+  const models = new Map<string, UsageTotals>()
+  for (const row of rows) {
+    addTotals(total, row.totals)
+    const day = days.get(row.day) ?? emptyTotals()
+    addTotals(day, row.totals)
+    days.set(row.day, day)
+    const perModel = models.get(row.model) ?? emptyTotals()
+    addTotals(perModel, row.totals)
+    models.set(row.model, perModel)
+  }
+  const start = from !== undefined ? dayStart(from) : undefined
+  const end = to !== undefined ? dayStart(to) + 86_399_999 : undefined
+  const recent = summary.recent.filter(record =>
+    (start === undefined || record.time >= start)
+    && (end === undefined || record.time <= end)
+    && (model === undefined || record.model === model))
+  return { dataDir: summary.dataDir, total, byDay: dayRows(days), byModel: modelRows(models), byDayModel: rows, recent }
 }
 
 /**

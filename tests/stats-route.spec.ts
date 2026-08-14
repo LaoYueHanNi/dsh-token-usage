@@ -60,6 +60,26 @@ function fixtureRecord(time: number): UsageRecord {
   }
 }
 
+/** One record on a local calendar day with a chosen model. */
+function dayRecord(day: number, model: string): UsageRecord {
+  const time = new Date(2026, 0, 10 + day, 12).getTime()
+  return { ...fixtureRecord(time), requestId: `req-${model}-${day}`, model }
+}
+
+/** A data dir holding three days × two models (day N contributes N+1 requests to chat). */
+async function filteredDataDir(): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), 'token-usage-filter-'))
+  const lines: string[] = []
+  for (const day of [0, 1, 2]) {
+    lines.push(JSON.stringify(dayRecord(day, 'deepseek-chat')))
+    lines.push(JSON.stringify(dayRecord(day, 'deepseek-reasoner')))
+  }
+  await writeFile(join(dir, 'usage-2026-01-10.jsonl'), lines.slice(0, 2).join('\n') + '\n')
+  await writeFile(join(dir, 'usage-2026-01-11.jsonl'), lines.slice(2, 4).join('\n') + '\n')
+  await writeFile(join(dir, 'usage-2026-01-12.jsonl'), lines.slice(4).join('\n') + '\n')
+  return dir
+}
+
 describe('createStatsRoute', () => {
   it('serves the JSON summary on GET', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'token-usage-route-'))
@@ -98,6 +118,48 @@ describe('createStatsRoute', () => {
     await route.handler(fakeRequest(), res)
     expect(captured.status).toBe(200)
     expect(JSON.parse(captured.body)).toMatchObject({ total: { requests: 0 } })
+  })
+
+  it('filters by an inclusive day range', async () => {
+    const route = createStatsRoute(await filteredDataDir())
+    const { res, captured } = fakeResponse()
+    await route.handler(fakeRequest({ url: `${STATS_PATH}?from=2026-01-11&to=2026-01-12` }), res)
+    expect(captured.status).toBe(200)
+    const body = JSON.parse(captured.body) as { total: { requests: number }; byDay: Array<{ day: string }> }
+    expect(body.total.requests).toBe(4)
+    expect(body.byDay.map(row => row.day)).toEqual(['2026-01-11', '2026-01-12'])
+  })
+
+  it('filters by model and combines it with a day range', async () => {
+    const route = createStatsRoute(await filteredDataDir())
+    const { res, captured } = fakeResponse()
+    await route.handler(fakeRequest({ url: `${STATS_PATH}?model=deepseek-chat&from=2026-01-10` }), res)
+    expect(captured.status).toBe(200)
+    const body = JSON.parse(captured.body) as { total: { requests: number }; byModel: Array<{ model: string }> }
+    expect(body.total.requests).toBe(3)
+    expect(body.byModel.map(row => row.model)).toEqual(['deepseek-chat'])
+  })
+
+  it('treats blank query values as absent', async () => {
+    const route = createStatsRoute(await filteredDataDir())
+    const { res, captured } = fakeResponse()
+    await route.handler(fakeRequest({ url: `${STATS_PATH}?from=&to=&model=` }), res)
+    expect(captured.status).toBe(200)
+    expect(JSON.parse(captured.body).total.requests).toBe(6)
+  })
+
+  it('rejects a malformed day key with 400', async () => {
+    const route = createStatsRoute(await filteredDataDir())
+    const { res, captured } = fakeResponse()
+    await route.handler(fakeRequest({ url: `${STATS_PATH}?from=2026-1-1` }), res)
+    expect(captured.status).toBe(400)
+  })
+
+  it('rejects an inverted day range with 400', async () => {
+    const route = createStatsRoute(await filteredDataDir())
+    const { res, captured } = fakeResponse()
+    await route.handler(fakeRequest({ url: `${STATS_PATH}?from=2026-01-12&to=2026-01-10` }), res)
+    expect(captured.status).toBe(400)
   })
 })
 

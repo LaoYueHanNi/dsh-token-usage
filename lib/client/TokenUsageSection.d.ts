@@ -1,11 +1,11 @@
 /**
  * Token-usage settings page (browser half): fetches the stats summary from
- * the host route and renders the total-usage strip — requests / total tokens
- * / cache hit rate on one row, the four token buckets on the next — followed
- * by a per-model detail table (one row per model). Token counts are
- * abbreviated (K below 1M, M below 1 亿, B from 1 亿 with B = 10 亿); the page
- * owns no store because nothing outside it reads the summary, and a manual
- * refresh re-fetches after new requests land.
+ * the host route and renders the filter bar (inclusive day range, model
+ * select, 1d/7d/30d quick ranges where 1d spans today 00:00–23:59), the
+ * total-usage strip, the daily-token trend chart, and the per-model detail
+ * table with the hit rate last — all following the active filters. There is
+ * no refresh button: entering the page or changing a filter refetches (the
+ * route answers no-store); only the error state keeps a retry.
  *
  * @module token-usage/client/TokenUsageSection
  */
@@ -22,7 +22,7 @@ import type { UsageTotals } from '../wire.ts';
  */
 export declare function formatTokens(count: number): string;
 /** Total tokens across the four buckets (billed input = input + cacheRead + cacheWrite). */
-export declare function totalTokens(totals: UsageTotals): number;
+export { totalTokens } from './day.ts';
 /**
  * Cache hit rate as display text: cache reads over served input
  * (missed input + cache reads). `—` when nothing was served.

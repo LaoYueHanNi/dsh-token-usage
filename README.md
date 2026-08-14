@@ -9,7 +9,7 @@ dsh 本地插件：按请求粒度持久化模型 token 用量，写入按天分
 - **实时 hook**：每次模型请求成功后（`assistant/message` 会话事件）追加一行，包含请求 id、模型名、四项 token 用量、时间、会话 id。
 - **首次启动自动同步一次**：补齐插件安装前已发生的历史请求（`state.json` 标记判定，之后永不自动重复；崩溃重试由请求 id 去重保证幂等）。
 - **手动再同步命令**：`/token-usage-sync`（Web 命令面板）随时手动补写，以请求 id 去重，与实时数据不重复。
-- **Web 设置统计页**：设置面板（侧栏底部齿轮）新增「Token 用量」页，两行汇总卡片——请求数 / 总 token / 缓存命中率一行，输入 / 输出 / 缓存读 / 缓存写一行——下方是按模型的明细表（一行一个模型：请求数、总 token、命中率与四项 token）；token 数值缩写（低于 1M 用 `K`，1M 起用 `M`，1 亿起用 `B`，`B` = 10 亿、1 亿 = `0.1B`，如 `950K`、`1.5M`、`0.5B`、`3B`），带手动刷新。
+- **Web 设置统计页**：设置面板（侧栏底部齿轮）新增「Token 用量」页，进入即拉取（无刷新按钮）；数据目录下方是过滤条——日期区间 + 模型下拉 + `1d`/`7d`/`30d` 快捷区间（1d 为今天 0 点至 23:59，7d/30d 同理含今天），汇总卡片（请求数 / 总 token / 缓存命中率一行，输入 / 输出 / 缓存读 / 缓存写一行）、按日总 token 折线曲线图、按模型明细表（请求数、总 token、四项 token，命中率在最后一列）全部跟随筛选条件；token 数值缩写（低于 1M 用 `K`，1M 起用 `M`，1 亿起用 `B`，如 `950K`、`1.5M`、`0.5B`、`3B`）。
 
 ## 安装与移除
 
@@ -74,7 +74,9 @@ dsh web --patch <插件目录>/cordis.yml
 
 ## Web 设置统计页
 
-设置面板（侧栏底部齿轮）里有一个「Token 用量」页，数据来自本插件注册的 HTTP 路由 `GET /token-usage/stats`（不占用 `/api` RPC 方法表——那是宿主封闭的传输层，插件数据通道走自己的 webServer 路由）。页面展示总量汇总：请求数、总 token（四项之和）、缓存命中率（缓存读 ÷（输入 + 缓存读），无数据时显示 `—`）一行，输入 / 输出 / 缓存读 / 缓存写四项 token 桶一行；下方是按模型明细表（一行一个模型，列为请求数、总 token、命中率与四项 token）。token 数值缩写（低于 1M 用 `K`，1M 起用 `M`，1 亿起用 `B`，`B` = 10 亿，即 1 亿 = `0.1B`），缓存命中率保留一位小数。路由返回的 JSON 除总量外仍包含按日聚合和最近 20 条请求，供后续页面扩展使用：
+设置面板（侧栏底部齿轮）里有一个「Token 用量」页，数据来自本插件注册的 HTTP 路由 `GET /token-usage/stats`（不占用 `/api` RPC 方法表——那是宿主封闭的传输层，插件数据通道走自己的 webServer 路由）。路由接受三个可选查询参数做服务端过滤：`from`/`to`（本地日期 `YYYY-MM-DD`，闭区间）、`model`（精确模型 id）；空值视为未传，非法日期或 `from > to` 返回 400。过滤基于按日 × 按模型二维聚合行重算，不回读文件。
+
+页面自上而下：过滤条（两个日期输入、模型下拉、`1d`/`7d`/`30d` 快捷按钮，激活的快捷区间高亮，改动任一条件即自动重新拉取）→ 两行汇总卡片（跟随筛选）→ 按日总 token 折线图（纯 SVG，无图表库依赖，区间内缺数据的天补零）→ 按模型明细表（命中率在最后一列，跟随筛选）。token 数值缩写（低于 1M 用 `K`，1M 起用 `M`，1 亿起用 `B`，`B` = 10 亿，即 1 亿 = `0.1B`），缓存命中率保留一位小数。路由返回的 JSON 除总量外包含按日聚合、按模型聚合、按日 × 按模型聚合和最近 20 条请求（后者同样被过滤），供后续页面扩展使用：
 
 ```json
 {
@@ -82,6 +84,7 @@ dsh web --patch <插件目录>/cordis.yml
   "total": { "requests": 12, "inputTokens": 1000, "outputTokens": 500, "cacheReadTokens": 9000, "cacheWriteTokens": 100 },
   "byDay": [{ "day": "2026-01-15", "totals": { "requests": 3, "inputTokens": 200, "outputTokens": 100, "cacheReadTokens": 900, "cacheWriteTokens": 10 } }],
   "byModel": [{ "model": "deepseek-chat", "totals": { "requests": 10, "inputTokens": 800, "outputTokens": 400, "cacheReadTokens": 8000, "cacheWriteTokens": 80 } }],
+  "byDayModel": [{ "day": "2026-01-15", "model": "deepseek-chat", "totals": { "requests": 3, "inputTokens": 200, "outputTokens": 100, "cacheReadTokens": 900, "cacheWriteTokens": 10 } }],
   "recent": [{ "requestId": "…", "time": 1730000000000, "sessionId": "…", "model": "deepseek-chat", "usage": { "inputTokens": 100, "outputTokens": 50, "cacheReadTokens": 900 } }]
 }
 ```
@@ -116,7 +119,7 @@ dsh web --patch <插件目录>/cordis.yml
 
 ### rollup 聚合文件（rollup.json）
 
-数据目录里还有一个 `rollup.json`：所有「已冻结」天文件（文件名日期早于今天）的累计聚合结果，含已吸收到的日期上限 `upto`、总量、按日/按模型行和最近窗口。由于写入永远追加到当天文件，已冻结的天文件不可变，rollup 吸收后永不失效：
+数据目录里还有一个 `rollup.json`：所有「已冻结」天文件（文件名日期早于今天）的累计聚合结果，含已吸收到的日期上限 `upto`、总量、按日/按模型/按日 × 按模型行和最近窗口。由于写入永远追加到当天文件，已冻结的天文件不可变，rollup 吸收后永不失效：
 
 - **惰性推进**：每次统计读取时发现存在未被吸收的冻结天文件（如昨天的文件），先读入聚合、并入 rollup 并原子写回（临时文件 + 改名），`upto` 推进到最新冻结日期；不需要定时任务。
 - **读取成本**：统计页刷新只需读 `rollup.json`（几十 KB 量级）+ 当天 JSONL，不再随历史数据增长变慢。
@@ -164,8 +167,11 @@ src/
   wire.ts           # 浏览器安全的线上词汇：路径常量 + 统计 JSON 类型
   client/
     index.ts              # 浏览器插件入口：注册 settings.section（Token 用量页）
-    TokenUsageSection.tsx # 统计页组件（fetch + 汇总渲染 + 刷新）
+    TokenUsageSection.tsx # 统计页组件（过滤条 + fetch + 汇总卡片 + 模型表）
+    TrendChart.tsx        # 按日总 token 折线图（纯 SVG）
+    day.ts                # 浏览器侧日期工具：本地日期键、快捷区间、补零日序列
     TokenUsageSection.module.css
+    TrendChart.module.css
 cordis.patch.yml    # bundle 层补丁（dsh plugin add 自动启用）
 cordis.yml          # 临时 --patch 覆盖层（file:// URL 形式）
 tsdown.config.ts    # 浏览器 bundle 构建（闭包工厂 + 平台 external + CSS Modules 内联）

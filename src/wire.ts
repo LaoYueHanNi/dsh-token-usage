@@ -40,6 +40,13 @@ export interface UsageModelRow {
   totals: UsageTotals
 }
 
+/** One per-day per-model aggregation row (the day × model cross). */
+export interface UsageDayModelRow {
+  day: string
+  model: string
+  totals: UsageTotals
+}
+
 /** The full stats payload served at {@link STATS_PATH}. */
 export interface UsageSummary {
   /** Absolute data directory the summary was computed from. */
@@ -50,6 +57,9 @@ export interface UsageSummary {
   byDay: UsageDayRow[]
   /** Per-model rows, descending by request count. */
   byModel: UsageModelRow[]
+  /** Per-day × per-model rows, day then model ascending; lets the route
+   * re-aggregate any day range × model filter without rereading files. */
+  byDayModel: UsageDayModelRow[]
   /** The most recent records, descending by time. */
   recent: UsageRecord[]
 }
