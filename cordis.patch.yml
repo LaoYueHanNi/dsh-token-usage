@@ -1,0 +1,7 @@
+# Bundle patch layer of the token-usage plugin. Applied automatically when
+# the package is installed into a profile via `dsh plugin --profile <name> add`
+# (a package declaring `dsh.bundle` joins the profile's bundle stack, so no
+# manual profile editing is needed). The row references the package by name.
+- insert:
+    - id: token-usage
+      name: 'dsh-token-usage'

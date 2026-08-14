@@ -1,0 +1,5 @@
+- insert:
+    - id: token-usage
+      # file:// form is required by the built dsh on Windows: the native ESM
+      # loader rejects bare drive-letter paths ("e:" is not a URL scheme).
+      name: 'file:///E:/Documents/MyCode/oyw-dsh-plugin/dsh-token-usage/lib/index.js'

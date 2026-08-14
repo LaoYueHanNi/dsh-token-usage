@@ -1,0 +1,207 @@
+import { mkdtemp, readFile, readdir } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { Context, Service } from '@deepseek-ai/cordis'
+import type { CommandDefinition, CommandInvocation } from '@deepseek-ai/dsh-commands'
+import * as plugin from '../src/index.ts'
+import { messageEvent } from './helpers.ts'
+
+/** Records registrations instead of dispatching commands. */
+class MockCommands extends Service {
+  readonly registered: CommandDefinition[] = []
+
+  constructor(ctx: Context) {
+    super(ctx, 'commands')
+  }
+
+  register(definition: CommandDefinition): () => void {
+    this.registered.push(definition)
+    return () => {}
+  }
+}
+
+/** Returns persisted sessions from a shared mutable list. */
+function persistenceService(sessions: Array<{ id: string; events: unknown[] }>) {
+  return class extends Service {
+    constructor(ctx: Context) {
+      super(ctx, 'sessionPersistence')
+    }
+
+    async list(): Promise<Array<{ id: string }>> {
+      return sessions.map(session => ({ id: session.id }))
+    }
+
+    async inspect(id: string): Promise<{ events: unknown[] }> {
+      const session = sessions.find(candidate => candidate.id === id)
+      if (session === undefined) throw new Error(`missing session ${id}`)
+      return { events: session.events }
+    }
+  }
+}
+
+class MockSessions extends Service {
+  constructor(ctx: Context) {
+    super(ctx, 'sessions')
+  }
+}
+
+/** Wait until a day file exists and return its raw text. */
+async function pollLogFile(dir: string): Promise<string> {
+  const deadline = Date.now() + 2_000
+  while (Date.now() < deadline) {
+    const names = (await readdir(dir).catch(() => [] as string[]))
+      .filter(name => name.endsWith('.jsonl'))
+    if (names.length > 0) {
+      return readFile(join(dir, names[0]!), 'utf8')
+    }
+    await new Promise(resolve => setTimeout(resolve, 20))
+  }
+  throw new Error('no log file appeared')
+}
+
+/** Wait until the first-run auto sync wrote its initialized marker. */
+async function waitForState(dir: string): Promise<void> {
+  const deadline = Date.now() + 2_000
+  while (Date.now() < deadline) {
+    if ((await readdir(dir).catch(() => [] as string[])).includes('state.json')) return
+    await new Promise(resolve => setTimeout(resolve, 20))
+  }
+  throw new Error('initialized marker never appeared')
+}
+
+function invocation(): CommandInvocation {
+  return {
+    commandId: 'cid-1' as CommandInvocation['commandId'],
+    agent: {} as CommandInvocation['agent'],
+    rawInput: '',
+    signal: new AbortController().signal,
+  }
+}
+
+describe('plugin integration', () => {
+  let ctx: Context | undefined
+  let home: string
+  const sessions: Array<{ id: string; events: unknown[] }> = []
+
+  /** Mount the plugin under a fresh context against the shared session list. */
+  async function mount(): Promise<{ commands: MockCommands; dir: string }> {
+    const next = new Context()
+    await next.plugin(MockCommands)
+    await next.plugin(MockSessions)
+    await next.plugin(persistenceService(sessions))
+    await next.plugin(plugin)
+    ctx = next
+    const registered = next.commands as unknown as MockCommands
+    return { commands: registered, dir: join(home, 'token-usage') }
+  }
+
+  beforeEach(async () => {
+    sessions.length = 0
+    home = await mkdtemp(join(tmpdir(), 'token-usage-it-'))
+    vi.stubEnv('DSH_HOME', home)
+  })
+
+  afterEach(async () => {
+    // Unload the plugin under test; its registrations are effects.
+    if (ctx !== undefined) {
+      ctx.registry.delete(plugin)
+      ctx = undefined
+    }
+    vi.unstubAllEnvs()
+  })
+
+  it('loads the plugin and registers the sync command', async () => {
+    const mounted = await mount()
+    expect(mounted.commands.registered.map(definition => definition.name)).toEqual(['token-usage-sync'])
+  })
+
+  it('writes one live row per assistant/message event', async () => {
+    const mounted = await mount()
+    await waitForState(mounted.dir)
+    ctx!.emit('session/event', { id: 's1' }, messageEvent({ messageId: 'm1' }))
+    const text = await pollLogFile(mounted.dir)
+    const row = JSON.parse(text.trim())
+    expect(row).toMatchObject({
+      requestId: 'm1',
+      sessionId: 's1',
+      model: 'deepseek-chat',
+    })
+    expect(row.usage.inputTokens).toBe(10)
+  })
+
+  it('ignores non-assistant/message events', async () => {
+    const mounted = await mount()
+    await waitForState(mounted.dir)
+    ctx!.emit('session/event', { id: 's1' }, {
+      type: 'turn/start',
+      seq: 0,
+      time: 1,
+      data: { turn: 1 },
+    })
+    await new Promise(resolve => setTimeout(resolve, 50))
+    const names = await readdir(mounted.dir).catch(() => [] as string[])
+    expect(names.filter(name => name.endsWith('.jsonl'))).toHaveLength(0)
+  })
+
+  it('runs the first-run auto sync once and marks initialized', async () => {
+    sessions.push({ id: 'old', events: [messageEvent({ messageId: 'm9', seq: 3 })] })
+    const mounted = await mount()
+    await waitForState(mounted.dir)
+    const text = await pollLogFile(mounted.dir)
+    const row = JSON.parse(text.trim())
+    expect(row).toMatchObject({ requestId: 'm9', sessionId: 'old', model: 'deepseek-chat' })
+  })
+
+  it('does not auto-sync on later startups, but the command still re-syncs', async () => {
+    sessions.push({ id: 'old', events: [messageEvent({ messageId: 'm9', seq: 3 })] })
+    const first = await mount()
+    await waitForState(first.dir)
+    await pollLogFile(first.dir)
+
+    // Unload the first instance, then add history a later startup would miss.
+    ctx!.registry.delete(plugin)
+    ctx = undefined
+    sessions.push({ id: 'newer', events: [messageEvent({ messageId: 'm10', seq: 1 })] })
+
+    const second = await mount()
+    // The marker exists, so no auto sync may run for the newer session.
+    await new Promise(resolve => setTimeout(resolve, 100))
+    const names = await readdir(second.dir).catch(() => [] as string[])
+    const files = names.filter(name => name.endsWith('.jsonl'))
+    expect(files).toHaveLength(1)
+    const text = await readFile(join(second.dir, files[0]!), 'utf8')
+    expect(text.trim().split('\n')).toHaveLength(1)
+
+    // The manual command still covers it.
+    const result = await second.commands.registered[0]!.handler(invocation())
+    expect(result).toEqual({ kind: 'success', text: 'Token usage sync: 1 added, 1 skipped (deduped)' })
+  })
+
+  it('syncs historical rows through the command and dedupes on re-run', async () => {
+    const mounted = await mount()
+    await waitForState(mounted.dir)
+    sessions.push({ id: 'old', events: [messageEvent({ messageId: 'm9', seq: 3 })] })
+    const definition = mounted.commands.registered[0]!
+    const first = await definition.handler(invocation())
+    expect(first).toEqual({ kind: 'success', text: 'Token usage sync: 1 added, 0 skipped (deduped)' })
+
+    const text = await pollLogFile(mounted.dir)
+    const row = JSON.parse(text.trim())
+    expect(row).toMatchObject({ requestId: 'm9', sessionId: 'old', model: 'deepseek-chat' })
+
+    const second = await definition.handler(invocation())
+    expect(second).toEqual({ kind: 'success', text: 'Token usage sync: 0 added, 1 skipped (deduped)' })
+  })
+
+  it('sync skips rows the live hook already wrote', async () => {
+    const mounted = await mount()
+    await waitForState(mounted.dir)
+    ctx!.emit('session/event', { id: 's1' }, messageEvent({ messageId: 'm1' }))
+    await pollLogFile(mounted.dir)
+    sessions.push({ id: 's1', events: [messageEvent({ messageId: 'm1', seq: 5 })] })
+    const definition = mounted.commands.registered[0]!
+    const result = await definition.handler(invocation())
+    expect(result).toEqual({ kind: 'success', text: 'Token usage sync: 0 added, 1 skipped (deduped)' })
+  })
+})

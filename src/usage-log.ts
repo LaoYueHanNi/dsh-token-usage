@@ -1,0 +1,111 @@
+/**
+ * Durable JSONL store of the token-usage plugin: per-local-day files, a
+ * serialized append queue, and the process-wide request-id dedupe set that
+ * both the live hook and the manual sync share.
+ *
+ * @module token-usage/usage-log
+ */
+
+import { appendFile, mkdir, readdir, readFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import { parseRecord, serializeRecord, type UsageRecord } from './usage-record.ts'
+
+const DAY_FILE = /^usage-\d{4}-\d{2}-\d{2}\.jsonl$/u
+
+/** Day-file name for a local-time date, e.g. `usage-2026-01-15.jsonl`. */
+export function dayFileName(date: Date): string {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `usage-${year}-${month}-${day}.jsonl`
+}
+
+function dayFilePath(dir: string, date: Date): string {
+  return join(dir, dayFileName(date))
+}
+
+/**
+ * Append-only per-day JSONL log with request-id dedupe.
+ *
+ * Ordering: every append runs on one promise chain, so concurrent callers
+ * land in call order. Dedupe: a request id is claimed synchronously before
+ * its append is queued; a failed append releases the claim, so the row can
+ * be retried later.
+ */
+export class UsageLog {
+  private readonly seen = new Set<string>()
+  private queue: Promise<void> = Promise.resolve()
+  private ready: Promise<void> | undefined
+
+  /**
+   * @param dir - absolute data directory (created lazily on first write).
+   * @param now - clock source for day-file selection (test seam).
+   */
+  constructor(
+    private readonly dir: string,
+    private readonly now: () => Date = () => new Date(),
+  ) {}
+
+  /** Whether a request id is already known to this log. */
+  has(requestId: string): boolean {
+    return this.seen.has(requestId)
+  }
+
+  /**
+   * Rebuild the dedupe set from every existing day file. Malformed lines are
+   * skipped with a console diagnostic; unreadable files are skipped the same
+   * way, so a corrupt log never blocks the sync.
+   */
+  async scan(): Promise<void> {
+    this.ready ??= mkdir(this.dir, { recursive: true }).then(() => undefined)
+    await this.ready
+    let names: string[]
+    try {
+      names = await readdir(this.dir)
+    } catch (error) {
+      console.error(`[token-usage] cannot list data dir ${this.dir}:`, error)
+      return
+    }
+    for (const name of names) {
+      if (!DAY_FILE.test(name)) continue
+      const text = await readFile(join(this.dir, name), 'utf8').catch((error: unknown) => {
+        console.error(`[token-usage] cannot read ${name}:`, error)
+        return ''
+      })
+      for (const line of text.split('\n')) {
+        if (line === '') continue
+        const record = parseRecord(line)
+        if (record === null) {
+          console.error(`[token-usage] skipping malformed line in ${name}: ${line.slice(0, 120)}`)
+          continue
+        }
+        this.seen.add(record.requestId)
+      }
+    }
+  }
+
+  /**
+   * Persist one record unless its request id was already written.
+   * @returns true when the row was appended, false when deduped.
+   */
+  record(record: UsageRecord): Promise<boolean> {
+    if (this.seen.has(record.requestId)) return Promise.resolve(false)
+    // Claim before queueing: a concurrent call with the same id dedupes here.
+    this.seen.add(record.requestId)
+    const task = this.queue.then(async () => {
+      this.ready ??= mkdir(this.dir, { recursive: true }).then(() => undefined)
+      await this.ready
+      await appendFile(dayFilePath(this.dir, this.now()), `${serializeRecord(record)}\n`, { flag: 'a' })
+    })
+    // A failed append must not poison the chain for later rows.
+    this.queue = task.catch(() => {})
+    return task
+      .then(() => true)
+      .catch((error: unknown) => {
+        // Release the claim so a later sync can retry this row.
+        this.seen.delete(record.requestId)
+        console.error('[token-usage] append failed:', error)
+        return false
+      })
+  }
+}
