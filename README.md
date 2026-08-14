@@ -1,5 +1,7 @@
 # dsh-token-usage
 
+[![awesome · DSH plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
+
 ![Token Usage stats page](token-usage.png)
 
 [简体中文](./README.zh.md) | English
