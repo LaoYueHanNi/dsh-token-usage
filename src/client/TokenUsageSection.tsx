@@ -1,9 +1,10 @@
 /**
  * Token-usage settings page (browser half): fetches the stats summary from
- * the host route and renders totals, per-day and per-model tables, and the
- * recent request list. Data arrives through plain fetch into component-local
- * state — the page owns no store because nothing outside it reads the
- * summary; a manual refresh re-fetches after new requests land.
+ * the host route and renders the total-usage strip — requests / total tokens
+ * / cache hit rate on one row, the four token buckets on the next. Token
+ * counts are abbreviated (K below 1M, M below 亿, B at 亿+); the page owns no
+ * store because nothing outside it reads the summary, and a manual refresh
+ * re-fetches after new requests land.
  *
  * @module token-usage/client/TokenUsageSection
  */
@@ -11,7 +12,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { SettingsSectionOwnerProps } from '@deepseek-ai/dsh-client-ui-settings/client'
-import type { UsageRecord, UsageSummary, UsageTotals } from '../wire.ts'
+import type { UsageSummary, UsageTotals } from '../wire.ts'
 import { STATS_PATH } from '../wire.ts'
 import styles from './TokenUsageSection.module.css'
 
@@ -31,38 +32,53 @@ async function fetchSummary(): Promise<UsageSummary> {
   return value
 }
 
-/** One card in the totals strip. */
-function StatCard({ label, value }: { label: string; value: number }): ReactNode {
+/**
+ * Abbreviate a token count: raw below 1K, `xxK` below 1M, `xxM` below 1 亿
+ * (1e8), `xxB` from 1 亿 up with B = 10 亿 (1e9) — 1 亿 is `0.1B`, 3 亿 is
+ * `0.3B`, 10 亿 is `1B`, 30 亿 is `3B`. One decimal while the scaled value is
+ * below 10, integer otherwise — `950K`, `1.5M`, `50M`, `0.5B`, `3B`.
+ * @param count - a non-negative token count.
+ * @returns the compact display string.
+ */
+export function formatTokens(count: number): string {
+  if (count < 1_000) return String(count)
+  if (count < 1_000_000) return scale(count / 1_000) + 'K'
+  if (count < 100_000_000) return scale(count / 1_000_000) + 'M'
+  return scale(count / 1_000_000_000) + 'B'
+}
+
+/** One decimal below 10, integer otherwise, trailing `.0` stripped. */
+function scale(value: number): string {
+  if (value >= 10) return String(Math.round(value))
+  const oneDecimal = value.toFixed(1)
+  return oneDecimal.endsWith('.0') ? oneDecimal.slice(0, -2) : oneDecimal
+}
+
+/** Total tokens across the four buckets (billed input = input + cacheRead + cacheWrite). */
+export function totalTokens(totals: UsageTotals): number {
+  return totals.inputTokens + totals.outputTokens + totals.cacheReadTokens + totals.cacheWriteTokens
+}
+
+/**
+ * Cache hit rate as display text: cache reads over served input
+ * (missed input + cache reads). `—` when nothing was served.
+ * @param totals - the aggregated totals.
+ * @returns e.g. `87.5%`, or `—` for an empty denominator.
+ */
+export function formatHitRate(totals: UsageTotals): string {
+  const served = totals.inputTokens + totals.cacheReadTokens
+  if (served === 0) return '—'
+  return `${scale(totals.cacheReadTokens / served * 100)}%`
+}
+
+/** One card in a metric row. */
+function StatCard({ label, value }: { label: string; value: string }): ReactNode {
   return (
     <div className={styles['card']}>
       <span className={styles['cardLabel']}>{label}</span>
-      <span className={styles['cardValue']}>{value.toLocaleString()}</span>
+      <span className={styles['cardValue']}>{value}</span>
     </div>
   )
-}
-
-/** One totals row of the per-day/per-model tables. */
-function TotalsRow({ name, totals }: { name: string; totals: UsageTotals }): ReactNode {
-  return (
-    <tr>
-      <td>{name}</td>
-      <td>{totals.requests.toLocaleString()}</td>
-      <td>{totals.inputTokens.toLocaleString()}</td>
-      <td>{totals.outputTokens.toLocaleString()}</td>
-      <td>{totals.cacheReadTokens.toLocaleString()}</td>
-      <td>{totals.cacheWriteTokens.toLocaleString()}</td>
-    </tr>
-  )
-}
-
-/** Human summary of one record's token buckets. */
-function usageText(record: UsageRecord): string {
-  const usage = record.usage
-  if (usage === undefined) return '无用量数据'
-  const parts = [`输入 ${usage.inputTokens.toLocaleString()}`, `输出 ${usage.outputTokens.toLocaleString()}`]
-  if (usage.cacheReadTokens !== undefined) parts.push(`缓存读 ${usage.cacheReadTokens.toLocaleString()}`)
-  if (usage.cacheWriteTokens !== undefined) parts.push(`缓存写 ${usage.cacheWriteTokens.toLocaleString()}`)
-  return parts.join(' · ')
 }
 
 /**
@@ -109,67 +125,29 @@ export function TokenUsageSection(_props: SettingsSectionOwnerProps): ReactNode 
     )
   }
 
-  const { summary } = state
+  const { total } = state.summary
   return (
     <div className={styles['section']}>
       <div className={styles['head']}>
         <h2 className={styles['title']}>Token 用量</h2>
         <button type="button" className={styles['button']} onClick={refresh}>刷新</button>
       </div>
-      <p className={styles['muted']}>数据目录：{summary.dataDir}</p>
-      {summary.total.requests === 0
+      <p className={styles['muted']}>数据目录：{state.summary.dataDir}</p>
+      {total.requests === 0
         ? <p className={styles['empty']}>暂无记录。模型请求成功后会自动写入，历史记录可通过命令面板的 /token-usage-sync 补齐。</p>
         : (
           <>
             <div className={styles['cards']}>
-              <StatCard label="请求数" value={summary.total.requests} />
-              <StatCard label="输入 tokens" value={summary.total.inputTokens} />
-              <StatCard label="输出 tokens" value={summary.total.outputTokens} />
-              <StatCard label="缓存读 tokens" value={summary.total.cacheReadTokens} />
-              <StatCard label="缓存写 tokens" value={summary.total.cacheWriteTokens} />
+              <StatCard label="请求数" value={total.requests.toLocaleString()} />
+              <StatCard label="总 token" value={formatTokens(totalTokens(total))} />
+              <StatCard label="缓存命中率" value={formatHitRate(total)} />
             </div>
-            <h3 className={styles['subtitle']}>按日</h3>
-            <table className={styles['table']}>
-              <thead>
-                <tr>
-                  <th>日期</th>
-                  <th>请求</th>
-                  <th>输入</th>
-                  <th>输出</th>
-                  <th>缓存读</th>
-                  <th>缓存写</th>
-                </tr>
-              </thead>
-              <tbody>
-                {summary.byDay.map(row => <TotalsRow key={row.day} name={row.day} totals={row.totals} />)}
-              </tbody>
-            </table>
-            <h3 className={styles['subtitle']}>按模型</h3>
-            <table className={styles['table']}>
-              <thead>
-                <tr>
-                  <th>模型</th>
-                  <th>请求</th>
-                  <th>输入</th>
-                  <th>输出</th>
-                  <th>缓存读</th>
-                  <th>缓存写</th>
-                </tr>
-              </thead>
-              <tbody>
-                {summary.byModel.map(row => <TotalsRow key={row.model} name={row.model} totals={row.totals} />)}
-              </tbody>
-            </table>
-            <h3 className={styles['subtitle']}>最近请求</h3>
-            <ul className={styles['recent']}>
-              {summary.recent.map(record => (
-                <li key={record.requestId} className={styles['recentRow']}>
-                  <span className={styles['recentTime']}>{new Date(record.time).toLocaleString()}</span>
-                  <span className={styles['recentModel']}>{record.model}</span>
-                  <span className={`${styles['recentUsage']} ${styles['muted']}`}>{usageText(record)}</span>
-                </li>
-              ))}
-            </ul>
+            <div className={styles['cards']}>
+              <StatCard label="输入" value={formatTokens(total.inputTokens)} />
+              <StatCard label="输出" value={formatTokens(total.outputTokens)} />
+              <StatCard label="缓存读" value={formatTokens(total.cacheReadTokens)} />
+              <StatCard label="缓存写" value={formatTokens(total.cacheWriteTokens)} />
+            </div>
           </>
         )}
     </div>
