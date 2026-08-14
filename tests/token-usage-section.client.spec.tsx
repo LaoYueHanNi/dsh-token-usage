@@ -138,16 +138,17 @@ describe('TokenUsageSection', () => {
     expect(screen.queryByText('最近请求')).toBeNull()
   })
 
-  it('shows the empty hint when nothing was recorded', async () => {
+  it('shows the empty hint when nothing matches', async () => {
     stubFetch(async () => ({
       ok: true,
       json: async () => ({
         ...SUMMARY,
         total: { requests: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+        byModel: [],
       }),
     }))
     render(<TokenUsageSection close={() => {}} />)
-    expect(await screen.findByText(/暂无记录/)).toBeTruthy()
+    expect(await screen.findByText(/暂无数据/)).toBeTruthy()
   })
 
   it('shows the failure and retries the fetch', async () => {
@@ -195,12 +196,23 @@ describe('TokenUsageSection filtering', () => {
     }
   })
 
+  it('defaults to the 1d window: inputs and quick button reflect today', async () => {
+    const fetch = stubFetch(async () => ({ ok: true, json: async () => SUMMARY }))
+    render(<TokenUsageSection close={() => {}} />)
+    await screen.findAllByText('总 token')
+    const url = new URL(String(fetch.mock.calls[0]![0]), 'http://localhost')
+    expect(url.searchParams.get('from')).toBe(dayKey(0))
+    expect(url.searchParams.get('to')).toBe(dayKey(0))
+    expect(screen.getByLabelText('开始日期').getAttribute('value')).toBe(dayKey(0))
+    expect(screen.getByLabelText('结束日期').getAttribute('value')).toBe(dayKey(0))
+    expect(screen.getByRole('button', { name: '1d' }).getAttribute('aria-pressed')).toBe('true')
+  })
+
   it('fetches the 7d window (today minus 6 through today) when 7d is clicked', async () => {
     const fetch = stubFetch(async () => ({ ok: true, json: async () => SUMMARY }))
     render(<TokenUsageSection close={() => {}} />)
     await screen.findAllByText('总 token')
     expect(fetch).toHaveBeenCalledTimes(1)
-    expect(String(fetch.mock.calls[0]![0])).toBe('/token-usage/stats')
 
     fireEvent.click(screen.getByRole('button', { name: '7d' }))
     await waitForCall(fetch, 2)
@@ -253,6 +265,12 @@ describe('TokenUsageSection filtering', () => {
   it('renders the daily token chart from the day rows', async () => {
     stubFetch(async () => ({ ok: true, json: async () => SUMMARY }))
     render(<TokenUsageSection close={() => {}} />)
+    await screen.findAllByText('总 token')
+    // The fixture's days are in the past; clear the default 1d window so the
+    // chart spans the fixture rows (the real server filters byDay instead).
+    fireEvent.change(screen.getByLabelText('开始日期'), { target: { value: '' } })
+    await screen.findAllByText('总 token')
+    fireEvent.change(screen.getByLabelText('结束日期'), { target: { value: '' } })
     const chart = await screen.findByRole('img', { name: '每日总 token 曲线' })
     // Day totals are 31 and 16, so the y axis tops out at a round 40 (ticks 10..40).
     for (const tick of ['10', '20', '30', '40']) {

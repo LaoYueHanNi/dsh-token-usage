@@ -144,7 +144,8 @@ function FilterBar({ filters, models, onChange }: {
  */
 export function TokenUsageSection(_props: SettingsSectionOwnerProps): ReactNode {
   const [state, setState] = useState<LoadState>({ status: 'loading' })
-  const [filters, setFilters] = useState<Filters>({ from: '', to: '', model: '' })
+  // Entering the page starts on today's window (the 1d quick range).
+  const [filters, setFilters] = useState<Filters>(() => ({ model: '', ...quickRange(1) }))
   const [models, setModels] = useState<string[]>([])
   const [attempt, setAttempt] = useState(0)
   const retry = useCallback(() => { setAttempt(previous => previous + 1) }, [])
@@ -192,7 +193,6 @@ export function TokenUsageSection(_props: SettingsSectionOwnerProps): ReactNode 
   }
 
   const { total } = state.summary
-  const filtered = filters.from !== '' || filters.to !== '' || filters.model !== ''
   return (
     <div className={styles['section']}>
       <h2 className={styles['title']}>Token 用量</h2>
@@ -200,10 +200,11 @@ export function TokenUsageSection(_props: SettingsSectionOwnerProps): ReactNode 
       <FilterBar filters={filters} models={models} onChange={setFilters} />
       {total.requests === 0
         ? (
+          // One hint covers both an empty log and an empty filtered window:
+          // the page opens on today (1d), so the two are indistinguishable
+          // from the filtered response alone.
           <p className={styles['empty']}>
-            {filtered
-              ? '所选范围内暂无数据。'
-              : '暂无记录。模型请求成功后会自动写入，历史记录可通过命令面板的 /token-usage-sync 补齐。'}
+            暂无数据。可调整筛选条件；模型请求成功后会自动写入，历史记录可通过命令面板的 /token-usage-sync 补齐。
           </p>
         )
         : (
