@@ -1,5 +1,5 @@
 /**
- * Browser half of the token-usage plugin: contributes the Token 用量 page to
+ * Browser half of the token-usage plugin: contributes the Token Usage page to
  * the web settings surface. The page data arrives from the host half's stats
  * route (`/token-usage/stats`); nothing else on the client shares it, so the
  * section owns a plain fetch and no store. Export discipline: the /client
@@ -8,11 +8,11 @@
  * @module token-usage/client
  */
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client';
-/** Required services: the slot registry (declared by the client runtime). */
+/** Required services: the slot registry and the locale dictionary registry. */
 export declare const inject: string[];
 /**
- * Register the settings section once the shell's `settings.section`
- * declaration is on the ledger.
+ * Register the dictionary pair, then the settings section once the shell's
+ * `settings.section` declaration is on the ledger.
  * @param ctx - client root context.
  */
 export declare function apply(ctx: ClientContext): void;

@@ -10,6 +10,7 @@
  */
 
 import type { ReactNode } from 'react'
+import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { UsageDayRow } from '../wire.ts'
 import { daySeries } from './day.ts'
 import { formatTokens } from './format.ts'
@@ -53,17 +54,19 @@ function tickValues(max: number): { top: number; ticks: number[] } {
 /**
  * Render the daily token line chart.
  * @param props - the filtered per-day rows plus the active range bounds
- * (absent when unfiltered; the chart then spans first to last row).
+ * (absent when unfiltered; the chart then spans first to last row), and the
+ * `t` seat for the empty hint and the chart aria-label.
  * @returns the SVG chart, or a placeholder for an empty range.
  */
-export function TrendChart({ rows, from, to }: {
+export function TrendChart({ rows, from, to, t }: {
   rows: readonly UsageDayRow[]
   from?: string
   to?: string
+  t: TranslateNS<'token-usage'>
 }): ReactNode {
   const points = daySeries(rows, from, to)
   if (points.length === 0) {
-    return <p className={styles.empty}>区间内暂无数据</p>
+    return <p className={styles.empty}>{t('chart.empty')}</p>
   }
   const max = Math.max(...points.map(point => point.tokens))
   const { top, ticks } = tickValues(max)
@@ -79,7 +82,7 @@ export function TrendChart({ rows, from, to }: {
   return (
     <svg
       role="img"
-      aria-label="每日总 token 曲线"
+      aria-label={t('chart.aria')}
       viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
       className={styles.chart}
     >

@@ -28,6 +28,6 @@ describe.skipIf(!built)('client bundle', () => {
       (spec) => require(spec),
     ) as { apply?: unknown; inject?: unknown }
     expect(typeof exports.apply).toBe('function')
-    expect(exports.inject).toEqual(['slots'])
+    expect(exports.inject).toEqual(['slots', 'locale'])
   })
 })

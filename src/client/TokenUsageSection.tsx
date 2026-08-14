@@ -12,6 +12,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
+import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SettingsSectionOwnerProps } from '@deepseek-ai/dsh-client-ui-settings/client'
 import type { UsageSummary } from '../wire.ts'
 import { STATS_PATH } from '../wire.ts'
@@ -88,17 +89,18 @@ function StatCard({ label, value }: { label: string; value: string }): ReactNode
 }
 
 /** The filter bar: quick range select, day range, model select — one row. */
-function FilterBar({ filters, models, onChange }: {
+function FilterBar({ filters, models, onChange, t }: {
   filters: Filters
   models: readonly string[]
   onChange: (next: Filters) => void
+  t: TranslateNS<'token-usage'>
 }): ReactNode {
   // 'custom' when the day inputs no longer hold one of the quick ranges.
   const quickValue = QUICK_DAYS.find(days => isQuickActive(days, filters)) ?? 'custom'
   return (
     <div className={styles['filters']}>
       <select
-        aria-label="快捷区间"
+        aria-label={t('filter.quickRange')}
         className={styles['control']}
         value={quickValue}
         onChange={event => {
@@ -109,30 +111,30 @@ function FilterBar({ filters, models, onChange }: {
         <option value="1">1d</option>
         <option value="7">7d</option>
         <option value="30">30d</option>
-        <option value="custom">自定义</option>
+        <option value="custom">{t('filter.custom')}</option>
       </select>
       <input
         type="date"
-        aria-label="开始日期"
+        aria-label={t('filter.from')}
         className={styles['dateControl']}
         value={filters.from}
         onChange={event => onChange({ ...filters, from: event.target.value })}
       />
-      <span className={styles['rangeSeparator']}>至</span>
+      <span className={styles['rangeSeparator']}>{t('filter.separator')}</span>
       <input
         type="date"
-        aria-label="结束日期"
+        aria-label={t('filter.to')}
         className={styles['dateControl']}
         value={filters.to}
         onChange={event => onChange({ ...filters, to: event.target.value })}
       />
       <select
-        aria-label="模型"
+        aria-label={t('filter.model')}
         className={styles['modelControl']}
         value={filters.model}
         onChange={event => onChange({ ...filters, model: event.target.value })}
       >
-        <option value="">全部模型</option>
+        <option value="">{t('filter.allModels')}</option>
         {models.map(model => <option key={model} value={model}>{model}</option>)}
       </select>
     </div>
@@ -140,12 +142,13 @@ function FilterBar({ filters, models, onChange }: {
 }
 
 /**
- * Render the Token 用量 section content column.
+ * Render the Token Usage section content column. The `t` seat arrives from
+ * the registration's `locale:` declaration and follows the active locale.
  * @param props - the settings shell's owner share (close is unused: the nav
- * rail owns leaving the panel).
+ * rail owns leaving the panel) plus the framework-injected translate seat.
  * @returns the section, one of loading / error / ready.
  */
-export function TokenUsageSection(_props: SettingsSectionOwnerProps): ReactNode {
+export function TokenUsageSection({ t }: SettingsSectionOwnerProps & { t: TranslateNS<'token-usage'> }): ReactNode {
   const [state, setState] = useState<LoadState>({ status: 'loading' })
   // Entering the page starts on today's window (the 1d quick range).
   const [filters, setFilters] = useState<Filters>(() => ({ model: '', ...quickRange(1) }))
@@ -178,8 +181,8 @@ export function TokenUsageSection(_props: SettingsSectionOwnerProps): ReactNode 
   if (state.status === 'loading') {
     return (
       <div className={styles['section']}>
-        <h2 className={styles['title']}>Token 用量</h2>
-        <p className={styles['muted']}>加载中…</p>
+        <h2 className={styles['title']}>{t('nav.label')}</h2>
+        <p className={styles['muted']}>{t('loading')}</p>
       </div>
     )
   }
@@ -187,10 +190,10 @@ export function TokenUsageSection(_props: SettingsSectionOwnerProps): ReactNode 
     return (
       <div className={styles['section']}>
         <div className={styles['head']}>
-          <h2 className={styles['title']}>Token 用量</h2>
-          <button type="button" className={styles['button']} onClick={retry}>重试</button>
+          <h2 className={styles['title']}>{t('nav.label')}</h2>
+          <button type="button" className={styles['button']} onClick={retry}>{t('retry')}</button>
         </div>
-        <p className={styles['error']}>统计加载失败：{state.message}</p>
+        <p className={styles['error']}>{t('loadFailed', { message: state.message })}</p>
       </div>
     )
   }
@@ -198,51 +201,52 @@ export function TokenUsageSection(_props: SettingsSectionOwnerProps): ReactNode 
   const { total } = state.summary
   return (
     <div className={styles['section']}>
-      <h2 className={styles['title']}>Token 用量</h2>
-      <p className={styles['muted']}>数据目录：{state.summary.dataDir}</p>
-      <FilterBar filters={filters} models={models} onChange={setFilters} />
+      <h2 className={styles['title']}>{t('nav.label')}</h2>
+      <p className={styles['muted']}>{t('dataDir', { path: state.summary.dataDir })}</p>
+      <FilterBar filters={filters} models={models} onChange={setFilters} t={t} />
       {total.requests === 0
         ? (
           // One hint covers both an empty log and an empty filtered window:
           // the page opens on today (1d), so the two are indistinguishable
           // from the filtered response alone.
           <p className={styles['empty']}>
-            暂无数据。可调整筛选条件；模型请求成功后会自动写入，历史记录可通过命令面板的 /token-usage-sync 补齐。
+            {t('empty')}
           </p>
         )
         : (
           <>
             <div className={styles['cards']}>
-              <StatCard label="请求数" value={total.requests.toLocaleString()} />
-              <StatCard label="总 token" value={formatTokens(totalTokens(total))} />
-              <StatCard label="缓存命中率" value={formatHitRate(total)} />
+              <StatCard label={t('stat.requests')} value={total.requests.toLocaleString()} />
+              <StatCard label={t('stat.totalTokens')} value={formatTokens(totalTokens(total))} />
+              <StatCard label={t('stat.hitRate')} value={formatHitRate(total)} />
             </div>
             <div className={styles['cards']}>
-              <StatCard label="输入" value={formatTokens(total.inputTokens)} />
-              <StatCard label="输出" value={formatTokens(total.outputTokens)} />
-              <StatCard label="缓存读" value={formatTokens(total.cacheReadTokens)} />
-              <StatCard label="缓存写" value={formatTokens(total.cacheWriteTokens)} />
+              <StatCard label={t('stat.input')} value={formatTokens(total.inputTokens)} />
+              <StatCard label={t('stat.output')} value={formatTokens(total.outputTokens)} />
+              <StatCard label={t('stat.cacheRead')} value={formatTokens(total.cacheReadTokens)} />
+              <StatCard label={t('stat.cacheWrite')} value={formatTokens(total.cacheWriteTokens)} />
             </div>
             <TrendChart
               rows={state.summary.byDay}
+              t={t}
               {...filters.from !== '' ? { from: filters.from } : {}}
               {...filters.to !== '' ? { to: filters.to } : {}}
             />
             {state.summary.byModel.length > 0
               ? (
                 <>
-                  <h3 className={styles['subtitle']}>按模型</h3>
+                  <h3 className={styles['subtitle']}>{t('byModel.title')}</h3>
                   <table className={styles['table']}>
                     <thead>
                       <tr>
-                        <th>模型</th>
-                        <th>请求数</th>
-                        <th>总 token</th>
-                        <th>输入</th>
-                        <th>输出</th>
-                        <th>缓存读</th>
-                        <th>缓存写</th>
-                        <th>命中率</th>
+                        <th>{t('filter.model')}</th>
+                        <th>{t('stat.requests')}</th>
+                        <th>{t('stat.totalTokens')}</th>
+                        <th>{t('stat.input')}</th>
+                        <th>{t('stat.output')}</th>
+                        <th>{t('stat.cacheRead')}</th>
+                        <th>{t('stat.cacheWrite')}</th>
+                        <th>{t('stat.hitRate')}</th>
                       </tr>
                     </thead>
                     <tbody>

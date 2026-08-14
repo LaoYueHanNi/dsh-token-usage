@@ -7,8 +7,26 @@
  */
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import { formatHitRate, formatTokens, TokenUsageSection, totalTokens } from '../src/client/TokenUsageSection.tsx'
+import { zh } from '../src/client/locales.ts'
 import type { UsageSummary } from '../src/wire.ts'
+
+/** Common-namespace zh values the tests assert against (shell-owned copy). */
+const COMMON_ZH: Record<string, string> = {
+  loading: '加载中…',
+  retry: '重试',
+  'load.failed': '加载失败',
+}
+
+/**
+ * zh-bound translate stub: renders the same copy the tests were written on,
+ * with `{name}` template substitution like the real lookup chain.
+ */
+const t = ((key: string, params?: Record<string, unknown>): string => {
+  const text = (zh as Record<string, string>)[key] ?? COMMON_ZH[key] ?? key
+  return text.replace(/\{(\w+)\}/g, (_, name: string) => String(params?.[name] ?? ''))
+}) as TranslateNS<'token-usage'>
 
 /** A fully populated summary fixture. */
 const SUMMARY: UsageSummary = {
@@ -105,7 +123,7 @@ describe('totalTokens / formatHitRate', () => {
 describe('TokenUsageSection', () => {
   it('shows loading then the two metric rows and the per-model table', async () => {
     stubFetch(async () => ({ ok: true, json: async () => SUMMARY }))
-    render(<TokenUsageSection close={() => {}} />)
+    render(<TokenUsageSection close={() => {}} t={t} />)
     expect(screen.getByText('加载中…')).toBeTruthy()
     // '总 token' appears twice: the card label and the table column header.
     expect(await screen.findAllByText('总 token')).toHaveLength(2)
@@ -147,7 +165,7 @@ describe('TokenUsageSection', () => {
         byModel: [],
       }),
     }))
-    render(<TokenUsageSection close={() => {}} />)
+    render(<TokenUsageSection close={() => {}} t={t} />)
     expect(await screen.findByText(/暂无数据/)).toBeTruthy()
   })
 
@@ -155,7 +173,7 @@ describe('TokenUsageSection', () => {
     const fetch = stubFetch(async () => {
       throw new Error('network down')
     })
-    render(<TokenUsageSection close={() => {}} />)
+    render(<TokenUsageSection close={() => {}} t={t} />)
     expect(await screen.findByText(/统计加载失败：network down/)).toBeTruthy()
 
     fetch.mockResolvedValueOnce({ ok: true, json: async () => SUMMARY })
@@ -177,14 +195,14 @@ describe('TokenUsageSection filtering', () => {
 
   it('renders no refresh button once ready', async () => {
     stubFetch(async () => ({ ok: true, json: async () => SUMMARY }))
-    render(<TokenUsageSection close={() => {}} />)
+    render(<TokenUsageSection close={() => {}} t={t} />)
     await screen.findAllByText('总 token')
     expect(screen.queryByText('刷新')).toBeNull()
   })
 
   it('renders the filter bar: quick range select, two date inputs, model select', async () => {
     stubFetch(async () => ({ ok: true, json: async () => SUMMARY }))
-    render(<TokenUsageSection close={() => {}} />)
+    render(<TokenUsageSection close={() => {}} t={t} />)
     await screen.findAllByText('总 token')
     const quick = screen.getByLabelText('快捷区间') as HTMLSelectElement
     expect(quick.value).toBe('1')
@@ -200,7 +218,7 @@ describe('TokenUsageSection filtering', () => {
 
   it('defaults to the 1d window: inputs and quick select reflect today', async () => {
     const fetch = stubFetch(async () => ({ ok: true, json: async () => SUMMARY }))
-    render(<TokenUsageSection close={() => {}} />)
+    render(<TokenUsageSection close={() => {}} t={t} />)
     await screen.findAllByText('总 token')
     const url = new URL(String(fetch.mock.calls[0]![0]), 'http://localhost')
     expect(url.searchParams.get('from')).toBe(dayKey(0))
@@ -212,7 +230,7 @@ describe('TokenUsageSection filtering', () => {
 
   it('fetches the 7d window (today minus 6 through today) when 7d is chosen', async () => {
     const fetch = stubFetch(async () => ({ ok: true, json: async () => SUMMARY }))
-    render(<TokenUsageSection close={() => {}} />)
+    render(<TokenUsageSection close={() => {}} t={t} />)
     await screen.findAllByText('总 token')
     expect(fetch).toHaveBeenCalledTimes(1)
 
@@ -228,7 +246,7 @@ describe('TokenUsageSection filtering', () => {
 
   it('fetches with the model parameter when a model is chosen', async () => {
     const fetch = stubFetch(async () => ({ ok: true, json: async () => SUMMARY }))
-    render(<TokenUsageSection close={() => {}} />)
+    render(<TokenUsageSection close={() => {}} t={t} />)
     await screen.findAllByText('总 token')
     fireEvent.change(screen.getByLabelText('模型'), { target: { value: 'deepseek-reasoner' } })
     await waitForCall(fetch, 2)
@@ -238,7 +256,7 @@ describe('TokenUsageSection filtering', () => {
 
   it('marks the quick range custom once the day inputs diverge', async () => {
     stubFetch(async () => ({ ok: true, json: async () => SUMMARY }))
-    render(<TokenUsageSection close={() => {}} />)
+    render(<TokenUsageSection close={() => {}} t={t} />)
     await screen.findAllByText('总 token')
     fireEvent.change(screen.getByLabelText('开始日期'), { target: { value: dayKey(-3) } })
     await screen.findAllByText('总 token')
@@ -247,7 +265,7 @@ describe('TokenUsageSection filtering', () => {
 
   it('skips fetching while the range is mid-edit (from after to)', async () => {
     const fetch = stubFetch(async () => ({ ok: true, json: async () => SUMMARY }))
-    render(<TokenUsageSection close={() => {}} />)
+    render(<TokenUsageSection close={() => {}} t={t} />)
     await screen.findAllByText('总 token')
     // Start from the 7d quick window, then move the start past its end.
     fireEvent.change(screen.getByLabelText('快捷区间'), { target: { value: '7' } })
@@ -266,16 +284,16 @@ describe('TokenUsageSection filtering', () => {
 
   it('orders the per-model columns with the hit rate last', async () => {
     stubFetch(async () => ({ ok: true, json: async () => SUMMARY }))
-    render(<TokenUsageSection close={() => {}} />)
+    render(<TokenUsageSection close={() => {}} t={t} />)
     await screen.findAllByText('总 token')
     const headers = within(screen.getByRole('table')).getAllByRole('columnheader')
     expect(headers.map(cell => cell.textContent)).toEqual(
-      ['模型', '请求数', '总 token', '输入', '输出', '缓存读', '缓存写', '命中率'])
+      ['模型', '请求数', '总 token', '输入', '输出', '缓存读', '缓存写', '缓存命中率'])
   })
 
   it('renders the daily token chart from the day rows', async () => {
     stubFetch(async () => ({ ok: true, json: async () => SUMMARY }))
-    render(<TokenUsageSection close={() => {}} />)
+    render(<TokenUsageSection close={() => {}} t={t} />)
     await screen.findAllByText('总 token')
     // The fixture's days are in the past; clear the default 1d window so the
     // chart spans the fixture rows (the real server filters byDay instead).
