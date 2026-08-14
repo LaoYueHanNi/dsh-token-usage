@@ -1,6 +1,6 @@
 {
   "name": "dsh-token-usage",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "private": true,
   "type": "module",
   "description": "dsh local plugin: persist per-request model token usage (live hook + manual history sync command + web settings stats page)",

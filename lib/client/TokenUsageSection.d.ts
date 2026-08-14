@@ -1,10 +1,11 @@
 /**
  * Token-usage settings page (browser half): fetches the stats summary from
  * the host route and renders the total-usage strip — requests / total tokens
- * / cache hit rate on one row, the four token buckets on the next. Token
- * counts are abbreviated (K below 1M, M below 亿, B at 亿+); the page owns no
- * store because nothing outside it reads the summary, and a manual refresh
- * re-fetches after new requests land.
+ * / cache hit rate on one row, the four token buckets on the next — followed
+ * by a per-model detail table (one row per model). Token counts are
+ * abbreviated (K below 1M, M below 1 亿, B from 1 亿 with B = 10 亿); the page
+ * owns no store because nothing outside it reads the summary, and a manual
+ * refresh re-fetches after new requests land.
  *
  * @module token-usage/client/TokenUsageSection
  */

@@ -1,10 +1,11 @@
 /**
  * Token-usage settings page (browser half): fetches the stats summary from
  * the host route and renders the total-usage strip — requests / total tokens
- * / cache hit rate on one row, the four token buckets on the next. Token
- * counts are abbreviated (K below 1M, M below 亿, B at 亿+); the page owns no
- * store because nothing outside it reads the summary, and a manual refresh
- * re-fetches after new requests land.
+ * / cache hit rate on one row, the four token buckets on the next — followed
+ * by a per-model detail table (one row per model). Token counts are
+ * abbreviated (K below 1M, M below 1 亿, B from 1 亿 with B = 10 亿); the page
+ * owns no store because nothing outside it reads the summary, and a manual
+ * refresh re-fetches after new requests land.
  *
  * @module token-usage/client/TokenUsageSection
  */
@@ -54,6 +55,12 @@ function scale(value: number): string {
   return oneDecimal.endsWith('.0') ? oneDecimal.slice(0, -2) : oneDecimal
 }
 
+/** Always one decimal (stripped when `.0`), unlike {@link scale}: percentages keep their precision. */
+function percent(value: number): string {
+  const oneDecimal = value.toFixed(1)
+  return oneDecimal.endsWith('.0') ? oneDecimal.slice(0, -2) : oneDecimal
+}
+
 /** Total tokens across the four buckets (billed input = input + cacheRead + cacheWrite). */
 export function totalTokens(totals: UsageTotals): number {
   return totals.inputTokens + totals.outputTokens + totals.cacheReadTokens + totals.cacheWriteTokens
@@ -68,7 +75,7 @@ export function totalTokens(totals: UsageTotals): number {
 export function formatHitRate(totals: UsageTotals): string {
   const served = totals.inputTokens + totals.cacheReadTokens
   if (served === 0) return '—'
-  return `${scale(totals.cacheReadTokens / served * 100)}%`
+  return `${percent(totals.cacheReadTokens / served * 100)}%`
 }
 
 /** One card in a metric row. */
@@ -148,6 +155,41 @@ export function TokenUsageSection(_props: SettingsSectionOwnerProps): ReactNode 
               <StatCard label="缓存读" value={formatTokens(total.cacheReadTokens)} />
               <StatCard label="缓存写" value={formatTokens(total.cacheWriteTokens)} />
             </div>
+            {state.summary.byModel.length > 0
+              ? (
+                <>
+                  <h3 className={styles['subtitle']}>按模型</h3>
+                  <table className={styles['table']}>
+                    <thead>
+                      <tr>
+                        <th>模型</th>
+                        <th>请求数</th>
+                        <th>总 token</th>
+                        <th>命中率</th>
+                        <th>输入</th>
+                        <th>输出</th>
+                        <th>缓存读</th>
+                        <th>缓存写</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {state.summary.byModel.map(row => (
+                        <tr key={row.model}>
+                          <td>{row.model}</td>
+                          <td>{row.totals.requests.toLocaleString()}</td>
+                          <td>{formatTokens(totalTokens(row.totals))}</td>
+                          <td>{formatHitRate(row.totals)}</td>
+                          <td>{formatTokens(row.totals.inputTokens)}</td>
+                          <td>{formatTokens(row.totals.outputTokens)}</td>
+                          <td>{formatTokens(row.totals.cacheReadTokens)}</td>
+                          <td>{formatTokens(row.totals.cacheWriteTokens)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </>
+              )
+              : null}
           </>
         )}
     </div>
