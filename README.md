@@ -86,7 +86,7 @@ dsh web --patch <插件目录>/cordis.yml
 }
 ```
 
-- 路由带 `no-store` 缓存头，页面每次刷新/打开都重新读取当天 JSONL，无需轮询。
+- 路由带 `no-store` 缓存头，页面每次刷新/打开都重新计算（rollup 聚合文件 + 当天 JSONL），无需轮询。
 - 非 GET 请求返回 405；浏览器跨站请求（`Sec-Fetch-Site: cross-site`）返回 403，防止陌生网页读取本机用量统计。
 - 统计页是浏览器端插件（`dsh.client` 声明 + `lib/client.js` bundle）：web profile 的 client-modules 扫描到本包后自动挂载并注入设置导航，无需改动宿主配置。
 
@@ -113,6 +113,15 @@ dsh web --patch <插件目录>/cordis.yml
 - provider 完全未报告用量时整个 `usage` 省略（请求仍记录一行）。
 - `inputTokens` 为未缓存输入；计费输入 = `inputTokens + cacheReadTokens + cacheWriteTokens`。
 - 扫描去重时兼容旧字段集的行（多余字段忽略、null 桶归一化为省略），旧行只会被吸收去重，不会被重写。
+
+### rollup 聚合文件（rollup.json）
+
+数据目录里还有一个 `rollup.json`：所有「已冻结」天文件（文件名日期早于今天）的累计聚合结果，含已吸收到的日期上限 `upto`、总量、按日/按模型行和最近窗口。由于写入永远追加到当天文件，已冻结的天文件不可变，rollup 吸收后永不失效：
+
+- **惰性推进**：每次统计读取时发现存在未被吸收的冻结天文件（如昨天的文件），先读入聚合、并入 rollup 并原子写回（临时文件 + 改名），`upto` 推进到最新冻结日期；不需要定时任务。
+- **读取成本**：统计页刷新只需读 `rollup.json`（几十 KB 量级）+ 当天 JSONL，不再随历史数据增长变慢。
+- **损坏自愈**：`rollup.json` 缺失或损坏时按不存在处理，从天文件全量重建后写回，退化成本等于一次全量读取。
+- 手动 `/token-usage-sync` 补写的历史请求同样写入**当天**文件，冻结文件不受影响，rollup 无需失效。
 
 ## 同步机制
 
@@ -147,6 +156,7 @@ src/
   index.ts          # 插件入口：实时 hook + 首次自动同步 + 命令注册 + 统计路由挂载 + Config
   usage-record.ts   # 行类型、事件→记录投影、序列化/解析（纯函数）
   usage-log.ts      # 按天 JSONL 写入队列、请求 id 去重集合、扫描重建
+  rollup.ts         # rollup.json 读写：冻结天文件的磁盘聚合（原子写入，损坏安全降级）
   sync.ts           # 同步算法 + 首次自动同步编排
   sync-state.ts     # state.json 初始化标记（原子写入）
   stats.ts          # 统计聚合 + 数据文件读取（host 半边）
@@ -168,4 +178,4 @@ tsdown.config.ts    # 浏览器 bundle 构建（闭包工厂 + 平台 external +
 - 崩溃只可能丢「内存状态」：已落盘的行在下次同步扫描时被吸收，不会重复。
 - 多实例同时写同一数据目录不受支持。
 - 统计路由依赖 `webServer` 服务（web profile 提供）；无 webserver 的 profile 中插件照常记录数据，只是没有统计页。
-- 统计页每次打开重新读取全部 JSONL 聚合；数据量极大时页面刷新会随文件增长变慢（同步命令本来就有同样的全量扫描成本）。
+- 统计页每次打开读取 rollup 聚合 + 当天 JSONL 重新计算；rollup 推进时才会触碰历史天文件（通常只有昨天的）。

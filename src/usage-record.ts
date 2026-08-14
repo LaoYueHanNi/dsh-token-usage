@@ -98,19 +98,12 @@ function isRecord(value: unknown): value is UsageRecord {
 }
 
 /**
- * Parse one JSONL line back into a record. Extra fields are ignored and null
- * buckets are normalized to omission, so rows written by older field sets
- * still dedupe (their request id is absorbed) without being rewritten.
- * @returns the record, or null when the line is not a valid row.
+ * Coerce an unknown value into a record, normalizing extra fields and null
+ * buckets to omission, so rows written by older field sets still dedupe
+ * (their request id is absorbed) without being rewritten.
+ * @returns the record, or null when the value is not a valid row.
  */
-export function parseRecord(line: string): UsageRecord | null {
-  let value: unknown
-  try {
-    value = JSON.parse(line)
-  } catch {
-    // JSON.parse throws SyntaxError on malformed lines; the caller skips the line.
-    return null
-  }
+export function coerceRecord(value: unknown): UsageRecord | null {
   if (!isRecord(value)) return null
   // The guard already validated the structure; this cast only enables field access.
   const record = value as unknown as Record<string, unknown>
@@ -137,4 +130,20 @@ export function parseRecord(line: string): UsageRecord | null {
       ...(cacheWrite !== undefined ? { cacheWriteTokens: cacheWrite } : {}),
     },
   }
+}
+
+/**
+ * Parse one JSONL line back into a record. Extra fields are ignored and null
+ * buckets are normalized to omission (see {@link coerceRecord}).
+ * @returns the record, or null when the line is not a valid row.
+ */
+export function parseRecord(line: string): UsageRecord | null {
+  let value: unknown
+  try {
+    value = JSON.parse(line)
+  } catch {
+    // JSON.parse throws SyntaxError on malformed lines; the caller skips the line.
+    return null
+  }
+  return coerceRecord(value)
 }

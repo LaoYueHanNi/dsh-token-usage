@@ -44,9 +44,15 @@ export declare function recordFromEvent(event: SessionEvent<'assistant/message'>
 /** One JSONL line without the trailing newline. */
 export declare function serializeRecord(record: UsageRecord): string;
 /**
+ * Coerce an unknown value into a record, normalizing extra fields and null
+ * buckets to omission, so rows written by older field sets still dedupe
+ * (their request id is absorbed) without being rewritten.
+ * @returns the record, or null when the value is not a valid row.
+ */
+export declare function coerceRecord(value: unknown): UsageRecord | null;
+/**
  * Parse one JSONL line back into a record. Extra fields are ignored and null
- * buckets are normalized to omission, so rows written by older field sets
- * still dedupe (their request id is absorbed) without being rewritten.
+ * buckets are normalized to omission (see {@link coerceRecord}).
  * @returns the record, or null when the line is not a valid row.
  */
 export declare function parseRecord(line: string): UsageRecord | null;
