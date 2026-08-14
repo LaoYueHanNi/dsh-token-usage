@@ -2,11 +2,11 @@
 
 [![awesome · DSH plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
 
-![Token 用量统计页](token-usage.png)
+![Token 用量统计页](token-usage_zh.png)
 
 简体中文 | [English](./README.md)
 
-一个 [dsh] 用量插件：在 Web 界面直接展示模型 token 用量。安装后打开**设置**（侧栏底部齿轮），即可看到「Token 用量」页 —— 汇总卡片、按日总 token 折线图、按模型明细表，支持按日期区间和模型筛选，效果见上图。
+一个 [dsh] 用量插件：在 Web 界面直接展示模型 token 用量。安装后打开**设置**（侧栏底部齿轮），即可看到「Token 用量」页 —— 汇总卡片（含费用）、按日总 token 折线图、按模型明细表与定价弹窗，支持按日期区间和模型筛选，效果见上图。
 
 [dsh]: https://github.com/cordiverse/dsh
 
@@ -20,6 +20,8 @@
 - **历史补齐**：首次启动自动同步安装前已发生的请求；`/token-usage-sync` 命令可随时手动补写（幂等）。
 
 ## 模型定价
+
+![模型定价弹窗](model-price_zh.png)
 
 **逐条请求精确计费**：每条记录按自身时间戳走 cc-switch-analyzer 同款规则链——时间区间规则（`timeRules`）优先，命中后用规则内上下文档位（`contextTiers`）与峰谷价（`dailySlots`）；未命中走模型根的档位 → 峰谷 → 基础价。档位匹配以上下文 token 量近似（本请求 input + cacheRead + cacheWrite）。定价表更新价格后，全部历史按新价即时重算，无需重建数据。定价来自两个文件，读取时合并，`pricing.json` 的条目永远优先（整模型覆盖，含禁用其云端规则）：
 

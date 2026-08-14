@@ -6,7 +6,7 @@
 
 [简体中文](./README.zh.md) | English
 
-A dsh usage plugin that displays model token usage right in the Web UI. After installation, open **Settings** (the gear icon in the sidebar) and you'll find the **Token Usage** page — summary cards, a daily total-token line chart and a per-model breakdown, all filterable by date range and model, exactly as shown in the screenshot above.
+A dsh usage plugin that displays model token usage right in the Web UI. After installation, open **Settings** (the gear icon in the sidebar) and you'll find the **Token Usage** page — summary cards (with cost), a daily total-token line chart, a per-model breakdown, and per-model pricing dialogs, all filterable by date range and model, exactly as shown in the screenshot above.
 
 [dsh]: https://github.com/cordiverse/dsh
 
@@ -20,6 +20,8 @@ Repo: <https://github.com/LaoYueHanNi/dsh-token-usage>
 - **History backfill**: the first startup syncs requests that happened before installation; the `/token-usage-sync` command re-runs the same idempotent backfill anytime.
 
 ## Model pricing
+
+![Model pricing dialog](model-price.png)
 
 **Every record is priced individually**: each one resolves through the analyzer's rule chain at its own timestamp — the covering time rule first (its context tiers, its peak slots), else the model root's tiers → peak slots → base rates. Tier matching approximates the context size by the request's input-side tokens (input + cacheRead + cacheWrite). A price update re-prices the whole history instantly, with no data rebuild. Rates come from two files merged on read — `pricing.json` entries always win (a manual entry replaces that model's cloud rules wholesale):
 
