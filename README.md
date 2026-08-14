@@ -15,25 +15,48 @@ Repo: <https://github.com/LaoYueHanNi/dsh-token-usage>
 ## Features
 
 - **Live hook**: every successful model request is appended to per-day JSONL files (request id, model, input / output / cache-read / cache-write tokens, time, session id).
-- **Web stats page**: filters (date range + model + `1d`/`7d`/`30d` shortcuts), summary cards, daily trend chart, per-model table.
-- **Cost figures & model pricing**: per-request cost is computed live from per-model rates (¥ per million tokens) — a highlighted total-cost card, a cost column plus the per-model rates under each model name in the per-model table, and a warning strip for unpriced models (their cost counts as ¥0). The rate table is maintained by you in `pricing.json` inside the data directory; `/token-usage-pricing` prints the active table anytime.
+- **Web stats page**: filters (date range + model + `1d`/`7d`/`30d` shortcuts), summary cards, daily trend chart (hover a day for its total), per-model table.
+- **Cost figures & model pricing**: per-request cost is computed live from per-model rates (¥ per million tokens) — a highlighted total-cost card, a cost column in the per-model table, and a warning strip for unpriced models (their cost counts as ¥0). Every priced model's name carries a small **rates button** that opens a dialog with that model's full price table: **each row is one billing condition** (default rates, context tiers like `≥ 512K`, peak windows like `09:00-12:00`, grouped under time rules' date windows), with the in/out/cache/write rates as aligned columns — mirroring exactly what the per-record resolver bills. Rates merge from two files: `/token-usage-pricing-sync` mirrors the cloud model-price-table feed (the same source cc-switch-analyzer pulls), `pricing.json` holds manual overrides, and `/token-usage-pricing` prints the merged table.
 - **History backfill**: the first startup syncs requests that happened before installation; the `/token-usage-sync` command re-runs the same idempotent backfill anytime.
 
 ## Model pricing
 
-Cost = each token bucket × its rate ÷ 1,000,000. Rates live in `pricing.json` in the data directory (no pricing configured means every model is unpriced):
+**Every record is priced individually**: each one resolves through the analyzer's rule chain at its own timestamp — the covering time rule first (its context tiers, its peak slots), else the model root's tiers → peak slots → base rates. Tier matching approximates the context size by the request's input-side tokens (input + cacheRead + cacheWrite). A price update re-prices the whole history instantly, with no data rebuild. Rates come from two files merged on read — `pricing.json` entries always win (a manual entry replaces that model's cloud rules wholesale):
+
+| File | Source | Notes |
+|---|---|---|
+| `pricing.ccsa.json` | startup auto-fetch + the `/token-usage-pricing-sync` command | Verbatim mirror of the cloud model-price-table feed (the analyzer's source); refreshed on every dsh restart, falling back to the previous mirror on failure |
+| `pricing.json` | hand-edited | Overrides synced rates or adds missing models; manual tweaks survive re-syncs |
+
+```sh
+# Inspect / manually refresh the merged, active table (startup also auto-fetches the cloud mirror once)
+/token-usage-pricing-sync
+/token-usage-pricing
+```
+
+Cloud feed shape (`currency` must be `RMB`; both `modelId` and every alias become matchable keys; `timeRules` / `contextTiers` / `dailySlots` all take part in billing):
 
 ```json
 {
-  "deepseek-chat": { "inputPerMillion": 2, "outputPerMillion": 8, "cacheReadPerMillion": 0.5 },
-  "deepseek-reasoner": { "inputPerMillion": 4, "outputPerMillion": 16, "cacheReadPerMillion": 1 }
+  "version": 4,
+  "updatedAt": 0,
+  "currency": "RMB",
+  "models": [
+    { "modelId": "deepseek-chat", "inputCostPerMillion": 2, "outputCostPerMillion": 8,
+      "cacheReadCostPerMillion": 0.5, "cacheCreationCostPerMillion": 1, "aliases": ["deepseek-v3"] }
+  ]
 }
 ```
 
-- Keys are model ids (must match the recorded `model` exactly); values are ¥ per million tokens.
-- `inputPerMillion` and `outputPerMillion` are required; `cacheReadPerMillion` (cache hit) and `cacheWritePerMillion` (cache write) are optional and fall back to the input rate when absent.
-- A broken file or invalid entries leave the affected models unpriced without breaking the stats page; save and refresh (or re-run the command) to apply changes.
-- Default location: `~/.dsh/token-usage/pricing.json` (wherever `path` points when configured).
+Flat `pricing.json` shape (keys are model ids matching the recorded `model` exactly; `inputPerMillion` and `outputPerMillion` required, `cacheReadPerMillion` / `cacheWritePerMillion` optional and falling back to the input rate):
+
+```json
+{
+  "deepseek-chat": { "inputPerMillion": 2, "outputPerMillion": 8, "cacheReadPerMillion": 0.5 }
+}
+```
+
+A broken file or invalid entries leave the affected models unpriced without breaking the stats page; save and refresh (or re-run the command) to apply changes. Default location: `~/.dsh/token-usage/` (wherever `path` points when configured).
 
 ## Install
 

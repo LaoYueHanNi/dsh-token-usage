@@ -2,10 +2,12 @@
  * Token-usage settings page (browser half): fetches the stats summary from
  * the host route and renders the filter bar (inclusive day range, model
  * select, 1d/7d/30d quick ranges where 1d spans today 00:00–23:59), the
- * total-usage strip, the daily-token trend chart, and the per-model detail
- * table with the hit rate last — all following the active filters. There is
- * no refresh button: entering the page or changing a filter refetches (the
- * route answers no-store); only the error state keeps a retry.
+ * total-usage strip, the daily-token trend chart, the per-model detail
+ * table with the hit rate last, and — opened by each priced model row's
+ * “定价” affordance — a dialog with that model's full price table — all
+ * following the active filters. There is no refresh button: entering the
+ * page or changing a filter refetches (the route answers no-store); only
+ * the error state keeps a retry.
  *
  * @module token-usage/client/TokenUsageSection
  */

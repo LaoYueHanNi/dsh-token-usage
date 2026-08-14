@@ -30,6 +30,36 @@
   fill: var(--dsw-alias-label-primary);
 }
 
+/* The hovered/focused point grows; the label owns the exact value. */
+.dotActive {
+  fill: var(--dsw-alias-label-primary);
+  stroke: var(--dsw-alias-bg-layer-2);
+  stroke-width: 2;
+}
+
+/* The vertical guide from the active point down to the x axis. */
+.guide {
+  stroke: var(--dsw-alias-label-secondary);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+
+/* Invisible per-day hit target: fills the column around its point. */
+.hit {
+  cursor: default;
+}
+
+/* The floating per-day label: card-like box above the active point. */
+.pointLabel rect {
+  fill: var(--dsw-alias-bg-layer-3);
+  stroke: var(--dsw-alias-border-l2);
+}
+
+.pointLabel text {
+  fill: var(--dsw-alias-label-primary);
+  font-size: 11px;
+}
+
 .tick {
   fill: var(--dsw-alias-label-secondary);
   font-size: 11px;

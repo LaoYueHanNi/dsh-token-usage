@@ -9,8 +9,10 @@
 
 import type { IncomingMessage } from 'node:http'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
-import { buildSummary, filterSummary } from './stats.ts'
-import { STATS_PATH } from './wire.ts'
+import { readPricingTable, resolveRate } from './pricing.ts'
+import { attachCosts, buildSummary, filterSummary } from './stats.ts'
+import type { RateResolver } from './stats.ts'
+import { STATS_PATH, UNPRICED_KEY } from './wire.ts'
 
 /** The stats endpoint path, exported for tests and the client half. */
 export { STATS_PATH } from './wire.ts'
@@ -87,8 +89,24 @@ export function createStatsRoute(dir: string): WebRoute {
         return
       }
       try {
-        const summary = filterSummary(
-          await buildSummary(dir), filter.from, filter.to, filter.model)
+        // The pricing table is user-maintained and may change between
+        // requests; reading it per request keeps the page honest without
+        // any caching (the file is small and the route is not hot).
+        const pricing = await readPricingTable(dir)
+        // Per-record pricing: each record resolves through the rule chain at
+        // its own timestamp (tier approximated by its input-side tokens).
+        const resolve: RateResolver = record => {
+          const rules = pricing[record.model]
+          if (rules === undefined) return UNPRICED_KEY
+          const tokens = record.usage
+          const context = tokens === undefined ? 0
+            : tokens.inputTokens + (tokens.cacheReadTokens ?? 0) + (tokens.cacheWriteTokens ?? 0)
+          return resolveRate(rules, record.time, context).key
+        }
+        const summary = attachCosts(
+          filterSummary(await buildSummary(dir, undefined, resolve), filter.from, filter.to, filter.model),
+          pricing,
+        )
         res.writeHead(200, {
           'content-type': 'application/json; charset=utf-8',
           // Stats change with every request; the browser must not cache them.

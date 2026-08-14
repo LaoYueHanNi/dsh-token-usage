@@ -3,8 +3,10 @@
  * chart over the per-day rows of the already-filtered summary. The x axis
  * spans every calendar day of the active range — days without records plot
  * as zero — with day labels first/middle/last; the y axis grid uses round
- * 1/2/2.5/5 × 10ⁿ steps (K/M/B abbreviated). An empty range renders a
- * placeholder instead of an axis.
+ * 1/2/2.5/5 × 10ⁿ steps (K/M/B abbreviated). Hovering (or keyboard-
+ * focusing) a day highlights its point and floats a label with that day's
+ * date and total tokens. An empty range renders a placeholder instead of
+ * an axis.
  *
  * @module token-usage/client/TrendChart
  */

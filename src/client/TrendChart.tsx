@@ -3,12 +3,15 @@
  * chart over the per-day rows of the already-filtered summary. The x axis
  * spans every calendar day of the active range — days without records plot
  * as zero — with day labels first/middle/last; the y axis grid uses round
- * 1/2/2.5/5 × 10ⁿ steps (K/M/B abbreviated). An empty range renders a
- * placeholder instead of an axis.
+ * 1/2/2.5/5 × 10ⁿ steps (K/M/B abbreviated). Hovering (or keyboard-
+ * focusing) a day highlights its point and floats a label with that day's
+ * date and total tokens. An empty range renders a placeholder instead of
+ * an axis.
  *
  * @module token-usage/client/TrendChart
  */
 
+import { useState } from 'react'
 import type { ReactNode } from 'react'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { UsageDayRow } from '../wire.ts'
@@ -79,12 +82,20 @@ export function TrendChart({ rows, from, to, t }: {
     .map((point, index) => `${index === 0 ? 'M' : 'L'}${x(index).toFixed(1)},${y(point.tokens).toFixed(1)}`)
     .join(' ')
   const radius = points.length > 90 ? 1.5 : points.length > 30 ? 2 : 3
+  // The hovered/focused day index (null = none); the label mirrors it.
+  const [active, setActive] = useState<number | null>(null)
+  const activePoint = active === null ? null : points[active] ?? null
+  // The hit target around each point spans half the inter-point gap on each
+  // side (the full width for a single point), so adjacent days are equally
+  // reachable even in wide 30d+ ranges.
+  const hitWidth = points.length > 1 ? Math.max(step, 12) : innerWidth
   return (
     <svg
       role="img"
       aria-label={t('chart.aria')}
       viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
       className={styles.chart}
+      onMouseLeave={() => setActive(null)}
     >
       {ticks.map(tick => (
         <g key={tick}>
@@ -100,8 +111,61 @@ export function TrendChart({ rows, from, to, t }: {
       />
       <path d={path} className={styles.line} />
       {points.map((point, index) => (
-        <circle key={point.day} cx={x(index)} cy={y(point.tokens)} r={radius} className={styles.dot} />
+        <circle
+          key={point.day}
+          cx={x(index)}
+          cy={y(point.tokens)}
+          r={active === index ? radius + 2.5 : radius}
+          className={active === index ? styles.dotActive : styles.dot}
+        />
       ))}
+      {activePoint !== null
+        ? (
+          // The guide line drops from the active point to the x axis.
+          <line
+            x1={x(active!)} y1={y(activePoint.tokens)} x2={x(active!)} y2={y(0)}
+            className={styles.guide}
+          />
+        )
+        : null}
+      {points.map((point, index) => (
+        <rect
+          key={point.day}
+          x={x(index) - hitWidth / 2}
+          y={TOP}
+          width={hitWidth}
+          height={innerHeight}
+          fill="transparent"
+          aria-label={t('chart.pointLabel', { day: point.day, tokens: formatTokens(point.tokens) })}
+          role="button"
+          tabIndex={0}
+          className={styles.hit}
+          onMouseEnter={() => setActive(index)}
+          onFocus={() => setActive(index)}
+          onBlur={() => setActive(current => current === index ? null : current)}
+        />
+      ))}
+      {activePoint !== null
+        ? (
+          // Floating label: kept inside the canvas horizontally (near the
+          // edges it flips toward the center), above the point with a
+          // ceiling at the canvas top.
+          (() => {
+            const label = t('chart.pointLabel', { day: activePoint.day, tokens: formatTokens(activePoint.tokens) })
+            const charWidth = 6.2
+            const labelWidth = label.length * charWidth + 12
+            const center = x(active!)
+            const left = Math.min(Math.max(center - labelWidth / 2, LEFT), WIDTH - RIGHT - labelWidth)
+            const labelY = Math.max(y(activePoint.tokens) - 12, TOP + 8)
+            return (
+              <g className={styles.pointLabel} pointerEvents="none">
+                <rect x={left} y={labelY - 13} width={labelWidth} height={20} rx={5} />
+                <text x={left + labelWidth / 2} y={labelY} textAnchor="middle">{label}</text>
+              </g>
+            )
+          })()
+        )
+        : null}
       {labelIndices(points.length).map(index => (
         <text
           key={index}

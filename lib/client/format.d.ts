@@ -1,7 +1,8 @@
 /**
  * Browser-side display formatting of the token-usage settings page: token
- * abbreviation (K/M/B) and the cache hit rate. Pure functions only, shared
- * by the section and the trend chart.
+ * abbreviation (K/M/B), the cache hit rate, and the cost/rate figures of the
+ * pricing layer (¥ amounts and per-million-token rates). Pure functions only,
+ * shared by the section and the trend chart.
  *
  * @module token-usage/client/format
  */
@@ -23,4 +24,20 @@ export declare function formatTokens(count: number): string;
  * @returns e.g. `87.5%`, or `—` for an empty denominator.
  */
 export declare function formatHitRate(totals: UsageTotals): string;
+/**
+ * Cost as display text: `¥` plus two decimals, following the analyzer's cost
+ * formatting (`¥1.25`, `¥0.00`). A cost is always shown, never omitted.
+ * @param cost - a non-negative cost in ¥.
+ * @returns e.g. `¥1.25`.
+ */
+export declare function formatCost(cost: number): string;
+/**
+ * A per-million-token rate as display text: integral rates stay bare (`8`),
+ * fractional ones keep up to four decimals with trailing zeros stripped and a
+ * two-decimal minimum (`0.50`, `0.25`, `0.025`). The caller appends the `/M`
+ * unit where needed.
+ * @param rate - a non-negative rate in ¥ per million tokens.
+ * @returns the display string.
+ */
+export declare function formatRate(rate: number): string;
 //# sourceMappingURL=format.d.ts.map

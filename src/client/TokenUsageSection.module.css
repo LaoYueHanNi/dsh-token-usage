@@ -41,23 +41,49 @@
   color: var(--dsw-alias-label-secondary);
 }
 
+/* Scroll shell: the table keeps its natural single-line width and scrolls
+ * horizontally when the panel is narrower, instead of squeezing cells into
+ * wrapped or clipped content. */
+.tableWrap {
+  overflow-x: auto;
+}
+
 .table {
   width: 100%;
+  /* Tighter min-width: the model column + 8 numeric columns + their cell
+   * padding fit in 500px so the table stops pushing its rightmost column
+   * behind the scroll shell at typical panel widths. */
+  min-width: 500px;
   border-collapse: collapse;
-  font-size: 13px;
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
 
 .table th,
 .table td {
-  padding: 6px 8px;
+  /* Tighter cell padding keeps numeric columns narrow enough that the
+   * whole table fits without horizontal scrolling at the standard panel
+   * width; the model column also benefits from the smaller side padding. */
+  padding: 4px 6px;
   text-align: right;
   border-bottom: 1px solid var(--dsw-alias-border-l1);
+  /* Cells never wrap; the scroll shell absorbs the overflow. */
+  white-space: nowrap;
 }
 
-.table th:first-child,
-.table td:first-child {
+/* The model column of the per-model table: capped at layout level because
+ * auto layout would otherwise pour every spare pixel into the
+ * longest-content column, freezing the table at the container width (no
+ * scroll) with a bloated model column. The cap tracks the longest realistic
+ * model name (e.g. `deepseek-v4-flash`, ~95px at 12px) plus the unpriced
+ * tag and the cell padding, so the column stays one line wide and never
+ * grows past that budget. (An explicit class, not :first-child — the
+ * pricing tables below have their own left column with other needs.) */
+.table th.modelHead,
+.table td.modelCol {
   text-align: left;
+  width: 150px;
+  max-width: 150px;
 }
 
 .table th {
@@ -97,13 +123,30 @@
   gap: 8px;
 }
 
+/* The selects of the filter bar follow the shell's own select pattern
+ * (e.g. the conversation model picker): appearance:none removes the UA
+ * form skin (which renders light in dark mode — the shell never sets
+ * color-scheme on plugin content), the chevron is drawn as an inline SVG
+ * in a neutral gray that reads on both themes, and the colors come from
+ * theme variables only. */
+.control,
+.modelControl {
+  appearance: none;
+  padding-right: 26px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none'%3E%3Cpath d='M3 4.5L6 7.5L9 4.5' stroke='%2381858C' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-position: right 6px center;
+  background-repeat: no-repeat;
+  background-size: 12px 12px;
+}
+
 .control {
   box-sizing: border-box;
   padding: 4px 8px;
+  padding-right: 26px;
   font-size: 13px;
   line-height: 20px;
   color: var(--dsw-alias-label-primary);
-  background: var(--dsh-alias-bg-layer-2);
+  background-color: var(--dsw-alias-bg-layer-2);
   border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 6px;
 }
@@ -129,10 +172,11 @@
   overflow: hidden;
   text-overflow: ellipsis;
   padding: 4px 8px;
+  padding-right: 26px;
   font-size: 13px;
   line-height: 20px;
   color: var(--dsw-alias-label-primary);
-  background: var(--dsw-alias-bg-layer-2);
+  background-color: var(--dsw-alias-bg-layer-2);
   border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 6px;
 }
@@ -168,4 +212,165 @@
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   color: var(--dsw-alias-label-primary);
+}
+
+/* Cost figures share one accent color, mirroring the analyzer's cost color. */
+.cardValueCost {
+  display: block;
+  margin-top: 4px;
+  font-size: 18px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--dsw-alias-state-warn-primary);
+}
+
+/* Unpriced-model warning strip: amber, like the analyzer's missing-pricing bar. */
+.warning {
+  margin: 0;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--dsw-alias-state-warn-label);
+  background: var(--dsw-alias-state-warn-tertiary);
+  border-radius: 6px;
+}
+
+/* Model cell: name plus (only for unpriced models) the warning tag, one
+ * line, ellipsized. Priced models render a bare name — their rates live in
+ * the pricing detail block at the bottom of the page. The inner cap tracks
+ * the column's `width: 150px` minus the cell padding (6px on each side,
+ * 12px total) so the inline-flex children never force the outer `<td>` to
+ * grow. */
+.modelCell {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 138px;
+}
+
+.modelName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.unpricedTag {
+  flex: none;
+  padding: 0 6px;
+  font-size: 10px;
+  line-height: 16px;
+  color: var(--dsw-alias-state-warn-label);
+  background: var(--dsw-alias-state-warn-tertiary);
+  border-radius: 8px;
+}
+
+.costCell {
+  color: var(--dsw-alias-state-warn-primary);
+  font-weight: 600;
+}
+
+/* The pricing affordance of a priced model row: one click opens the
+ * model's detail-price dialog. */
+.pricingButton {
+  flex: none;
+  padding: 0 6px;
+  font-size: 10px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-secondary);
+  background: var(--dsw-alias-bg-layer-2);
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.pricingButton:hover {
+  color: var(--dsw-alias-state-warn-primary);
+  background: var(--dsw-alias-state-warn-tertiary);
+  border-color: var(--dsw-alias-state-warn-primary);
+}
+
+/* The pricing dialog: a native <dialog> over a dimmed backdrop. The top
+ * layer renders it above the per-model table's scroll shell. */
+.dialog {
+  width: min(600px, calc(100vw - 48px));
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  padding: 14px 16px;
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-bg-layer-2);
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 10px;
+}
+
+.dialog::backdrop {
+  background: rgb(0 0 0 / 0.4);
+}
+
+.dialogHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.dialogTitle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.dialogClose {
+  flex: none;
+  padding: 2px 8px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-secondary);
+  background: none;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.dialogClose:hover {
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-interactive-bg-hover);
+}
+
+/* The billing-condition column of a price table: left-aligned, allowed to
+ * wrap (peak rows stack several windows), and indented under its group
+ * header so the two levels — group (model root / time rule window) and
+ * condition (default / tier / peak) — read apart. Written as element+class
+ * so the specificity ties `.table td` and wins by source order. */
+th.conditionHead,
+td.conditionCell {
+  text-align: left;
+  min-width: 200px;
+  white-space: normal;
+}
+
+td.conditionCell {
+  padding-left: 20px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+/* A group divider row (the model root or one time rule's window): spans
+ * the table, sits flush left while its condition rows indent under it, and
+ * separates from the previous group with a rule (border-collapse merges it
+ * with the row above's bottom border). */
+.groupRow > td {
+  padding-top: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  text-align: left;
+  white-space: normal;
+  color: var(--dsw-alias-label-secondary);
+  border-bottom: none;
+}
+
+.groupRow:not(:first-child) > td {
+  border-top: 1px solid var(--dsw-alias-border-l1);
 }
