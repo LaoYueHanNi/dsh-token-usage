@@ -16,8 +16,8 @@ Repo: <https://github.com/LaoYueHanNi/dsh-token-usage>
 
 - **Live hook**: every successful model request is appended to per-day JSONL files (request id, model, input / output / cache-read / cache-write tokens, time, session id).
 - **Web stats page**: filters (date range + model + `1d`/`7d`/`30d` shortcuts), summary cards, daily trend chart (hover a day for its total), per-model table.
-- **Cost figures & model pricing**: per-request cost is computed live from per-model rates (¥ per million tokens) — a highlighted total-cost card, a cost column in the per-model table, and a warning strip for unpriced models (their cost counts as ¥0). Every priced model's name carries a small **rates button** that opens a dialog with that model's full price table: **each row is one billing condition** (default rates, context tiers like `≥ 512K`, peak windows like `09:00-12:00`, grouped under time rules' date windows), with the in/out/cache/write rates as aligned columns — mirroring exactly what the per-record resolver bills. Rates merge from two files: `/token-usage-pricing-sync` mirrors the cloud model-price-table feed (the same source cc-switch-analyzer pulls), `pricing.json` holds manual overrides, and `/token-usage-pricing` prints the merged table.
-- **History backfill**: the first startup syncs requests that happened before installation; the `/token-usage-sync` command re-runs the same idempotent backfill anytime.
+- **Cost figures & model pricing**: per-request cost is computed live from per-model rates (¥ per million tokens) — a highlighted total-cost card, a cost column in the per-model table, and a warning strip for unpriced models (their cost counts as ¥0). Every priced model's name carries a small **rates button** that opens a dialog with that model's full price table: **each row is one billing condition** (default rates, context tiers like `≥ 512K`, peak windows like `09:00-12:00`, grouped under time rules' date windows), with the in/out/cache/write rates as aligned columns — mirroring exactly what the per-record resolver bills. Rates merge from two files: every startup mirrors the cloud model-price-table feed (the same source cc-switch-analyzer pulls) automatically, and `pricing.json` holds manual overrides.
+- **History backfill**: the first startup syncs requests that happened before installation (idempotent).
 
 ## Model pricing
 
@@ -27,14 +27,8 @@ Repo: <https://github.com/LaoYueHanNi/dsh-token-usage>
 
 | File | Source | Notes |
 |---|---|---|
-| `pricing.ccsa.json` | startup auto-fetch + the `/token-usage-pricing-sync` command | Verbatim mirror of the cloud model-price-table feed (the analyzer's source); refreshed on every dsh restart, falling back to the previous mirror on failure |
+| `pricing.ccsa.json` | startup auto-fetch | Verbatim mirror of the cloud model-price-table feed (the analyzer's source); refreshed on every dsh restart, falling back to the previous mirror on failure |
 | `pricing.json` | hand-edited | Overrides synced rates or adds missing models; manual tweaks survive re-syncs |
-
-```sh
-# Inspect / manually refresh the merged, active table (startup also auto-fetches the cloud mirror once)
-/token-usage-pricing-sync
-/token-usage-pricing
-```
 
 Cloud feed shape (`currency` must be `RMB`; both `modelId` and every alias become matchable keys; `timeRules` / `contextTiers` / `dailySlots` all take part in billing):
 
@@ -58,7 +52,7 @@ Flat `pricing.json` shape (keys are model ids matching the recorded `model` exac
 }
 ```
 
-A broken file or invalid entries leave the affected models unpriced without breaking the stats page; save and refresh (or re-run the command) to apply changes. Default location: `~/.dsh/token-usage/` (wherever `path` points when configured).
+A broken file or invalid entries leave the affected models unpriced without breaking the stats page; save and refresh the page to apply changes. Default location: `~/.dsh/token-usage/` (wherever `path` points when configured).
 
 ## Install
 
@@ -114,4 +108,4 @@ Temporary mount — effective for this launch only, no profile changes. `cordis.
 dsh web --patch <plugin-dir>/cordis.yml
 ```
 
-This mode only mounts the host half (data recording and commands work); the stats page needs the client bundle resolved by package name, so for UI development use the `link:` install above instead: run `npm run build && npm run build:client` (or `npx tsdown --watch` in the plugin directory), restart `dsh web`, and the browser plugin hot-reloads automatically.
+This mode only mounts the host half (data recording keeps working); the stats page needs the client bundle resolved by package name, so for UI development use the `link:` install above instead: run `npm run build && npm run build:client` (or `npx tsdown --watch` in the plugin directory), restart `dsh web`, and the browser plugin hot-reloads automatically.

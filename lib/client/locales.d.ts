@@ -47,7 +47,7 @@ export declare const zh: {
     readonly 'unpriced.warning': "{count} 个模型未定价：{models}（费用按 ¥0 计）";
     readonly dataDir: "数据目录：{path}";
     readonly loadFailed: "统计加载失败：{message}";
-    readonly empty: "暂无数据。可调整筛选条件；模型请求成功后会自动写入，历史记录可通过命令面板的 /token-usage-sync 补齐。";
+    readonly empty: "暂无数据。可调整筛选条件；模型请求成功后会自动写入，安装前已发生的历史记录会在首次启动时自动补齐。";
     readonly 'chart.empty': "区间内暂无数据";
     readonly 'chart.aria': "每日总 token 曲线";
     readonly 'chart.pointLabel': "{day} 总量 {tokens}";

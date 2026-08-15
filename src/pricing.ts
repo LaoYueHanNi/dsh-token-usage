@@ -2,9 +2,8 @@
  * Pricing vocabulary and store of the token-usage plugin: the per-model
  * price rules (¥ per million tokens) backing the cost figures of the stats
  * page. Two sources merge on read — the cloud feed mirrored on every dsh
- * startup (and via /token-usage-pricing-sync) into `<data
- * dir>/pricing.ccsa.json` (the same model-price-table source
- * cc-switch-analyzer pulls), and the hand-edited `<data
+ * startup into `<data dir>/pricing.ccsa.json` (the same model-price-table
+ * source cc-switch-analyzer pulls), and the hand-edited `<data
  * dir>/pricing.json`, whose entries always win and replace a model's cloud
  * rules wholesale. Absent files mean no pricing; a malformed file logs once
  * and reads as empty, so a broken table never blocks the stats route.
@@ -35,7 +34,7 @@ import type {
 /** The hand-maintained pricing file inside the data directory. */
 export const PRICING_FILE = 'pricing.json'
 
-/** The cloud-feed mirror written on startup and by /token-usage-pricing-sync. */
+/** The cloud-feed mirror written on every startup. */
 export const PRICING_CCSA_FILE = 'pricing.ccsa.json'
 
 /**

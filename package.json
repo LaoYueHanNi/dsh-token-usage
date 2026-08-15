@@ -3,7 +3,7 @@
   "version": "0.2.2",
   "private": true,
   "type": "module",
-  "description": "dsh local plugin: persist per-request model token usage (live hook + manual history sync command + web settings stats page)",
+  "description": "dsh local plugin: persist per-request model token usage (live hook + first-run history backfill + web settings stats page)",
   "main": "lib/index.js",
   "exports": {
     ".": "./lib/index.js",
@@ -41,7 +41,6 @@
     "@deepseek-ai/dsh-client-ui-settings": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-client-ui-slots": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-client-web-react": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-commands": "^0.1.0-rc.5",
     "@deepseek-ai/dsh-host-webserver": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-llm": "^0.1.0-rc.5",
     "@deepseek-ai/dsh-session": "^0.1.0-rc.5",

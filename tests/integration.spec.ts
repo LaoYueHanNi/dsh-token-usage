@@ -1,26 +1,11 @@
 import { existsSync } from 'node:fs'
-import { mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Context, Service } from '@deepseek-ai/cordis'
-import type { CommandDefinition, CommandInvocation } from '@deepseek-ai/dsh-commands'
 import * as plugin from '../src/index.ts'
 import { messageEvent } from './helpers.ts'
-
-/** Records registrations instead of dispatching commands. */
-class MockCommands extends Service {
-  readonly registered: CommandDefinition[] = []
-
-  constructor(ctx: Context) {
-    super(ctx, 'commands')
-  }
-
-  register(definition: CommandDefinition): () => void {
-    this.registered.push(definition)
-    return () => {}
-  }
-}
 
 /** Returns persisted sessions from a shared mutable list. */
 function persistenceService(sessions: Array<{ id: string; events: unknown[] }>) {
@@ -71,30 +56,19 @@ async function waitForState(dir: string): Promise<void> {
   throw new Error('initialized marker never appeared')
 }
 
-function invocation(): CommandInvocation {
-  return {
-    commandId: 'cid-1' as CommandInvocation['commandId'],
-    agent: {} as CommandInvocation['agent'],
-    rawInput: '',
-    signal: new AbortController().signal,
-  }
-}
-
 describe('plugin integration', () => {
   let ctx: Context | undefined
   let home: string
   const sessions: Array<{ id: string; events: unknown[] }> = []
 
   /** Mount the plugin under a fresh context against the shared session list. */
-  async function mount(): Promise<{ commands: MockCommands; dir: string }> {
+  async function mount(): Promise<{ dir: string }> {
     const next = new Context()
-    await next.plugin(MockCommands)
     await next.plugin(MockSessions)
     await next.plugin(persistenceService(sessions))
     await next.plugin(plugin)
     ctx = next
-    const registered = next.commands as unknown as MockCommands
-    return { commands: registered, dir: join(home, 'token-usage') }
+    return { dir: join(home, 'token-usage') }
   }
 
   beforeEach(async () => {
@@ -111,70 +85,6 @@ describe('plugin integration', () => {
     }
     vi.unstubAllEnvs()
     vi.unstubAllGlobals()
-  })
-
-  it('loads the plugin and registers the sync and pricing commands', async () => {
-    const mounted = await mount()
-    expect(mounted.commands.registered.map(definition => definition.name))
-      .toEqual(['token-usage-sync', 'token-usage-pricing', 'token-usage-pricing-sync'])
-  })
-
-  it('lists the maintained pricing table through the pricing command', async () => {
-    const mounted = await mount()
-    await waitForState(mounted.dir)
-    await writeFile(join(mounted.dir, 'pricing.json'), JSON.stringify({
-      'deepseek-chat': { inputPerMillion: 2, outputPerMillion: 8, cacheReadPerMillion: 0.5 },
-    }))
-    const definition = mounted.commands.registered.find(candidate => candidate.name === 'token-usage-pricing')!
-    const result = await definition.handler(invocation())
-    expect(result.kind).toBe('success')
-    expect(result.text).toContain('deepseek-chat: input 2, output 8, cache read 0.5')
-  })
-
-  it('explains the pricing file when no pricing is configured', async () => {
-    const mounted = await mount()
-    await waitForState(mounted.dir)
-    const definition = mounted.commands.registered.find(candidate => candidate.name === 'token-usage-pricing')!
-    const result = await definition.handler(invocation())
-    expect(result.kind).toBe('success')
-    expect(result.text).toContain('no pricing configured')
-  })
-
-  it('mirrors the cloud feed through the pricing-sync command and shows the merged table', async () => {
-    const feed = JSON.stringify({
-      version: 4,
-      updatedAt: 1_780_000_000,
-      currency: 'RMB',
-      models: [
-        { modelId: 'deepseek-chat', inputCostPerMillion: 2, outputCostPerMillion: 8, aliases: ['deepseek-v3'] },
-      ],
-    })
-    const fetch = vi.fn(async () => new Response(feed))
-    vi.stubGlobal('fetch', fetch)
-    const mounted = await mount()
-    await waitForState(mounted.dir)
-    const definition = mounted.commands.registered.find(candidate => candidate.name === 'token-usage-pricing-sync')!
-    const result = await definition.handler(invocation())
-    expect(result.kind).toBe('success')
-    expect(result.text).toContain('version 4')
-    expect(result.text).toContain('1 models, 1 aliases')
-    expect(result.text).toContain('pricing.ccsa.json')
-    // The merged pricing table reflects the mirror (id + alias).
-    const show = await mounted.commands.registered
-      .find(candidate => candidate.name === 'token-usage-pricing')!.handler(invocation())
-    expect(show.kind).toBe('success')
-    expect(show.text).toContain('deepseek-chat: input 2, output 8')
-    expect(show.text).toContain('deepseek-v3: input 2, output 8')
-  })
-
-  it('reports a failed pricing sync as an error result', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => new Response('nope', { status: 500 })))
-    const mounted = await mount()
-    await waitForState(mounted.dir)
-    const definition = mounted.commands.registered.find(candidate => candidate.name === 'token-usage-pricing-sync')!
-    const result = await definition.handler(invocation())
-    expect(result.kind).toBe('error')
-    expect(result.text).toContain('failed')
   })
 
   it('refreshes the cloud pricing mirror on every startup', async () => {
@@ -241,7 +151,7 @@ describe('plugin integration', () => {
     expect(row).toMatchObject({ requestId: 'm9', sessionId: 'old', model: 'deepseek-chat' })
   })
 
-  it('does not auto-sync on later startups, but the command still re-syncs', async () => {
+  it('does not auto-sync on later startups', async () => {
     sessions.push({ id: 'old', events: [messageEvent({ messageId: 'm9', seq: 3 })] })
     const first = await mount()
     await waitForState(first.dir)
@@ -260,36 +170,5 @@ describe('plugin integration', () => {
     expect(files).toHaveLength(1)
     const text = await readFile(join(second.dir, files[0]!), 'utf8')
     expect(text.trim().split('\n')).toHaveLength(1)
-
-    // The manual command still covers it.
-    const result = await second.commands.registered[0]!.handler(invocation())
-    expect(result).toEqual({ kind: 'success', text: 'Token usage sync: 1 added, 1 skipped (deduped)' })
-  })
-
-  it('syncs historical rows through the command and dedupes on re-run', async () => {
-    const mounted = await mount()
-    await waitForState(mounted.dir)
-    sessions.push({ id: 'old', events: [messageEvent({ messageId: 'm9', seq: 3 })] })
-    const definition = mounted.commands.registered[0]!
-    const first = await definition.handler(invocation())
-    expect(first).toEqual({ kind: 'success', text: 'Token usage sync: 1 added, 0 skipped (deduped)' })
-
-    const text = await pollLogFile(mounted.dir)
-    const row = JSON.parse(text.trim())
-    expect(row).toMatchObject({ requestId: 'm9', sessionId: 'old', model: 'deepseek-chat' })
-
-    const second = await definition.handler(invocation())
-    expect(second).toEqual({ kind: 'success', text: 'Token usage sync: 0 added, 1 skipped (deduped)' })
-  })
-
-  it('sync skips rows the live hook already wrote', async () => {
-    const mounted = await mount()
-    await waitForState(mounted.dir)
-    ctx!.emit('session/event', { id: 's1' }, messageEvent({ messageId: 'm1' }))
-    await pollLogFile(mounted.dir)
-    sessions.push({ id: 's1', events: [messageEvent({ messageId: 'm1', seq: 5 })] })
-    const definition = mounted.commands.registered[0]!
-    const result = await definition.handler(invocation())
-    expect(result).toEqual({ kind: 'success', text: 'Token usage sync: 0 added, 1 skipped (deduped)' })
   })
 })

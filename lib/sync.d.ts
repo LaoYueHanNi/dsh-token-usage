@@ -1,8 +1,8 @@
 /**
  * History sync: replay every persisted session log and append the request
  * rows the log does not already hold, deduped by request id. The sync runs
- * automatically ONCE (first startup, gated by the initialized marker) and
- * afterwards only through the manual command.
+ * automatically ONCE, on the first startup after installation (gated by the
+ * initialized marker).
  *
  * @module token-usage/sync
  */
