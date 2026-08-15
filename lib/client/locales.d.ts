@@ -50,6 +50,7 @@ export declare const zh: {
     readonly empty: "暂无数据。可调整筛选条件；模型请求成功后会自动写入，安装前已发生的历史记录会在首次启动时自动补齐。";
     readonly 'chart.empty': "区间内暂无数据";
     readonly 'chart.aria': "每日总 token 曲线";
+    readonly 'chart.ariaHour': "单日分时 token 曲线";
     readonly 'chart.pointLabel': "{day} 总量 {tokens}";
 };
 /** English dictionary (same key set). */

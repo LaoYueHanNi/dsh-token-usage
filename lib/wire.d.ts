@@ -28,6 +28,12 @@ export interface UsageDayRow {
     day: string;
     totals: UsageTotals;
 }
+/** One per-hour × per-model aggregation row, keyed by local `YYYY-MM-DDTHH`. */
+export interface UsageHourRow {
+    hour: string;
+    model: string;
+    totals: UsageTotals;
+}
 /** One per-model aggregation row (token counts only; see the cost layer below). */
 export interface UsageModelRow {
     model: string;
@@ -135,6 +141,9 @@ export interface TokenSummary {
     total: UsageTotals;
     /** Per-local-day rows, ascending by day. */
     byDay: UsageDayRow[];
+    /** Per-hour × per-model rows, ascending by hour then model; the web page
+     * folds them by hour to draw the single-day trend chart. */
+    byHour: UsageHourRow[];
     /** Per-model rows, descending by request count. */
     byModel: UsageModelRow[];
     /** Per-day × per-model × per-rate rows, day then model then rate ascending;

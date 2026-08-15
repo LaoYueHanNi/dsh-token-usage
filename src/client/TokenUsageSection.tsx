@@ -441,6 +441,9 @@ export function TokenUsageSection({ t }: SettingsSectionOwnerProps & { t: Transl
               t={t}
               {...filters.from !== '' ? { from: filters.from } : {}}
               {...filters.to !== '' ? { to: filters.to } : {}}
+              // A single-day window (the 1d quick range or a same-day custom
+              // selection) plots the day's 24 hours instead of one point.
+              {...filters.from !== '' && filters.from === filters.to ? { hours: state.summary.byHour } : {}}
             />
             {state.summary.byModel.length > 0
               ? (

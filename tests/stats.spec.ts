@@ -99,6 +99,23 @@ describe('summarizeRecords', () => {
     expect(summary.byModel).toHaveLength(1)
     expect(summary.byModel[0]!.totals.requests).toBe(2)
   })
+
+  it('groups by local hour and model, ascending hour then model', () => {
+    const morning = new Date(2026, 0, 15, 9, 30).getTime()
+    const noon = new Date(2026, 0, 15, 12).getTime()
+    const summary = summarizeRecords([
+      record(noon, 'deepseek-chat', { input: 2, output: 2 }),
+      record(morning, 'deepseek-reasoner', { input: 1, output: 1 }),
+      record(morning, 'deepseek-chat', { input: 10, output: 5 }),
+    ])
+    expect(summary.byHour).toEqual([
+      { hour: '2026-01-15T09', model: 'deepseek-chat', totals: { requests: 1, inputTokens: 10, outputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 0 } },
+      { hour: '2026-01-15T09', model: 'deepseek-reasoner', totals: { requests: 1, inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 } },
+      { hour: '2026-01-15T12', model: 'deepseek-chat', totals: { requests: 1, inputTokens: 2, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0 } },
+    ])
+    // The same record folds into its day bucket as well.
+    expect(summary.byDay[0]!.totals.requests).toBe(3)
+  })
 })
 
 describe('mergeSummaries', () => {
@@ -207,6 +224,17 @@ describe('filterSummary', () => {
       expect(row.time).toBeLessThanOrEqual(new Date(2026, 0, 16, 23, 59, 59, 999).getTime())
     }
   })
+
+  it('filters the hour rows by the day range and model', () => {
+    const filtered = filterSummary(fixture(), '2026-01-15', '2026-01-15', 'deepseek-chat')
+    expect(filtered.byHour).toEqual([
+      { hour: '2026-01-15T10', model: 'deepseek-chat', totals: { requests: 1, inputTokens: 10, outputTokens: 10, cacheReadTokens: 0, cacheWriteTokens: 0 } },
+      { hour: '2026-01-15T23', model: 'deepseek-chat', totals: { requests: 1, inputTokens: 20, outputTokens: 20, cacheReadTokens: 0, cacheWriteTokens: 0 } },
+    ])
+    // A model filter drops the other model's hours entirely.
+    const reasoner = filterSummary(fixture(), '2026-01-14', '2026-01-16', 'deepseek-reasoner')
+    expect(reasoner.byHour.map(row => row.hour)).toEqual(['2026-01-14T11', '2026-01-16T10'])
+  })
 })
 
 describe('buildSummary rollup (cold/hot split)', () => {
@@ -312,6 +340,7 @@ describe('readAllRecords / buildSummary', () => {
     const summary = await buildSummary(dir)
     expect(summary.total.requests).toBe(0)
     expect(summary.byDay).toEqual([])
+    expect(summary.byHour).toEqual([])
     expect(summary.byModel).toEqual([])
     expect(summary.recent).toEqual([])
   })
@@ -395,6 +424,7 @@ describe('attachCosts', () => {
     const summary = attachCosts(before, pricing)
     expect(summary.total).toEqual(before.total)
     expect(summary.byDay).toEqual(before.byDay)
+    expect(summary.byHour).toEqual(before.byHour)
     expect(summary.rateRows).toEqual(before.rateRows)
     expect(summary.recent).toEqual(before.recent)
     expect(summary.dataDir).toBe(before.dataDir)

@@ -6,7 +6,7 @@
  *
  * @module token-usage/client/day
  */
-import type { UsageDayRow, UsageTotals } from '../wire.ts';
+import type { UsageDayRow, UsageHourRow, UsageTotals } from '../wire.ts';
 /** Total tokens across the four buckets (billed input = input + cacheRead + cacheWrite). */
 export declare function totalTokens(totals: UsageTotals): number;
 /** Local `YYYY-MM-DD` key of a date, matching the host's day-file convention. */
@@ -27,4 +27,23 @@ export interface DayPoint {
  * @param to - last day key, inclusive.
  */
 export declare function daySeries(rows: readonly UsageDayRow[], from?: string, to?: string): DayPoint[];
+/** One plotted hour of the single-day trend chart. */
+export interface HourPoint {
+    hour: string;
+    tokens: number;
+}
+/** Local `YYYY-MM-DDTHH` key of a date, matching the host's hour convention. */
+export declare function hourKeyOf(date: Date): string;
+/**
+ * The zero-filled hourly token series over a day range: every whole hour of
+ * the range appears once (hours without records plot as zero), so a single
+ * day yields the full 00:00–23:00 sequence and future hours of today read
+ * zero. The per-(hour, model) rows fold by hour. Absent bounds fall back to
+ * the first/last row hour; no rows and no range yield [].
+ * @param rows - the (already filtered) per-hour × per-model rows.
+ * @param from - first day key (`YYYY-MM-DD`), inclusive; the series starts
+ * at that day's 00:00.
+ * @param to - last day key, inclusive; the series ends at that day's 23:00.
+ */
+export declare function hourSeries(rows: readonly UsageHourRow[], from?: string, to?: string): HourPoint[];
 //# sourceMappingURL=day.d.ts.map

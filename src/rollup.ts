@@ -15,7 +15,7 @@ import { readFile, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { coerceRecord } from './usage-record.ts'
 import type { UsageRecord } from './usage-record.ts'
-import type { RateKey, UsageDayRow, UsageModelRow, UsageRateRow, UsageTotals } from './wire.ts'
+import type { RateKey, UsageDayRow, UsageHourRow, UsageModelRow, UsageRateRow, UsageTotals } from './wire.ts'
 
 const ROLLUP_FILE = 'rollup.json'
 const TMP_FILE = 'rollup.json.tmp'
@@ -28,6 +28,10 @@ export interface RollupFile {
   total: UsageTotals
   /** Per-local-day rows of the absorbed records, ascending by day. */
   byDay: UsageDayRow[]
+  /** Per-hour × per-model rows of the absorbed records, ascending by hour
+   * then model — feeds the single-day hourly trend chart without rereading
+   * the frozen day files. */
+  byHour: UsageHourRow[]
   /** Per-model rows of the absorbed records, descending on request count. */
   byModel: UsageModelRow[]
   /** Per-(day, model, rate identity) rows of the absorbed records — rule
@@ -51,6 +55,15 @@ function isDayRow(value: unknown): value is UsageDayRow {
   if (typeof value !== 'object' || value === null) return false
   const row = value as Record<string, unknown>
   return typeof row.day === 'string' && DAY_KEY.test(row.day) && isTotals(row.totals)
+}
+
+const HOUR_KEY = /^\d{4}-\d{2}-\d{2}T\d{2}$/u
+
+function isHourRow(value: unknown): value is UsageHourRow {
+  if (typeof value !== 'object' || value === null) return false
+  const row = value as Record<string, unknown>
+  return typeof row.hour === 'string' && HOUR_KEY.test(row.hour)
+    && typeof row.model === 'string' && isTotals(row.totals)
 }
 
 function isModelRow(value: unknown): value is UsageModelRow {
@@ -78,6 +91,7 @@ function isRollupFile(value: unknown): value is RollupFile {
   return typeof rollup.upto === 'string' && DAY_KEY.test(rollup.upto)
     && isTotals(rollup.total)
     && Array.isArray(rollup.byDay) && rollup.byDay.every(isDayRow)
+    && Array.isArray(rollup.byHour) && rollup.byHour.every(isHourRow)
     && Array.isArray(rollup.byModel) && rollup.byModel.every(isModelRow)
     && Array.isArray(rollup.rateRows) && rollup.rateRows.every(isRateRow)
     && Array.isArray(rollup.recent)

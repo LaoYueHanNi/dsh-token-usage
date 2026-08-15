@@ -52,6 +52,7 @@ export const zh = {
   'empty': '暂无数据。可调整筛选条件；模型请求成功后会自动写入，安装前已发生的历史记录会在首次启动时自动补齐。',
   'chart.empty': '区间内暂无数据',
   'chart.aria': '每日总 token 曲线',
+  'chart.ariaHour': '单日分时 token 曲线',
   'chart.pointLabel': '{day} 总量 {tokens}',
 } as const
 
@@ -96,6 +97,7 @@ export const en: Record<TokenUsageKey, string> = {
   'empty': 'No data yet. Adjust the filters; requests are written automatically after each successful model call, and pre-install history is backfilled automatically on the first startup.',
   'chart.empty': 'No data in range',
   'chart.aria': 'Daily total token trend',
+  'chart.ariaHour': 'Single-day hourly token trend',
   'chart.pointLabel': '{day} total {tokens}',
 }
 

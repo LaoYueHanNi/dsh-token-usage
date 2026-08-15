@@ -53,6 +53,7 @@ const SUMMARY: UsageSummary = {
     { day: '2026-01-15', totals: { requests: 2, inputTokens: 20, outputTokens: 8, cacheReadTokens: 2, cacheWriteTokens: 1 } },
     { day: '2026-01-16', totals: { requests: 2, inputTokens: 10, outputTokens: 4, cacheReadTokens: 1, cacheWriteTokens: 1 } },
   ],
+  byHour: [],
   byModel: [{
     // Values distinct from the totals cards so table assertions are unambiguous.
     model: 'deepseek-reasoner',
@@ -515,6 +516,50 @@ describe('TokenUsageSection filtering', () => {
     expect(within(chart).getByText('2026-01-16 总量 16')).toBeTruthy()
     fireEvent.mouseLeave(chart)
     expect(within(chart).queryByText(/总量/)).toBeNull()
+  })
+
+  it('renders the 1d window as the day\'s 24-hour trend, folding models per hour', async () => {
+    // Hourly rows on today (the default 1d window): 1K at 09:00, 3K at 14:00.
+    const today = dayKey(0)
+    stubFetch(async () => ({
+      ok: true,
+      json: async () => ({
+        ...SUMMARY,
+        byHour: [
+          { hour: `${today}T09`, model: 'deepseek-chat', totals: { requests: 1, inputTokens: 1000, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 } },
+          { hour: `${today}T09`, model: 'deepseek-reasoner', totals: { requests: 1, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 } },
+          { hour: `${today}T14`, model: 'deepseek-chat', totals: { requests: 1, inputTokens: 3000, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 } },
+        ],
+      }),
+    }))
+    render(<TokenUsageSection close={() => {}} t={t} />)
+    await screen.findAllByText('总 token')
+    const chart = await screen.findByRole('img', { name: '单日分时 token 曲线' })
+    // The full 00:00-23:00 sequence: 24 plotted hours, future ones at zero.
+    expect(within(chart).getAllByLabelText(/总量/)).toHaveLength(24)
+    // Hourly totals 1K and 3K, so the y axis tops out at a round 3K.
+    for (const tick of ['1K', '2K', '3K']) {
+      expect(within(chart).getByText(tick)).toBeTruthy()
+    }
+    // Clock labels (HH:00) close the x axis at first/middle/last.
+    expect(within(chart).getByText('00:00')).toBeTruthy()
+    expect(within(chart).getByText('11:00')).toBeTruthy()
+    expect(within(chart).getByText('23:00')).toBeTruthy()
+    // Hovering an hour floats its date + clock time; both models fold into 09:00.
+    fireEvent.mouseEnter(within(chart).getByLabelText(`${today} 09:00 总量 1K`))
+    expect(within(chart).getByText(`${today} 09:00 总量 1K`)).toBeTruthy()
+  })
+
+  it('switches back to the daily chart once the range spans more than one day', async () => {
+    const fetch = stubFetch(async () => ({ ok: true, json: async () => SUMMARY }))
+    render(<TokenUsageSection close={() => {}} t={t} />)
+    await screen.findAllByText('总 token')
+    // The default 1d window renders the hourly chart.
+    expect(await screen.findByRole('img', { name: '单日分时 token 曲线' })).toBeTruthy()
+    // A wider range falls back to the daily granularity.
+    fireEvent.change(screen.getByLabelText('快捷区间'), { target: { value: '7' } })
+    await waitForCall(fetch, 2)
+    expect(await screen.findByRole('img', { name: '每日总 token 曲线' })).toBeTruthy()
   })
 })
 

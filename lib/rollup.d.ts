@@ -11,7 +11,7 @@
  * @module token-usage/rollup
  */
 import type { UsageRecord } from './usage-record.ts';
-import type { UsageDayRow, UsageModelRow, UsageRateRow, UsageTotals } from './wire.ts';
+import type { UsageDayRow, UsageHourRow, UsageModelRow, UsageRateRow, UsageTotals } from './wire.ts';
 /** The on-disk rollup: the aggregate of every day file named ≤ {@link RollupFile.upto}. */
 export interface RollupFile {
     /** Inclusive upper date (`YYYY-MM-DD`) of the day files already absorbed. */
@@ -20,6 +20,10 @@ export interface RollupFile {
     total: UsageTotals;
     /** Per-local-day rows of the absorbed records, ascending by day. */
     byDay: UsageDayRow[];
+    /** Per-hour × per-model rows of the absorbed records, ascending by hour
+     * then model — feeds the single-day hourly trend chart without rereading
+     * the frozen day files. */
+    byHour: UsageHourRow[];
     /** Per-model rows of the absorbed records, descending on request count. */
     byModel: UsageModelRow[];
     /** Per-(day, model, rate identity) rows of the absorbed records — rule

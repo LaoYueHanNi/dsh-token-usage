@@ -74,4 +74,28 @@ describe('readRollup / writeRollup', () => {
     await writeFile(join(dir, 'rollup.json'), JSON.stringify(legacy))
     await expect(readRollup(dir)).resolves.toBeNull()
   })
+
+  it('reads null for a pre-byHour rollup so it rebuilds from the day files', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'token-usage-rollup-'))
+    const legacy = rollupWith('2026-01-15', [record(1_700_000_000_000, 'deepseek-chat')])
+    delete (legacy as Partial<typeof legacy>).byHour
+    await writeFile(join(dir, 'rollup.json'), JSON.stringify(legacy))
+    await expect(readRollup(dir)).resolves.toBeNull()
+  })
+
+  it('round-trips the hourly rows alongside the daily aggregate', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'token-usage-rollup-'))
+    const rollup = rollupWith('2026-01-15', [
+      record(new Date(2026, 0, 15, 9).getTime(), 'deepseek-chat'),
+      record(new Date(2026, 0, 15, 9).getTime(), 'deepseek-reasoner'),
+      record(new Date(2026, 0, 15, 14).getTime(), 'deepseek-chat'),
+    ])
+    await writeRollup(dir, rollup)
+    const loaded = await readRollup(dir)
+    expect(loaded?.byHour.map(row => [row.hour, row.model])).toEqual([
+      ['2026-01-15T09', 'deepseek-chat'],
+      ['2026-01-15T09', 'deepseek-reasoner'],
+      ['2026-01-15T14', 'deepseek-chat'],
+    ])
+  })
 })
