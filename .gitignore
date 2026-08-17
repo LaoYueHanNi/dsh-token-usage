@@ -14,3 +14,8 @@ Thumbs.db
 
 # Machine-local temporary-mount patch for `dsh web --patch` (see cordis.example.yml)
 cordis.yml
+
+# Machine-local agent instructions (never commit)
+.claude/
+AGENTS.local.md
+CLAUDE.local.md
