@@ -1,0 +1,18 @@
+# cordis.yml is machine-local and NOT tracked by git — it exists only for the
+# temporary-mount dev workflow (`dsh web --patch <plugin-dir>/cordis.yml`).
+# To use it: copy this file to `cordis.yml` in the repo root and point `name`
+# at YOUR checkout's absolute path. Regular installs via
+# `dsh plugin --profile web add github:LaoYueHanNi/dsh-token-usage` never
+# read this file — they use `cordis.patch.yml`, which references the package
+# by name and needs no local paths.
+- insert:
+    - id: token-usage
+      # `name` must be an absolute file:// URL of the built entry in THIS
+      # checkout. It cannot be relative: the Cordis Loader resolves plugin
+      # names against the profile root's baseUrl, not this file's directory.
+      # Windows: forward slashes, and the file:// form is mandatory — a bare
+      # drive-letter path ("e:") reads as a URL scheme.
+      #   name: 'file:///E:/Documents/MyCode/oyw-dsh-plugin/dsh-token-usage/lib/index.js'
+      # macOS / Linux:
+      #   name: 'file:///home/you/code/dsh-token-usage/lib/index.js'
+      name: 'file:///E:/Documents/MyCode/oyw-dsh-plugin/dsh-token-usage/lib/index.js'

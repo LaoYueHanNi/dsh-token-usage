@@ -102,9 +102,10 @@ npm run build && npm run build:client
 git add lib/
 ```
 
-临时挂载 —— 仅当次启动生效，不动 profile，`cordis.yml` 指向构建产物 `lib/index.js`：
+临时挂载 —— 仅当次启动生效，不动 profile，`cordis.yml` 指向构建产物 `lib/index.js`。`cordis.yml` 是机器本地的（含你 checkout 的绝对路径），不进 git：先从模板复制一份，并把 `name` 改成你机器上 `lib/index.js` 的绝对 `file://` URL：
 
 ```sh
+cp cordis.example.yml cordis.yml   # 然后编辑其中的 name 路径
 dsh web --patch <插件目录>/cordis.yml
 ```
 

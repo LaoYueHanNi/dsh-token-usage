@@ -1,3 +1,16 @@
 node_modules/
 *.tsbuildinfo
 .npm-cache/
+
+# IDE / editor config
+.idea/
+.vscode/
+.zcode/
+.fleet/
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Machine-local temporary-mount patch for `dsh web --patch` (see cordis.example.yml)
+cordis.yml

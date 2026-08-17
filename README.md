@@ -102,9 +102,10 @@ npm run build && npm run build:client
 git add lib/
 ```
 
-Temporary mount — effective for this launch only, no profile changes. `cordis.yml` points at the built `lib/index.js`:
+Temporary mount — effective for this launch only, no profile changes. `cordis.yml` points at the built `lib/index.js`. That file is machine-local (it embeds the absolute path of YOUR checkout) and not tracked by git: copy it from the template first and edit `name` to the absolute `file://` URL of `lib/index.js` on your machine:
 
 ```sh
+cp cordis.example.yml cordis.yml   # then edit the name path inside
 dsh web --patch <plugin-dir>/cordis.yml
 ```
 
