@@ -54,6 +54,28 @@
 
 文件损坏或条目非法时对应模型按未定价处理，不影响统计页；保存后刷新页面即可生效。默认数据目录：`~/.dsh/token-usage/`（配置了 `path` 时以该目录为准）。
 
+### 选择定价镜像
+
+启动同步默认拉 **Gitee**（中国大陆内速度快）。中国大陆以外的安装可把同步切到同一张表的 **GitHub 镜像** —— 既可在 Web 设置里改（**设置 → 插件**页签下折叠的 **Token 用量** 卡片，标题下带一行「设置定价数据源」说明，内含地区切换 默认/国内/海外，保存后立即生效），也可用一行配置。不做 IP 探测，部署者装的时候手动选一次即可：
+
+```yml
+# 插件 profile 配置里
+plugins:
+  token-usage:
+    pricingRegion: overseas   # 默认：domestic
+```
+
+Web 卡片只提供地区切换开关；全部配置项（均为可选）：
+
+| 配置项 | 默认 | 含义 |
+|---|---|---|
+| `pricingUrl` | — | 显式指定单个 feed（仅 cordis.yml 可设），优先级最高，覆盖下面所有项 |
+| `pricingUrlDomestic` | Gitee feed | 国内镜像覆盖（仅 cordis.yml 可设；自维护 fork 用） |
+| `pricingUrlOverseas` | GitHub 镜像 | 国外镜像覆盖（仅 cordis.yml 可设；自维护 fork 用） |
+| `pricingRegion` | `domestic` | `domestic` → Gitee，`overseas` → GitHub（`pricingUrl` 未设置时生效） |
+
+自己维护 model-price-table fork 时，用 `pricingUrlDomestic` / `pricingUrlOverseas` 指到你的地址。保存地区切换后立即重新同步；**不自动回退**：选定的镜像拉取失败就沿用旧镜像，等待下次同步重试。
+
 ## 安装
 
 ### 从 GitHub 安装（推荐）

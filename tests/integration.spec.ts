@@ -4,7 +4,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Context, Service } from '@deepseek-ai/cordis'
+import SettingsProvider, { type SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import * as plugin from '../src/index.ts'
+import { DEFAULT_PRICING_URL_OVERSEAS } from '../src/pricing.ts'
 import { messageEvent } from './helpers.ts'
 
 /** Returns persisted sessions from a shared mutable list. */
@@ -29,6 +31,28 @@ function persistenceService(sessions: Array<{ id: string; events: unknown[] }>) 
 class MockSessions extends Service {
   constructor(ctx: Context) {
     super(ctx, 'sessions')
+  }
+}
+
+/** In-process settings provider with one fixed document (mirrors harness tests). */
+class BareSettingsProvider extends SettingsProvider {
+  private readonly doc: Record<string, unknown>
+
+  constructor(ctx: Context, doc: Record<string, unknown>) {
+    super(ctx)
+    this.doc = doc
+  }
+
+  override get writable(): boolean {
+    return true
+  }
+
+  protected load(): Promise<Record<string, unknown>> {
+    return Promise.resolve(structuredClone(this.doc))
+  }
+
+  protected persist(_ns: SettingsNamespace, _section: Record<string, unknown>): Promise<void> {
+    return Promise.resolve()
   }
 }
 
@@ -107,10 +131,16 @@ describe('plugin integration', () => {
       await new Promise(resolve => setTimeout(resolve, 20))
     }
     expect(await readFile(join(mounted.dir, 'pricing.ccsa.json'), 'utf8')).toBe(`${feed}\n`)
-    // A second startup fetches again (every restart, not just the first).
+    // A second startup fetches again (every restart, not just the first). The
+    // sync rides a short coalescing window, so wait for the second fetch to
+    // land instead of asserting immediately.
     ctx!.registry.delete(plugin)
     ctx = undefined
     await mount()
+    const second = Date.now() + 2_000
+    while (Date.now() < second && fetch.mock.calls.length < 2) {
+      await new Promise(resolve => setTimeout(resolve, 20))
+    }
     expect(fetch.mock.calls.length).toBeGreaterThanOrEqual(2)
   })
 
@@ -170,5 +200,36 @@ describe('plugin integration', () => {
     expect(files).toHaveLength(1)
     const text = await readFile(join(second.dir, files[0]!), 'utf8')
     expect(text.trim().split('\n')).toHaveLength(1)
+  })
+
+  it('syncs exactly once at startup, from the settings-resolved region', async () => {
+    const feed = JSON.stringify({
+      version: 7,
+      updatedAt: 0,
+      currency: 'RMB',
+      models: [{ modelId: 'm', inputCostPerMillion: 1, outputCostPerMillion: 2 }],
+    })
+    const fetch = vi.fn(async () => new Response(feed))
+    vi.stubGlobal('fetch', fetch)
+    const next = new Context()
+    await next.plugin(MockSessions)
+    await next.plugin(persistenceService(sessions))
+    // A stored region (the web card's "overseas") must drive the startup sync.
+    await next.plugin(BareSettingsProvider, { 'token-usage': { pricingRegion: 'overseas' } })
+    await next.plugin(plugin)
+    ctx = next
+
+    // Wait for the first fetch, then give transient startup events a beat to
+    // see whether a second, redundant sync sneaks in.
+    const deadline = Date.now() + 3_000
+    while (Date.now() < deadline && fetch.mock.calls.length === 0) {
+      await new Promise(resolve => setTimeout(resolve, 20))
+    }
+    const urls = fetch.mock.calls.map(call => String(call[0]))
+    await new Promise(resolve => setTimeout(resolve, 1_500))
+    const settled = fetch.mock.calls.map(call => String(call[0]))
+
+    expect(urls).toEqual([DEFAULT_PRICING_URL_OVERSEAS])
+    expect(settled).toEqual([DEFAULT_PRICING_URL_OVERSEAS])
   })
 })

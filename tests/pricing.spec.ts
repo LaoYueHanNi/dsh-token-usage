@@ -7,8 +7,12 @@ import {
   coerceCloudPricing,
   coercePricingTable,
   costOf,
+  DEFAULT_PRICING_URL,
+  DEFAULT_PRICING_URL_DOMESTIC,
+  DEFAULT_PRICING_URL_OVERSEAS,
   ratesForKey,
   readPricingTable,
+  resolvePricingUrl,
   resolveRate,
   syncCloudPricing,
 } from '../src/pricing.ts'
@@ -310,6 +314,34 @@ describe('cloudToTable', () => {
       ],
     })
     expect(table['shared-name']!.base).toEqual({ inputPerMillion: 9, outputPerMillion: 9 })
+  })
+})
+
+describe('resolvePricingUrl', () => {
+  it('defaults to the domestic (gitee) mirror', () => {
+    expect(resolvePricingUrl()).toBe(DEFAULT_PRICING_URL_DOMESTIC)
+    expect(resolvePricingUrl({})).toBe(DEFAULT_PRICING_URL_DOMESTIC)
+    expect(DEFAULT_PRICING_URL).toBe(DEFAULT_PRICING_URL_DOMESTIC)
+  })
+
+  it('picks the overseas (github) mirror for the overseas region', () => {
+    expect(resolvePricingUrl({ pricingRegion: 'overseas' })).toBe(DEFAULT_PRICING_URL_OVERSEAS)
+  })
+
+  it('lets per-region overrides replace their default', () => {
+    expect(resolvePricingUrl({ pricingUrlDomestic: 'https://a/feed.json' }))
+      .toBe('https://a/feed.json')
+    expect(resolvePricingUrl({ pricingRegion: 'overseas', pricingUrlOverseas: 'https://b/feed.json' }))
+      .toBe('https://b/feed.json')
+  })
+
+  it('lets an explicit pricingUrl win over every region setting', () => {
+    expect(resolvePricingUrl({
+      pricingUrl: 'https://explicit/feed.json',
+      pricingRegion: 'overseas',
+      pricingUrlDomestic: 'https://a',
+      pricingUrlOverseas: 'https://b',
+    })).toBe('https://explicit/feed.json')
   })
 })
 

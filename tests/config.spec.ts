@@ -20,8 +20,26 @@ describe('validateConfig', () => {
     expect(() => validateConfig({ pricingUrl: 'https://example.com/pricing.json' })).not.toThrow()
   })
 
+  it('accepts the mirror URL keys and a region', () => {
+    expect(() => validateConfig({
+      pricingUrlDomestic: 'https://example.com/domestic.json',
+      pricingUrlOverseas: 'https://example.com/overseas.json',
+      pricingRegion: 'domestic',
+    })).not.toThrow()
+    expect(() => validateConfig({ pricingRegion: 'overseas' })).not.toThrow()
+  })
+
   it('rejects a blank pricingUrl', () => {
     expect(() => validateConfig({ pricingUrl: '' })).toThrow(/non-empty string/)
+  })
+
+  it('rejects a blank mirror URL', () => {
+    expect(() => validateConfig({ pricingUrlDomestic: '' })).toThrow(/non-empty string/)
+    expect(() => validateConfig({ pricingUrlOverseas: '' })).toThrow(/non-empty string/)
+  })
+
+  it('rejects an invalid pricingRegion', () => {
+    expect(() => validateConfig({ pricingRegion: 'asia' } as unknown as Config)).toThrow(/domestic.*overseas/)
   })
 
   it('rejects unknown keys', () => {
