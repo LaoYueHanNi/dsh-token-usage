@@ -29,6 +29,7 @@ import { resolvePricingUrl, syncCloudPricing, type PricingSourceInput } from './
 import { recordFromEvent } from './usage-record.ts'
 import { autoSyncIfNeeded } from './sync.ts'
 import { createStatsRoute } from './stats-route.ts'
+import { currencyOfRegion } from './wire.ts'
 
 export interface Config {
   /** Data directory; defaults to `$DSH_HOME/token-usage` (`~/.dsh/token-usage`). */
@@ -204,7 +205,7 @@ export function apply(ctx: Context, config: Config = {}) {
     lastSyncedUrl = url
     void syncCloudPricing(dir, url)
       .then((result) => {
-        console.log(`[token-usage] pricing sync (${url}): version ${result.version} (${result.models} models, ${result.aliases} aliases)`)
+        console.log(`[token-usage] pricing sync (${url}): version ${result.version} (${result.models} models, ${result.aliases} aliases, USD rate ${result.usdExchangeRate})`)
       })
       .catch((error: unknown) => {
         // Offline or a slow network must never break the plugin: the previous
@@ -243,7 +244,12 @@ export function apply(ctx: Context, config: Config = {}) {
   // simply never mount the route; the browser half of this package shows the
   // page only when the host half serves the route.
   ctx.inject(['webServer'], (webCtx) => {
-    webCtx.effect(() => webCtx.webServer.register(createStatsRoute(dir)), 'token-usage: stats route')
+    // The display currency follows the region pick live: the thunk reads the
+    // settings-resolved section at request time, so a saved region switch
+    // re-prices the page's currency on the next fetch without a restart.
+    webCtx.effect(() => webCtx.webServer.register(
+      createStatsRoute(dir, { currency: () => currencyOfRegion(effectiveInput().pricingRegion) }),
+    ), 'token-usage: stats route')
   })
 
   // Every profile composes the base bundle, whose settings-file provider

@@ -32,6 +32,8 @@ const t = ((key: string, params?: Record<string, unknown>): string => {
 /** A fully populated summary fixture (reasoner priced at ¥4/¥16/¥1 per million). */
 const SUMMARY: UsageSummary = {
   dataDir: 'C:/data/token-usage',
+  currency: 'CNY',
+  usdExchangeRate: 7,
   total: {
     requests: 4,
     inputTokens: 30,
@@ -220,6 +222,54 @@ describe('TokenUsageSection', () => {
     // row carries no pricing affordance.
     expect(within(table).getByText('—')).toBeTruthy()
     expect(within(table).queryByRole('button', { name: /定价/ })).toBeNull()
+  })
+
+  it('renders costs and rates in USD under an overseas summary', async () => {
+    // large enough to be visible at $ scale: ¥7.00 ÷ 7 = $1.00.
+    const usdSummary: UsageSummary = {
+      ...SUMMARY,
+      currency: 'USD',
+      usdExchangeRate: 7,
+      totalCost: 7,
+      byModel: [{ ...SUMMARY.byModel[0]!, cost: 7 }],
+    }
+    stubFetch(async () => ({ ok: true, json: async () => usdSummary }))
+    render(<TokenUsageSection close={() => {}} t={t} />)
+    // The cost card and the per-model cost column both read $1.00.
+    expect(await screen.findAllByText('总 token')).toHaveLength(2)
+    expect(screen.getAllByText('$1.00').length).toBeGreaterThan(0)
+
+    // The pricing dialog converts every rate: ¥4/¥16 → $0.5714/$2.2857,
+    // cache read ¥1 → $0.1429, cache write falls back to input $0.5714.
+    fireEvent.click(screen.getByRole('button', { name: '查看 deepseek-reasoner 定价' }))
+    const dialog = await screen.findByRole('dialog')
+    const table = within(dialog).getByRole('table')
+    expect(within(table).getByText('默认').closest('tr')!.textContent).toBe('默认$0.5714$2.2857$0.1429$0.5714')
+    // The conversion note names the rate.
+    expect(within(dialog).getByText('按 1 USD = 7 CNY 换算')).toBeTruthy()
+    // Close the dialog to leave a clean tree.
+    fireEvent.click(within(dialog).getByRole('button', { name: '关闭' }))
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('uses the USD symbol in the unpriced warning', async () => {
+    stubFetch(async () => ({
+      ok: true,
+      json: async () => ({
+        ...SUMMARY,
+        currency: 'USD',
+        usdExchangeRate: 7,
+        totalCost: 7,
+        unpricedModels: ['deepseek-reasoner'],
+        pricing: {},
+        byModel: [{ ...SUMMARY.byModel[0]!, cost: 0 }],
+      }),
+    }))
+    render(<TokenUsageSection close={() => {}} t={t} />)
+    // The unpriced placeholder is a converted zero, not a hard ¥.
+    expect(await screen.findByText(/费用按 \$0\.00 计/)).toBeTruthy()
+    const table = screen.getByRole('table', { name: '按模型' })
+    expect(within(table).getByText('—')).toBeTruthy()
   })
 
   it('shows the failure and retries the fetch', async () => {

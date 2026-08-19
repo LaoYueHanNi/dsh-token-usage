@@ -28,6 +28,13 @@
   color: var(--dsw-alias-label-secondary);
 }
 
+/* Conversion note under a USD pricing table: where the $ figures come from. */
+.rateNote {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary);
+}
+
 .error {
   margin: 0;
   font-size: 13px;

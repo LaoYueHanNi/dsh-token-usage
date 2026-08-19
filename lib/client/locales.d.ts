@@ -42,9 +42,10 @@ export declare const zh: {
     readonly 'pricing.cacheRead': "缓";
     readonly 'pricing.cacheWrite': "写";
     readonly 'pricing.perMillion': "/M";
+    readonly 'pricing.exchangeRateNote': "按 1 USD = {rate} CNY 换算";
     readonly 'pricing.unpriced': "未定价";
     readonly 'pricing.windowSep': "、";
-    readonly 'unpriced.warning': "{count} 个模型未定价：{models}（费用按 ¥0 计）";
+    readonly 'unpriced.warning': "{count} 个模型未定价：{models}（费用按 {zero} 计）";
     readonly dataDir: "数据目录：{path}";
     readonly 'card.title': "Token 用量";
     readonly 'card.description': "设置定价数据源";
@@ -55,8 +56,8 @@ export declare const zh: {
     readonly 'card.regionLabel': "定价区域";
     readonly 'card.regionDefault': "默认（国内 Gitee）";
     readonly 'card.region.domestic': "国内（Gitee）";
-    readonly 'card.region.overseas': "海外（GitHub）";
-    readonly 'card.hint': "切换到「海外」后从 GitHub 镜像拉取定价表；保存后立即重新同步，失败沿用旧镜像。";
+    readonly 'card.region.overseas': "全球（GitHub）";
+    readonly 'card.hint': "切换到「全球」后从 GitHub 镜像拉取定价表，费用按美元展示（RMB ÷ 汇率）；保存后立即重新同步，失败沿用旧镜像。";
     readonly 'card.overridden': "已覆盖默认值";
     readonly 'card.save': "保存";
     readonly 'card.saving': "保存中…";

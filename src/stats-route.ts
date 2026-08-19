@@ -9,10 +9,11 @@
 
 import type { IncomingMessage } from 'node:http'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
-import { readPricingTable, resolveRate } from './pricing.ts'
+import { readPricingTable, readUsdExchangeRate, resolveRate } from './pricing.ts'
 import { attachCosts, buildSummary, filterSummary } from './stats.ts'
 import type { RateResolver } from './stats.ts'
 import { STATS_PATH, UNPRICED_KEY } from './wire.ts'
+import type { DisplayCurrency } from './wire.ts'
 
 /** The stats endpoint path, exported for tests and the client half. */
 export { STATS_PATH } from './wire.ts'
@@ -62,12 +63,19 @@ export function isSameOriginFetch(req: IncomingMessage): boolean {
   return site === 'same-origin' || site === 'none'
 }
 
+/** How the route resolves the display currency per request; a thunk so a
+ * live settings change (the region pick) lands without rebuilding the route. */
+export interface StatsRouteOptions {
+  currency?: () => DisplayCurrency
+}
+
 /**
  * Build the stats route for one data directory.
  * @param dir - the plugin's data directory.
+ * @param options - the currency thunk; defaults to CNY (the domestic default).
  * @returns the exact GET route serving the JSON summary.
  */
-export function createStatsRoute(dir: string): WebRoute {
+export function createStatsRoute(dir: string, options: StatsRouteOptions = {}): WebRoute {
   return {
     kind: 'exact',
     path: STATS_PATH,
@@ -107,12 +115,16 @@ export function createStatsRoute(dir: string): WebRoute {
           filterSummary(await buildSummary(dir, undefined, resolve), filter.from, filter.to, filter.model),
           pricing,
         )
+        // Display-currency metadata: amounts stay RMB on the wire; the page
+        // converts (÷ usdExchangeRate) when the region pick says USD.
+        const currency = options.currency?.() ?? 'CNY'
+        const payload = { ...summary, currency, usdExchangeRate: await readUsdExchangeRate(dir) }
         res.writeHead(200, {
           'content-type': 'application/json; charset=utf-8',
           // Stats change with every request; the browser must not cache them.
           'cache-control': 'no-store',
         })
-        res.end(JSON.stringify(summary))
+        res.end(JSON.stringify(payload))
       } catch (error) {
         res.writeHead(500, { 'content-type': 'application/json; charset=utf-8' })
         res.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }))

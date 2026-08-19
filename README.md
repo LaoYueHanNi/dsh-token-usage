@@ -56,7 +56,7 @@ A broken file or invalid entries leave the affected models unpriced without brea
 
 ### Choosing the pricing mirror
 
-The startup sync pulls from **Gitee** by default (fast inside mainland China). Installations outside mainland China can point the sync at the **GitHub mirror** of the same table — either from the web settings (on **Settings → Plugins**, the collapsed **Token Usage** card — described with a one-line *Pricing data source* banner — offers a region switch: default / domestic / overseas, editable live) or with a single config line. No IP sniffing: you just pick once.
+The startup sync pulls from **Gitee** by default (fast inside mainland China). Installations outside mainland China can point the sync at the **GitHub mirror** of the same table — either from the web settings (on **Settings → Plugins**, the collapsed **Token Usage** card — described with a one-line *Pricing data source* banner — offers a region switch: default / CN / global, editable live) or with a single config line. No IP sniffing: you just pick once.
 
 ```yml
 # in the plugin's profile config
@@ -75,6 +75,8 @@ The web card exposes only the region switch; the full key set (all optional):
 | `pricingRegion` | `domestic` | `domestic` → Gitee, `overseas` → GitHub (when `pricingUrl` is unset) |
 
 A saved region change re-syncs the mirror immediately; there is no automatic failover — the chosen mirror fails, the previous mirror stays until a later sync succeeds.
+
+**Region drives the display currency.** The region pick also decides how the stats page shows money: *Default / CN (Gitee)* keeps costs in RMB (`¥` + the table's own numbers); *Global (GitHub)* shows them in USD (`$` + `RMB ÷ rate`). The rate comes from the `usdExchangeRate` field at the very top of the pricing table (RMB per 1 USD; currently `7`), and falls back to a built-in `7` when the mirror does not carry it yet. Every money display follows along: the total-cost card, the per-model cost column, the unpriced warning, and the in/out/cache/write rates in the pricing dialog (whose USD view annotates the conversion rate under the table). Amounts on the wire always stay RMB — conversion happens only at render time, so switching regions never rebuilds any stats.
 
 ## Install
 
