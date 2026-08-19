@@ -157,8 +157,22 @@ export interface TokenSummary {
 export type CostedModelRow = UsageModelRow & {
     cost: number;
 };
-/** The full stats payload served at {@link STATS_PATH}: the token aggregation plus the cost layer. */
-export interface UsageSummary extends TokenSummary {
+/** The currency the stats page renders cost figures in. The amounts on the
+ * wire stay RMB — this only names the display convention. */
+export type DisplayCurrency = 'CNY' | 'USD';
+/**
+ * The display currency a mirror region implies: `overseas` (GitHub) shows
+ * USD, `domestic` (Gitee) and the unset default show CNY. Only the region
+ * pick decides — an explicit `pricingUrl` never changes the display.
+ * @param region - the effective `pricingRegion` (undefined when unset).
+ * @returns the display currency of the stats page.
+ */
+export declare function currencyOfRegion(region: 'domestic' | 'overseas' | undefined): DisplayCurrency;
+/**
+ * The token aggregation plus the cost layer — what {@link attachCosts}
+ * produces before the route stamps the display-currency metadata.
+ */
+export interface CostedSummary extends TokenSummary {
     /** Absolute data directory the summary was computed from. */
     dataDir: string;
     /** Billed cost over every recorded request (¥); unpriced models count 0. */
@@ -169,5 +183,15 @@ export interface UsageSummary extends TokenSummary {
     pricing: PricingTable;
     /** Per-model rows with their billed cost attached. */
     byModel: CostedModelRow[];
+}
+/** The full stats payload served at {@link STATS_PATH}: the cost layer plus
+ * the display-currency metadata the route stamps on top. */
+export interface UsageSummary extends CostedSummary {
+    /** The display currency the page converts cost figures into. Amounts on
+     * the wire (totalCost, byModel[].cost, pricing rates) remain RMB. */
+    currency: DisplayCurrency;
+    /** Effective RMB-per-USD rate (feed value, else the built-in default);
+     * the divisor when `currency` is USD. */
+    usdExchangeRate: number;
 }
 //# sourceMappingURL=wire.d.ts.map

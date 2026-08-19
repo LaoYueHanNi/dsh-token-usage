@@ -20,6 +20,7 @@ import { readRollup, writeRollup } from './rollup.ts'
 import type { RollupFile } from './rollup.ts'
 import type {
   CostedModelRow,
+  CostedSummary,
   PricingTable,
   RateKey,
   TokenSummary,
@@ -27,7 +28,6 @@ import type {
   UsageHourRow,
   UsageModelRow,
   UsageRateRow,
-  UsageSummary,
   UsageTotals,
 } from './wire.ts'
 import { UNPRICED_KEY } from './wire.ts'
@@ -320,7 +320,7 @@ export function filterSummary(
  * @param pricing - the active pricing table.
  * @returns the same summary plus the cost fields.
  */
-export function attachCosts(summary: TokenSummary & { dataDir: string }, pricing: PricingTable): UsageSummary {
+export function attachCosts(summary: TokenSummary & { dataDir: string }, pricing: PricingTable): CostedSummary {
   const costs = new Map<string, number>()
   let totalCost = 0
   for (const row of summary.rateRows) {

@@ -7,6 +7,7 @@ import { Context, Service } from '@deepseek-ai/cordis'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import * as plugin from '../src/index.ts'
 import { createStatsRoute, isSameOriginFetch, STATS_PATH } from '../src/stats-route.ts'
+import { currencyOfRegion } from '../src/wire.ts'
 import type { UsageRecord } from '../src/usage-record.ts'
 import { messageEvent } from './helpers.ts'
 
@@ -180,6 +181,35 @@ describe('createStatsRoute', () => {
     expect(body.byModel).toEqual([{ model: 'deepseek-chat', totals: expect.anything(), cost: 0 }])
   })
 
+  it('defaults to CNY display with the built-in rate when no mirror exists', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'token-usage-route-'))
+    await writeFile(join(dir, 'usage-2026-01-15.jsonl'), `${JSON.stringify(fixtureRecord(100))}\n`)
+    const route = createStatsRoute(dir)
+    const { res, captured } = fakeResponse()
+    await route.handler(fakeRequest(), res)
+    expect(JSON.parse(captured.body)).toMatchObject({ currency: 'CNY', usdExchangeRate: 7 })
+  })
+
+  it('stamps the currency thunk answer and the mirror rate as USD', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'token-usage-route-'))
+    await writeFile(join(dir, 'usage-2026-01-15.jsonl'), `${JSON.stringify(fixtureRecord(100))}\n`)
+    await writeFile(join(dir, 'pricing.ccsa.json'), JSON.stringify({
+      version: 57, updatedAt: 1, currency: 'RMB', usdExchangeRate: 7.25,
+      models: [{ modelId: 'deepseek-chat', inputCostPerMillion: 2, outputCostPerMillion: 8 }],
+    }))
+    const route = createStatsRoute(dir, { currency: () => 'USD' })
+    const { res, captured } = fakeResponse()
+    await route.handler(fakeRequest(), res)
+    const body = JSON.parse(captured.body) as { currency: string; usdExchangeRate: number; totalCost: number }
+    expect(body.currency).toBe('USD')
+    // The feed envelope's rate, not the built-in 7.
+    expect(body.usdExchangeRate).toBe(7.25)
+    // Wire amounts stay RMB — conversion is the client's job. The feed gives
+    // no cache price, so cache reads bill at the plain input rate (2):
+    // 10×2 + 5×8 + 3×2 = 66 per million tokens.
+    expect(body.totalCost).toBeCloseTo(0.000066, 12)
+  })
+
   it('computes costs from the user-maintained pricing table', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'token-usage-route-'))
     await writeFile(join(dir, 'usage-2026-01-15.jsonl'), `${JSON.stringify(fixtureRecord(100))}\n`)
@@ -270,6 +300,14 @@ describe('isSameOriginFetch', () => {
   it('refuses cross-site and same-site values', () => {
     expect(isSameOriginFetch(fakeRequest({ headers: { 'sec-fetch-site': 'cross-site' } }))).toBe(false)
     expect(isSameOriginFetch(fakeRequest({ headers: { 'sec-fetch-site': 'same-site' } }))).toBe(false)
+  })
+})
+
+describe('currencyOfRegion', () => {
+  it('maps overseas to USD and everything else to CNY', () => {
+    expect(currencyOfRegion('overseas')).toBe('USD')
+    expect(currencyOfRegion('domestic')).toBe('CNY')
+    expect(currencyOfRegion(undefined)).toBe('CNY')
   })
 })
 

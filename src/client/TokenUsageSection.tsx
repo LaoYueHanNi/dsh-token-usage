@@ -20,7 +20,8 @@ import type { SettingsSectionOwnerProps } from '@deepseek-ai/dsh-client-ui-setti
 import type { ContextTier, DailySlot, ModelPricing, ModelRates, RateWindow, UsageSummary } from '../wire.ts'
 import { STATS_PATH } from '../wire.ts'
 import { dayKeyOf, shiftedDayKey, totalTokens } from './day.ts'
-import { formatCost, formatHitRate, formatRate, formatTokens } from './format.ts'
+import { currencyViewOf, formatCost, formatHitRate, formatRate, formatRateWithSymbol, formatTokens } from './format.ts'
+import type { CurrencyView } from './format.ts'
 import { TrendChart } from './TrendChart.tsx'
 import styles from './TokenUsageSection.module.css'
 
@@ -91,13 +92,14 @@ function StatCard({ label, value, accent }: { label: string; value: string; acce
   )
 }
 
-/** The four base rates of one model as display text; a missing cache rate bills at the input rate. */
-function billedRates(rates: ModelPricing): { input: string; output: string; cacheRead: string; cacheWrite: string } {
+/** The four base rates of one model as display text (symbol included,
+ * converted for a USD view); a missing cache rate bills at the input rate. */
+function billedRates(rates: ModelPricing, view: CurrencyView): { input: string; output: string; cacheRead: string; cacheWrite: string } {
   return {
-    input: formatRate(rates.inputPerMillion),
-    output: formatRate(rates.outputPerMillion),
-    cacheRead: formatRate(rates.cacheReadPerMillion ?? rates.inputPerMillion),
-    cacheWrite: formatRate(rates.cacheWritePerMillion ?? rates.inputPerMillion),
+    input: formatRateWithSymbol(rates.inputPerMillion, view),
+    output: formatRateWithSymbol(rates.outputPerMillion, view),
+    cacheRead: formatRateWithSymbol(rates.cacheReadPerMillion ?? rates.inputPerMillion, view),
+    cacheWrite: formatRateWithSymbol(rates.cacheWritePerMillion ?? rates.inputPerMillion, view),
   }
 }
 
@@ -154,8 +156,9 @@ function nodePriceRows(node: { rates: ModelPricing; tiers?: ContextTier[] | unde
  * each show when they apply and what they bill. Shared by the pricing
  * dialog; the structure mirrors {@link resolveRate}'s node chain.
  */
-function ModelPriceTable({ rules, t }: {
+function ModelPriceTable({ rules, view, t }: {
   rules: ModelRates
+  view: CurrencyView
   t: TranslateNS<'token-usage'>
 }): ReactNode {
   // Groups follow resolveRate's chain: the model root, then each time rule
@@ -194,20 +197,23 @@ function ModelPriceTable({ rules, t }: {
               ]
               : []),
             ...group.rows.map((row, index) => {
-              const billed = billedRates(row.rates)
+              const billed = billedRates(row.rates, view)
               return (
                 <tr key={`${group.title ?? ''}-${index}-${row.condition}`}>
                   <td className={styles['conditionCell']}>{row.condition}</td>
-                  <td>¥{billed.input}</td>
-                  <td>¥{billed.output}</td>
-                  <td>¥{billed.cacheRead}</td>
-                  <td>¥{billed.cacheWrite}</td>
+                  <td>{billed.input}</td>
+                  <td>{billed.output}</td>
+                  <td>{billed.cacheRead}</td>
+                  <td>{billed.cacheWrite}</td>
                 </tr>
               )
             }),
           ])}
         </tbody>
       </table>
+      {view.symbol === '$'
+        ? <p className={styles['rateNote']}>{t('pricing.exchangeRateNote', { rate: formatRate(view.rate) })}</p>
+        : null}
     </div>
   )
 }
@@ -219,9 +225,10 @@ function ModelPriceTable({ rules, t }: {
  * Mounts only while a model is selected; every close path funnels through
  * the dialog's `close` event, which clears the selection and unmounts it.
  */
-function PricingDialog({ model, rules, onClose, t }: {
+function PricingDialog({ model, rules, view, onClose, t }: {
   model: string
   rules: ModelRates
+  view: CurrencyView
   onClose: () => void
   t: TranslateNS<'token-usage'>
 }): ReactNode {
@@ -251,7 +258,7 @@ function PricingDialog({ model, rules, onClose, t }: {
           ✕
         </button>
       </div>
-      <ModelPriceTable rules={rules} t={t} />
+      <ModelPriceTable rules={rules} view={view} t={t} />
     </dialog>
   )
 }
@@ -397,6 +404,7 @@ export function TokenUsageSection({ t }: SettingsSectionOwnerProps & { t: Transl
   }
 
   const { total } = state.summary
+  const view = currencyViewOf(state.summary)
   return (
     <div ref={rootRef} className={styles['section']}>
       <h2 className={styles['title']}>{t('nav.label')}</h2>
@@ -416,7 +424,7 @@ export function TokenUsageSection({ t }: SettingsSectionOwnerProps & { t: Transl
           <>
             <div className={styles['cards']}>
               <StatCard label={t('stat.requests')} value={total.requests.toLocaleString()} />
-              <StatCard label={t('stat.cost')} value={formatCost(state.summary.totalCost)} accent />
+              <StatCard label={t('stat.cost')} value={formatCost(state.summary.totalCost, view)} accent />
               <StatCard label={t('stat.totalTokens')} value={formatTokens(totalTokens(total))} />
               <StatCard label={t('stat.hitRate')} value={formatHitRate(total)} />
             </div>
@@ -432,6 +440,7 @@ export function TokenUsageSection({ t }: SettingsSectionOwnerProps & { t: Transl
                   {t('unpriced.warning', {
                     count: String(state.summary.unpricedModels.length),
                     models: state.summary.unpricedModels.join(', '),
+                    zero: formatCost(0, view),
                   })}
                 </p>
               )
@@ -494,7 +503,7 @@ export function TokenUsageSection({ t }: SettingsSectionOwnerProps & { t: Transl
                               </td>
                               <td>{row.totals.requests.toLocaleString()}</td>
                               <td className={rules !== undefined ? styles['costCell'] : undefined}>
-                                {rules !== undefined ? formatCost(row.cost) : '—'}
+                                {rules !== undefined ? formatCost(row.cost, view) : '—'}
                               </td>
                               <td>{formatTokens(totalTokens(row.totals))}</td>
                               <td>{formatTokens(row.totals.inputTokens)}</td>
@@ -516,6 +525,7 @@ export function TokenUsageSection({ t }: SettingsSectionOwnerProps & { t: Transl
                 <PricingDialog
                   model={detailModel}
                   rules={state.summary.pricing[detailModel]!}
+                  view={view}
                   onClose={() => setDetailModel(null)}
                   t={t}
                 />

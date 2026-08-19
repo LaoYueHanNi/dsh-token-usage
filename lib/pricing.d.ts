@@ -36,6 +36,12 @@ export declare const DEFAULT_PRICING_URL_DOMESTIC = "https://gitee.com/oyw125/mo
 export declare const DEFAULT_PRICING_URL_OVERSEAS = "https://raw.githubusercontent.com/LaoYueHanNi/model-price-table/master/model_pricing.json";
 /** Backward-compatible alias: the domestic (gitee) default feed. */
 export declare const DEFAULT_PRICING_URL = "https://gitee.com/oyw125/model-price-table/raw/master/model_pricing.json";
+/**
+ * The RMB-per-USD rate used for display conversion when the cloud feed's
+ * envelope does not carry a usable `usdExchangeRate` (older mirrors). The
+ * feed owns the number; this is only the stand-in until it lands.
+ */
+export declare const DEFAULT_USD_EXCHANGE_RATE = 7;
 /** Which cloud mirror the pricing sync prefers when no explicit URL is set. */
 export type PricingRegion = 'domestic' | 'overseas';
 /** The URL inputs of the pricing sync: an explicit single feed, or the
@@ -101,6 +107,9 @@ export interface CloudPricingData {
     version: number;
     updatedAt: number;
     currency: string;
+    /** RMB per USD for display conversion; absent when the feed omits it or
+     * the value is not a positive finite number. */
+    usdExchangeRate?: number;
     models: CloudPricingModel[];
 }
 /**
@@ -172,12 +181,23 @@ export declare function coercePricingTable(value: unknown): Record<string, Model
  * @returns the validated, merged table (possibly empty).
  */
 export declare function readPricingTable(dir: string): Promise<PricingTable>;
+/**
+ * The effective USD conversion rate (RMB per USD) of one data directory:
+ * the cloud feed envelope's `usdExchangeRate` when it carries a usable one,
+ * else {@link DEFAULT_USD_EXCHANGE_RATE}. Absent, malformed, or non-RMB
+ * mirrors fall back the same way — display conversion never blocks on a
+ * broken feed. Hand-edited `pricing.json` carries no rate and never wins.
+ * @param dir - the plugin's data directory.
+ * @returns the positive rate the stats page converts display costs with.
+ */
+export declare function readUsdExchangeRate(dir: string): Promise<number>;
 /** The outcome of one successful cloud sync, for the command's reply. */
 export interface CloudSyncResult {
     version: number;
     updatedAt: number;
     models: number;
     aliases: number;
+    usdExchangeRate: number;
 }
 /**
  * Fetch the cloud pricing feed and mirror it verbatim into

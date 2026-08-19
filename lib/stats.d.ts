@@ -11,7 +11,7 @@
  * @module token-usage/stats
  */
 import type { UsageRecord } from './usage-record.ts';
-import type { PricingTable, RateKey, TokenSummary, UsageSummary, UsageTotals } from './wire.ts';
+import type { CostedSummary, PricingTable, RateKey, TokenSummary, UsageTotals } from './wire.ts';
 /** Bounded recent window length: only the newest records cross the wire. */
 export declare const RECENT_LIMIT = 20;
 /**
@@ -73,7 +73,7 @@ export declare function filterSummary(summary: TokenSummary & {
  */
 export declare function attachCosts(summary: TokenSummary & {
     dataDir: string;
-}, pricing: PricingTable): UsageSummary;
+}, pricing: PricingTable): CostedSummary;
 /**
  * Read every day file into records, in day-file order. An absent data
  * directory (nothing written yet) yields an empty list.

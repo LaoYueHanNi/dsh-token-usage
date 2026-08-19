@@ -12,6 +12,7 @@ import {
   DEFAULT_PRICING_URL_OVERSEAS,
   ratesForKey,
   readPricingTable,
+  readUsdExchangeRate,
   resolvePricingUrl,
   resolveRate,
   syncCloudPricing,
@@ -275,6 +276,52 @@ describe('coerceCloudPricing', () => {
     expect(coerceCloudPricing({ models: 'nope' })).toBeNull()
     expect(coerceCloudPricing(null)).toBeNull()
   })
+
+  it('parses a usable envelope exchange rate', () => {
+    const feed = coerceCloudPricing({ version: 1, currency: 'RMB', usdExchangeRate: 7.25, models: [] })
+    expect(feed).not.toBeNull()
+    expect(feed!.usdExchangeRate).toBe(7.25)
+  })
+
+  it('drops missing, zero, negative, and non-numeric exchange rates', () => {
+    const envelope = (rate: unknown) => coerceCloudPricing({ version: 1, currency: 'RMB', usdExchangeRate: rate, models: [] })
+    expect(envelope(undefined)!.usdExchangeRate).toBeUndefined()
+    expect(envelope(0)!.usdExchangeRate).toBeUndefined()
+    expect(envelope(-1)!.usdExchangeRate).toBeUndefined()
+    expect(envelope(NaN)!.usdExchangeRate).toBeUndefined()
+    expect(envelope(Infinity)!.usdExchangeRate).toBeUndefined()
+    expect(envelope('7')!.usdExchangeRate).toBeUndefined()
+  })
+})
+
+describe('readUsdExchangeRate', () => {
+  it('returns the mirror envelope rate when present', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'token-usage-rate-'))
+    await writeFile(join(dir, 'pricing.ccsa.json'), JSON.stringify({
+      version: 4, updatedAt: 0, currency: 'RMB', usdExchangeRate: 7.3,
+      models: [],
+    }))
+    expect(await readUsdExchangeRate(dir)).toBe(7.3)
+  })
+
+  it('falls back to the built-in rate without a mirror or a rate', async () => {
+    const absent = await mkdtemp(join(tmpdir(), 'token-usage-rate-'))
+    expect(await readUsdExchangeRate(absent)).toBe(7)
+    const noprice = await mkdtemp(join(tmpdir(), 'token-usage-rate-'))
+    await writeFile(join(noprice, 'pricing.ccsa.json'), JSON.stringify({
+      version: 4, updatedAt: 0, currency: 'RMB', models: [],
+    }))
+    expect(await readUsdExchangeRate(noprice)).toBe(7)
+  })
+
+  it('falls back on a broken or non-RMB mirror', async () => {
+    const broken = await mkdtemp(join(tmpdir(), 'token-usage-rate-'))
+    await writeFile(join(broken, 'pricing.ccsa.json'), 'not json')
+    expect(await readUsdExchangeRate(broken)).toBe(7)
+    const usd = await mkdtemp(join(tmpdir(), 'token-usage-rate-'))
+    await writeFile(join(usd, 'pricing.ccsa.json'), JSON.stringify({ version: 1, currency: 'USD', models: [] }))
+    expect(await readUsdExchangeRate(usd)).toBe(7)
+  })
 })
 
 describe('cloudToTable', () => {
@@ -365,7 +412,7 @@ describe('syncCloudPricing', () => {
     vi.stubGlobal('fetch', fetch)
     const dir = await mkdtemp(join(tmpdir(), 'token-usage-sync-'))
     const result = await syncCloudPricing(dir, 'https://example.com/feed.json')
-    expect(result).toEqual({ version: 4, updatedAt: 1_780_000_000, models: 1, aliases: 1 })
+    expect(result).toEqual({ version: 4, updatedAt: 1_780_000_000, models: 1, aliases: 1, usdExchangeRate: 7 })
     expect(fetch).toHaveBeenCalledWith('https://example.com/feed.json', expect.anything())
     // The mirror keeps the raw feed (plus a trailing newline); the merged
     // read already reflects it.

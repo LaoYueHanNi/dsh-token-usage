@@ -8,6 +8,7 @@
  */
 import type { IncomingMessage } from 'node:http';
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver';
+import type { DisplayCurrency } from './wire.ts';
 /** The stats endpoint path, exported for tests and the client half. */
 export { STATS_PATH } from './wire.ts';
 /**
@@ -19,10 +20,16 @@ export { STATS_PATH } from './wire.ts';
  * @returns whether the request originates from the served page.
  */
 export declare function isSameOriginFetch(req: IncomingMessage): boolean;
+/** How the route resolves the display currency per request; a thunk so a
+ * live settings change (the region pick) lands without rebuilding the route. */
+export interface StatsRouteOptions {
+    currency?: () => DisplayCurrency;
+}
 /**
  * Build the stats route for one data directory.
  * @param dir - the plugin's data directory.
+ * @param options - the currency thunk; defaults to CNY (the domestic default).
  * @returns the exact GET route serving the JSON summary.
  */
-export declare function createStatsRoute(dir: string): WebRoute;
+export declare function createStatsRoute(dir: string, options?: StatsRouteOptions): WebRoute;
 //# sourceMappingURL=stats-route.d.ts.map

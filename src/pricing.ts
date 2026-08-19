@@ -54,6 +54,13 @@ export const DEFAULT_PRICING_URL_OVERSEAS = 'https://raw.githubusercontent.com/L
 /** Backward-compatible alias: the domestic (gitee) default feed. */
 export const DEFAULT_PRICING_URL = DEFAULT_PRICING_URL_DOMESTIC
 
+/**
+ * The RMB-per-USD rate used for display conversion when the cloud feed's
+ * envelope does not carry a usable `usdExchangeRate` (older mirrors). The
+ * feed owns the number; this is only the stand-in until it lands.
+ */
+export const DEFAULT_USD_EXCHANGE_RATE = 7
+
 /** Which cloud mirror the pricing sync prefers when no explicit URL is set. */
 export type PricingRegion = 'domestic' | 'overseas'
 
@@ -139,7 +146,15 @@ export interface CloudPricingData {
   version: number
   updatedAt: number
   currency: string
+  /** RMB per USD for display conversion; absent when the feed omits it or
+   * the value is not a positive finite number. */
+  usdExchangeRate?: number
   models: CloudPricingModel[]
+}
+
+/** A usable exchange rate: finite and strictly positive (0 would divide by zero). */
+function isExchangeRate(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
 }
 
 function coerceRates(value: unknown): CloudRates | null {
@@ -250,6 +265,7 @@ export function coerceCloudPricing(value: unknown): CloudPricingData | null {
     version: typeof feed.version === 'number' ? feed.version : 0,
     updatedAt: typeof feed.updatedAt === 'number' ? feed.updatedAt : 0,
     currency: feed.currency,
+    ...(isExchangeRate(feed.usdExchangeRate) ? { usdExchangeRate: feed.usdExchangeRate } : {}),
     models,
   }
 }
@@ -519,12 +535,27 @@ export async function readPricingTable(dir: string): Promise<PricingTable> {
   return merged
 }
 
+/**
+ * The effective USD conversion rate (RMB per USD) of one data directory:
+ * the cloud feed envelope's `usdExchangeRate` when it carries a usable one,
+ * else {@link DEFAULT_USD_EXCHANGE_RATE}. Absent, malformed, or non-RMB
+ * mirrors fall back the same way — display conversion never blocks on a
+ * broken feed. Hand-edited `pricing.json` carries no rate and never wins.
+ * @param dir - the plugin's data directory.
+ * @returns the positive rate the stats page converts display costs with.
+ */
+export async function readUsdExchangeRate(dir: string): Promise<number> {
+  const feed = coerceCloudPricing(await readJsonFile(dir, PRICING_CCSA_FILE))
+  return feed?.usdExchangeRate ?? DEFAULT_USD_EXCHANGE_RATE
+}
+
 /** The outcome of one successful cloud sync, for the command's reply. */
 export interface CloudSyncResult {
   version: number
   updatedAt: number
   models: number
   aliases: number
+  usdExchangeRate: number
 }
 
 /**
@@ -561,5 +592,6 @@ export async function syncCloudPricing(dir: string, url: string): Promise<CloudS
     updatedAt: feed.updatedAt,
     models: feed.models.length,
     aliases: feed.models.reduce((sum, model) => sum + (model.aliases?.length ?? 0), 0),
+    usdExchangeRate: feed.usdExchangeRate ?? DEFAULT_USD_EXCHANGE_RATE,
   }
 }
