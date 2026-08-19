@@ -1,18 +1,19 @@
 /**
- * Browser half of the token-usage plugin: contributes the Token Usage page to
- * the web settings surface. The page data arrives from the host half's stats
- * route (`/token-usage/stats`); nothing else on the client shares it, so the
- * section owns a plain fetch and no store. Export discipline: the /client
- * entry exposes only what cordis loading needs.
+ * Browser half of the token-usage plugin. Two registrations share one
+ * dictionary pair: the Token Usage stats page on the settings surface (data
+ * from the host half's stats route, `/token-usage/stats`), and the
+ * pricing-source card on the Plugins configuration tab (the `token-usage`
+ * settings namespace, edited through the settings scope). Export discipline:
+ * the /client entry exposes only what cordis loading needs.
  *
  * @module token-usage/client
  */
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client';
-/** Required services: the slot registry and the locale dictionary registry. */
+/** Required services: the slot registry, the locale dictionaries, and the settings scope. */
 export declare const inject: string[];
 /**
- * Register the dictionary pair, then the settings section once the shell's
- * `settings.section` declaration is on the ledger.
+ * Register the dictionary pair, then the settings page and the plugin
+ * configuration card once the shell's declarations are on the ledger.
  * @param ctx - client root context.
  */
 export declare function apply(ctx: ClientContext): void;

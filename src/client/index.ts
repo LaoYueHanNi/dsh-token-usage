@@ -1,9 +1,10 @@
 /**
- * Browser half of the token-usage plugin: contributes the Token Usage page to
- * the web settings surface. The page data arrives from the host half's stats
- * route (`/token-usage/stats`); nothing else on the client shares it, so the
- * section owns a plain fetch and no store. Export discipline: the /client
- * entry exposes only what cordis loading needs.
+ * Browser half of the token-usage plugin. Two registrations share one
+ * dictionary pair: the Token Usage stats page on the settings surface (data
+ * from the host half's stats route, `/token-usage/stats`), and the
+ * pricing-source card on the Plugins configuration tab (the `token-usage`
+ * settings namespace, edited through the settings scope). Export discipline:
+ * the /client entry exposes only what cordis loading needs.
  *
  * @module token-usage/client
  */
@@ -12,18 +13,30 @@ import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 // Type-only: pulls the ui-settings SlotMap merge ('settings.section') and the
 // owner-share type into this program.
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
+// Type-only: pulls the ui-settings-plugins keyed-slot declaration
+// ('settings.plugin.item') into this program. The value face stays
+// uncompromised: cross-plugin collaboration goes through the slot system.
+import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 // Type-only: pulls the locale service's Context merge (ctx.locale) and the
 // shared `common` vocabulary into the `t` seat's key domain.
 import type {} from '@deepseek-ai/dsh-client-locale/client'
+import { CardForm, type SectionValue } from './card-form.ts'
+import { TokenUsageCard } from './TokenUsageCard.tsx'
 import { TokenUsageSection } from './TokenUsageSection.tsx'
 import { en, NS, zh } from './locales.ts'
 
-/** Required services: the slot registry and the locale dictionary registry. */
-export const inject = ['slots', 'locale']
+/**
+ * Namespace of the token-usage settings section. Spelled here rather than
+ * imported: a client package must not depend on a Host package.
+ */
+const TOKEN_USAGE_NS = 'token-usage'
+
+/** Required services: the slot registry, the locale dictionaries, and the settings scope. */
+export const inject = ['slots', 'locale', 'connection', 'remote', 'settingsScope']
 
 /**
- * Register the dictionary pair, then the settings section once the shell's
- * `settings.section` declaration is on the ledger.
+ * Register the dictionary pair, then the settings page and the plugin
+ * configuration card once the shell's declarations are on the ledger.
  * @param ctx - client root context.
  */
 export function apply(ctx: ClientContext): void {
@@ -38,4 +51,16 @@ export function apply(ctx: ClientContext): void {
     label: () => t('nav.label'),
     locale: NS,
   }, TokenUsageSection))
+
+  // The Plugins configuration tab dispatches keyed cards for the namespaces
+  // the Host serves; the token-usage host half registers this key, so the
+  // pricing card pairs with it without any upstream change.
+  const form = new CardForm(ctx.settingsScope.bind<SectionValue>({ namespace: TOKEN_USAGE_NS }))
+  const store = form.bind()
+  ctx.slots.inject('settings.plugin.item', () => ctx.slots.register({
+    name: 'settings.plugin.item',
+    key: TOKEN_USAGE_NS,
+    locale: NS,
+    inject: () => ({ hooks: { tokenUsageCard: store }, ...form.actions() }),
+  }, TokenUsageCard))
 }

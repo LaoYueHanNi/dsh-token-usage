@@ -25,9 +25,18 @@ describe.skipIf(!built)('client bundle', () => {
     expect(typeof captured.factory).toBe('function')
 
     const exports = (captured.factory as (injectedRequire: (spec: string) => unknown) => unknown)(
-      (spec) => require(spec),
+      // The browser's frozen module table answers platform modules; katex's
+      // stylesheet rides only the npm distribution of ui-primitives, so the
+      // node smoke stubs that face instead of pulling css into require.
+      (spec) => {
+        if (spec.endsWith('.css')) return {}
+        if (spec === '@deepseek-ai/dsh-client-ui-primitives') {
+          return { IconChevronDownOutline14: () => null }
+        }
+        return require(spec)
+      },
     ) as { apply?: unknown; inject?: unknown }
     expect(typeof exports.apply).toBe('function')
-    expect(exports.inject).toEqual(['slots', 'locale'])
+    expect(exports.inject).toEqual(['slots', 'locale', 'connection', 'remote', 'settingsScope'])
   })
 })

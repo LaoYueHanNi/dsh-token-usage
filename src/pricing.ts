@@ -38,11 +38,52 @@ export const PRICING_FILE = 'pricing.json'
 export const PRICING_CCSA_FILE = 'pricing.ccsa.json'
 
 /**
- * The default cloud pricing feed: the model-price-table repository the
- * analyzer also pulls from (¥ per million tokens, currency RMB). Override
- * with the `pricingUrl` config key.
+ * The default domestic (China) cloud pricing feed: the model-price-table
+ * repository the analyzer also pulls from (¥ per million tokens, currency
+ * RMB). Overridden through the `pricingUrlDomestic` config key.
  */
-export const DEFAULT_PRICING_URL = 'https://gitee.com/oyw125/model-price-table/raw/master/model_pricing.json'
+export const DEFAULT_PRICING_URL_DOMESTIC = 'https://gitee.com/oyw125/model-price-table/raw/master/model_pricing.json'
+
+/**
+ * The default overseas cloud pricing feed: the same model-price-table,
+ * mirrored to GitHub because the gitee CDN is slow or unreliable outside
+ * mainland China. Overridden through the `pricingUrlOverseas` config key.
+ */
+export const DEFAULT_PRICING_URL_OVERSEAS = 'https://raw.githubusercontent.com/LaoYueHanNi/model-price-table/master/model_pricing.json'
+
+/** Backward-compatible alias: the domestic (gitee) default feed. */
+export const DEFAULT_PRICING_URL = DEFAULT_PRICING_URL_DOMESTIC
+
+/** Which cloud mirror the pricing sync prefers when no explicit URL is set. */
+export type PricingRegion = 'domestic' | 'overseas'
+
+/** The URL inputs of the pricing sync: an explicit single feed, or the
+ * per-region mirrors plus the chosen region. */
+export interface PricingSourceInput {
+  /** Explicit single feed URL; wins over every region/mirror setting. */
+  pricingUrl?: string
+  /** Domestic mirror override; defaults to the gitee feed. */
+  pricingUrlDomestic?: string
+  /** Overseas mirror override; defaults to the github feed. */
+  pricingUrlOverseas?: string
+  /** Which mirror to pull when `pricingUrl` is unset; defaults to `domestic`. */
+  pricingRegion?: PricingRegion
+}
+
+/**
+ * Resolve the feed URL to fetch: an explicit `pricingUrl` wins outright;
+ * otherwise `pricingRegion` picks the domestic (default) or overseas mirror,
+ * each overridable through its own key. Deliberately no IP sniffing — the
+ * deployer sets the region once in the profile config, so the choice is
+ * predictable and never depends on a third-party geo lookup.
+ */
+export function resolvePricingUrl(input: PricingSourceInput = {}): string {
+  if (input.pricingUrl !== undefined) return input.pricingUrl
+  if (input.pricingRegion === 'overseas') {
+    return input.pricingUrlOverseas ?? DEFAULT_PRICING_URL_OVERSEAS
+  }
+  return input.pricingUrlDomestic ?? DEFAULT_PRICING_URL_DOMESTIC
+}
 
 /** A positive (or zero) finite number; rates may be 0 but never negative. */
 function isRate(value: unknown): value is number {

@@ -54,6 +54,28 @@ Flat `pricing.json` shape (keys are model ids matching the recorded `model` exac
 
 A broken file or invalid entries leave the affected models unpriced without breaking the stats page; save and refresh the page to apply changes. Default location: `~/.dsh/token-usage/` (wherever `path` points when configured).
 
+### Choosing the pricing mirror
+
+The startup sync pulls from **Gitee** by default (fast inside mainland China). Installations outside mainland China can point the sync at the **GitHub mirror** of the same table — either from the web settings (on **Settings → Plugins**, the collapsed **Token Usage** card — described with a one-line *Pricing data source* banner — offers a region switch: default / domestic / overseas, editable live) or with a single config line. No IP sniffing: you just pick once.
+
+```yml
+# in the plugin's profile config
+plugins:
+  token-usage:
+    pricingRegion: overseas   # default: domestic
+```
+
+The web card exposes only the region switch; the full key set (all optional):
+
+| Key | Default | Meaning |
+|---|---|---|
+| `pricingUrl` | — | Explicit single feed (cordis.yml only); wins over every other key below |
+| `pricingUrlDomestic` | gitee feed | Domestic mirror override (cordis.yml only; for self-maintained forks) |
+| `pricingUrlOverseas` | github mirror | Overseas mirror override (cordis.yml only; for self-maintained forks) |
+| `pricingRegion` | `domestic` | `domestic` → Gitee, `overseas` → GitHub (when `pricingUrl` is unset) |
+
+A saved region change re-syncs the mirror immediately; there is no automatic failover — the chosen mirror fails, the previous mirror stays until a later sync succeeds.
+
 ## Install
 
 ### From GitHub (recommended)
