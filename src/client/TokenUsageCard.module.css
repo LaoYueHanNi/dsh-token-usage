@@ -139,11 +139,86 @@
   opacity: 0.6;
 }
 
+/* The directory control and its native-dialog launcher share one row. */
+.inputRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.inputRow .input {
+  flex: 1;
+  min-width: 0;
+}
+
+.browse {
+  appearance: none;
+  flex: none;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font: inherit;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-secondary);
+  background: none;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.browse:hover:not(:disabled) {
+  color: var(--dsw-alias-label-primary);
+  border-color: var(--dsw-alias-label-dimmed);
+}
+
+.browse:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.browse:focus-visible {
+  outline: 2px solid var(--dsw-alias-brand-primary);
+  outline-offset: 1px;
+}
+
 .hint {
   margin: 0;
   font-size: 12px;
   line-height: 1.5;
   color: var(--dsw-alias-label-tertiary);
+}
+
+.migration {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-layer-2);
+}
+
+.migrationLabel {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--dsw-alias-label-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.migrationBar {
+  display: block;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--dsw-alias-bg-multi-select);
+  overflow: hidden;
+}
+
+.migrationFill {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--dsw-alias-brand-primary);
+  transition: width .2s ease;
 }
 
 .footer {

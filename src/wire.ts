@@ -14,6 +14,25 @@ export type { UsageFields, UsageRecord } from './usage-record.ts'
 /** The stats endpoint path, served by the host half's webServer route. */
 export const STATS_PATH = '/token-usage/stats'
 
+/** The migration-progress endpoint path, polled by the browser card. */
+export const MIGRATION_PATH = '/token-usage/migration'
+
+/**
+ * The directory-guard endpoint path, consulted by the browser card before a
+ * staged directory save commits. The settings wire swallows a refused write
+ * (the bound scope recovers silently and never rejects), so this route is the
+ * one channel that can tell the card WHY a save would not land.
+ */
+export const DIR_GUARD_PATH = '/token-usage/dir-guard'
+
+/** The guard's verdict for one would-be directory save. */
+export interface DirectoryGuardView {
+  /** True when the Host's section validator would refuse the save right now. */
+  blocked: boolean
+  /** Sessions mid-conversation (an open turn) at verdict time, for the notice's number. */
+  interactingSessions: number
+}
+
 /** Aggregated token counts over one group of records. */
 export interface UsageTotals {
   /** Number of recorded requests (records without provider usage count here). */

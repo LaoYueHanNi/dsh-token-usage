@@ -9,14 +9,21 @@
 
 import type { IncomingMessage } from 'node:http'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
+import type { MigrationProgress } from './migrate.ts'
 import { readPricingTable, readUsdExchangeRate, resolveRate } from './pricing.ts'
 import { attachCosts, buildSummary, filterSummary } from './stats.ts'
 import type { RateResolver } from './stats.ts'
-import { STATS_PATH, UNPRICED_KEY } from './wire.ts'
-import type { DisplayCurrency } from './wire.ts'
+import { DIR_GUARD_PATH, MIGRATION_PATH, STATS_PATH, UNPRICED_KEY } from './wire.ts'
+import type { DirectoryGuardView, DisplayCurrency } from './wire.ts'
 
 /** The stats endpoint path, exported for tests and the client half. */
 export { STATS_PATH } from './wire.ts'
+
+/** The migration-progress endpoint path, exported for the client half. */
+export { MIGRATION_PATH } from './wire.ts'
+
+/** The directory-guard endpoint path, exported for the client half. */
+export { DIR_GUARD_PATH } from './wire.ts'
 
 /** A day query key must be exactly `YYYY-MM-DD`. */
 const DAY_KEY = /^\d{4}-\d{2}-\d{2}$/u
@@ -69,13 +76,80 @@ export interface StatsRouteOptions {
   currency?: () => DisplayCurrency
 }
 
+/** Live progress of a data-directory relocation; undefined when none runs. */
+export type MigrationStatus = MigrationProgress | undefined
+
 /**
- * Build the stats route for one data directory.
- * @param dir - the plugin's data directory.
+ * Build the migration-progress route the browser card polls while a move
+ * runs. Read-only by construction: it answers the shared status object and
+ * nothing else.
+ * @param status - reads the live migration state.
+ * @returns the exact GET route answering the progress JSON.
+ */
+export function createMigrationRoute(status: () => MigrationStatus): WebRoute {
+  return {
+    kind: 'exact',
+    path: MIGRATION_PATH,
+    handler: (req, res) => {
+      if (req.method !== 'GET') {
+        res.writeHead(405, { 'content-type': 'text/plain; charset=utf-8' })
+        res.end('method not allowed')
+        return
+      }
+      if (!isSameOriginFetch(req)) {
+        res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' })
+        res.end('forbidden')
+        return
+      }
+      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+      res.end(JSON.stringify(status() ?? null))
+    },
+  }
+}
+
+/**
+ * Build the directory-guard route the browser card consults before saving a
+ * staged directory edit: the settings wire never delivers a refused write's
+ * reason, so the card asks here whether the save would be refused and shows
+ * the verdict's count itself. Read-only by construction: it answers the
+ * caller's judge verdict and writes nothing.
+ * @param judge - answers the verdict for one proposed stored path
+ * (`undefined` when the save would clear the override).
+ * @returns the exact GET route answering the verdict JSON.
+ */
+export function createDirectoryGuardRoute(judge: (proposed: string | undefined) => DirectoryGuardView): WebRoute {
+  return {
+    kind: 'exact',
+    path: DIR_GUARD_PATH,
+    handler: (req, res) => {
+      if (req.method !== 'GET') {
+        res.writeHead(405, { 'content-type': 'text/plain; charset=utf-8' })
+        res.end('method not allowed')
+        return
+      }
+      if (!isSameOriginFetch(req)) {
+        res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' })
+        res.end('forbidden')
+        return
+      }
+      const params = new URL(req.url ?? '/', 'http://localhost').searchParams
+      const raw = params.get('path')
+      // A blank path is the clear-back-to-default gesture, not a stored ''.
+      const proposed = raw === null || raw === '' ? undefined : raw
+      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+      res.end(JSON.stringify(judge(proposed)))
+    },
+  }
+}
+
+/**
+ * Build the stats route over a data directory the caller may relocate live.
+ * @param dir - reads the directory currently in force (per request, so a
+ * settings-driven move starts answering from the new location at once).
  * @param options - the currency thunk; defaults to CNY (the domestic default).
  * @returns the exact GET route serving the JSON summary.
  */
-export function createStatsRoute(dir: string, options: StatsRouteOptions = {}): WebRoute {
+export function createStatsRoute(dir: () => string, options: StatsRouteOptions = {}): WebRoute {
   return {
     kind: 'exact',
     path: STATS_PATH,
@@ -97,10 +171,11 @@ export function createStatsRoute(dir: string, options: StatsRouteOptions = {}): 
         return
       }
       try {
+        const dataDir = dir()
         // The pricing table is user-maintained and may change between
         // requests; reading it per request keeps the page honest without
         // any caching (the file is small and the route is not hot).
-        const pricing = await readPricingTable(dir)
+        const pricing = await readPricingTable(dataDir)
         // Per-record pricing: each record resolves through the rule chain at
         // its own timestamp (tier approximated by its input-side tokens).
         const resolve: RateResolver = record => {
@@ -112,13 +187,13 @@ export function createStatsRoute(dir: string, options: StatsRouteOptions = {}): 
           return resolveRate(rules, record.time, context).key
         }
         const summary = attachCosts(
-          filterSummary(await buildSummary(dir, undefined, resolve), filter.from, filter.to, filter.model),
+          filterSummary(await buildSummary(dataDir, undefined, resolve), filter.from, filter.to, filter.model),
           pricing,
         )
         // Display-currency metadata: amounts stay RMB on the wire; the page
         // converts (÷ usdExchangeRate) when the region pick says USD.
         const currency = options.currency?.() ?? 'CNY'
-        const payload = { ...summary, currency, usdExchangeRate: await readUsdExchangeRate(dir) }
+        const payload = { ...summary, currency, usdExchangeRate: await readUsdExchangeRate(dataDir) }
         res.writeHead(200, {
           'content-type': 'application/json; charset=utf-8',
           // Stats change with every request; the browser must not cache them.

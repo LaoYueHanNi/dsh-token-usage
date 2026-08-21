@@ -1,10 +1,14 @@
 // @vitest-environment jsdom
 /**
- * Token-usage plugin-configuration pricing card tests: the staged form over a
- * fake settings scope (seed, edit, clear, discard, save landing and failing,
- * scope-change republication) and the card component's rendering contract
- * (unavailable renders nothing, disclosure, read-only notice, unsaved badge,
- * save-button gating).
+ * Token-usage plugin-configuration card tests: the staged form over a fake
+ * settings scope (seed, edit, clear, discard, save landing and failing,
+ * scope-change republication — for both the data directory and the region
+ * pick) and the card component's rendering contract (unavailable renders
+ * nothing, disclosure, read-only notice, unsaved badge, save-button gating,
+ * migration progress locking). A staged directory save is vetted through the
+ * guard route first: these tests stub global fetch with its verdict JSON, so
+ * a mid-conversation refusal lands before any write while an unreachable guard
+ * defers to the write's own read-back.
  */
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { useEffect, useState } from 'react'
@@ -92,6 +96,7 @@ function formOf(scope: FakeScope): { form: CardForm; read(): CardState } {
 afterEach(() => {
   cleanup()
   vi.restoreAllMocks()
+  vi.unstubAllGlobals()
 })
 
 describe('CardForm', () => {
@@ -154,6 +159,52 @@ describe('CardForm', () => {
     })
   })
 
+  it('refuses a directory save up front while conversations run, without writing', async () => {
+    // The guard route answers a veto before anything writes: the save stops at
+    // the notice, the drafts stay staged for the retry.
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ blocked: true, interactingSessions: 2 }))))
+    const scope = new FakeScope(ready({}))
+    const { form, read } = formOf(scope)
+    form.actions().editField('path', 'D:/elsewhere')
+    form.actions().save()
+    await vi.waitFor(() => {
+      expect(read()).toMatchObject({ failed: true, refusal: { kind: 'sessions-interacting', interactingSessions: 2 } })
+    })
+    expect(scope.set).not.toHaveBeenCalled()
+    expect(read()).toMatchObject({ dirty: true, fields: { path: 'D:/elsewhere' } })
+    form.actions().editField('path', 'D:/elsewhere2')
+    expect(read().refusal).toBeUndefined()
+  })
+
+  it('names the veto when the write silently does not land', async () => {
+    // The pre-check passed but a conversation started mid-save: the validator
+    // refused the write, the scope recovered silently, and the post-write
+    // guard re-check still names the refusal.
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ blocked: true, interactingSessions: 2 }))))
+    const scope = new FakeScope(ready({}))
+    scope.set.mockImplementation(async () => {})
+    const { form, read } = formOf(scope)
+    form.actions().editField('path', 'D:/elsewhere')
+    form.actions().save()
+    await vi.waitFor(() => {
+      expect(read()).toMatchObject({ failed: true, refusal: { kind: 'sessions-interacting', interactingSessions: 2 } })
+    })
+  })
+
+  it('proceeds to the write when the guard route is unreachable', async () => {
+    // A transport failure stays advisory: the save writes and its read-back
+    // alone judges acceptance.
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('guard route unreachable') }))
+    const scope = new FakeScope(ready({}))
+    const { form, read } = formOf(scope)
+    form.actions().editField('path', 'D:/data')
+    form.actions().save()
+    await vi.waitFor(() => {
+      expect(scope.set).toHaveBeenCalledWith('path', 'D:/data')
+      expect(read()).toMatchObject({ dirty: false, failed: false })
+    })
+  })
+
   it('discards a staged edit back to the effective value', () => {
     const { form, read } = formOf(new FakeScope(ready({ value: { pricingRegion: 'domestic' } })))
     form.actions().editField('pricingRegion', 'overseas')
@@ -167,11 +218,60 @@ describe('CardForm', () => {
     scope.publish(ready({ value: { pricingRegion: 'overseas' } }))
     expect(read().fields.pricingRegion).toBe('overseas')
   })
+
+  it('seeds the data directory from the resolved value without an override', () => {
+    const { read } = formOf(new FakeScope(ready({ value: { path: 'D:/data' } })))
+    expect(read()).toMatchObject({
+      fields: { path: 'D:/data', pricingRegion: '' },
+      overridden: { path: false, pricingRegion: false },
+    })
+  })
+
+  it('stages and saves a data-directory edit, clearing the draft on landing', async () => {
+    const scope = new FakeScope(ready({}))
+    const { form, read } = formOf(scope)
+    form.actions().editField('path', 'D:/data')
+    expect(read()).toMatchObject({ dirty: true, fields: { path: 'D:/data' }, overridden: { path: true } })
+    form.actions().save()
+    await vi.waitFor(() => {
+      expect(scope.set).toHaveBeenCalledWith('path', 'D:/data')
+      expect(read()).toMatchObject({ dirty: false, failed: false, fields: { path: 'D:/data' } })
+    })
+  })
+
+  it('saves an empty data-directory draft by unsetting the field', async () => {
+    const scope = new FakeScope(ready({ value: { path: 'D:/data' }, user: { path: 'D:/data' } }))
+    const { form } = formOf(scope)
+    form.actions().clearField('path')
+    form.actions().save()
+    await vi.waitFor(() => { expect(scope.unset).toHaveBeenCalledWith('path') })
+  })
+
+  it('carries both fields through one staged save', async () => {
+    const scope = new FakeScope(ready({}))
+    const { form, read } = formOf(scope)
+    form.actions().editField('path', 'D:/data')
+    form.actions().editField('pricingRegion', 'overseas')
+    form.actions().save()
+    await vi.waitFor(() => {
+      expect(scope.set).toHaveBeenCalledWith('path', 'D:/data')
+      expect(scope.set).toHaveBeenCalledWith('pricingRegion', 'overseas')
+      expect(read()).toMatchObject({ dirty: false, fields: { path: 'D:/data', pricingRegion: 'overseas' } })
+    })
+  })
+
+  it('reports no migration while the endpoint stays quiet', () => {
+    const { read } = formOf(new FakeScope(ready({})))
+    expect(read().migration).toBeUndefined()
+  })
 })
 
 describe('TokenUsageCard', () => {
-  /** Props stub: locale copy plus the form face over a fake scope. */
-  function propsOf(scope: FakeScope): TokenUsageCardProps {
+  /**
+   * Props stub: locale copy plus the form face over a fake scope. The picker
+   * seat defaults to a cancelling dialog; the browse tests override it.
+   */
+  function propsOf(scope: FakeScope, pickDirectory: () => Promise<string | null> = async () => null): TokenUsageCardProps {
     const form = new CardForm(scope as unknown as SettingsScope<SectionValue>)
     const store = form.bind()
     const actions = form.actions()
@@ -189,6 +289,7 @@ describe('TokenUsageCard', () => {
       clearField: actions.clearField,
       save: actions.save,
       discard: actions.discard,
+      pickDirectory,
     } as unknown as TokenUsageCardProps
   }
 
@@ -205,7 +306,7 @@ describe('TokenUsageCard', () => {
     // The description rides under the title inside the header, like the
     // built-in plugin cards ("DeepSeek 搜索提供方" style).
     expect(within(header).getByText('Token 用量')).not.toBeNull()
-    expect(within(header).getByText('设置定价数据源')).not.toBeNull()
+    expect(within(header).getByText('数据目录与定价数据源')).not.toBeNull()
   })
 
   it('discloses the region control on header click', () => {
@@ -214,6 +315,14 @@ describe('TokenUsageCard', () => {
     expect(screen.queryByLabelText('定价区域')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: '展开: Token 用量' }))
     expect((screen.getByLabelText('定价区域') as HTMLSelectElement).value).toBe('overseas')
+  })
+
+  it('discloses the data-directory control seeded from the resolved value', () => {
+    const scope = new FakeScope(ready({ value: { path: 'D:/data' } }))
+    render(<TokenUsageCard {...propsOf(scope)} />)
+    expect(screen.queryByLabelText('数据目录')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '展开: Token 用量' }))
+    expect((screen.getByLabelText('数据目录') as HTMLInputElement).value).toBe('D:/data')
   })
 
   it('carries the unsaved badge on the header once edited', () => {
@@ -241,5 +350,79 @@ describe('TokenUsageCard', () => {
     expect(save.disabled).toBe(true)
     fireEvent.change(screen.getByLabelText('定价区域'), { target: { value: 'overseas' } })
     expect(save.disabled).toBe(false)
+  })
+
+  it('shows the migration progress line and locks the controls while a move runs', () => {
+    const scope = new FakeScope(ready({ value: { path: 'D:/data' } }))
+    // Override the selector seat to inject an in-flight migration view.
+    const base = propsOf(scope)
+    const withMigration = {
+      ...base,
+      useTokenUsageCard: (select: (state: CardState) => CardState) => select({ ...base.useTokenUsageCard((s: CardState) => s), migration: { done: 3, total: 5, phase: 'copying' as const } }),
+    } as unknown as TokenUsageCardProps
+    render(<TokenUsageCard {...withMigration} />)
+    fireEvent.click(screen.getByRole('button', { name: '展开: Token 用量' }))
+    expect(screen.getByText('正在复制数据 3/5 个文件…')).not.toBeNull()
+    expect((screen.getByLabelText('数据目录') as HTMLInputElement).disabled).toBe(true)
+    expect((screen.getByLabelText('定价区域') as HTMLSelectElement).disabled).toBe(true)
+    const save = screen.getByRole('button', { name: '保存' }) as HTMLButtonElement
+    expect(save.disabled).toBe(true)
+  })
+
+  it('names the mid-conversation veto on the failure line', () => {
+    const scope = new FakeScope(ready({}))
+    // Override the selector seat to inject a refused-save state.
+    const base = propsOf(scope)
+    const refused = {
+      ...base,
+      useTokenUsageCard: (select: (state: CardState) => CardState) => select({ ...base.useTokenUsageCard((s: CardState) => s), failed: true, refusal: { kind: 'sessions-interacting' as const, interactingSessions: 2 } }),
+    } as unknown as TokenUsageCardProps
+    render(<TokenUsageCard {...refused} />)
+    fireEvent.click(screen.getByRole('button', { name: '展开: Token 用量' }))
+    expect(screen.getByText('有会话正在进行对话，无法保存目录修改；请等待对话结束（当前 2 个）。')).not.toBeNull()
+  })
+
+  it('shows only the default-location hint under the directory field, even when overridden', () => {
+    const scope = new FakeScope(ready({ value: { path: 'D:/data' }, user: { path: 'D:/data' } }))
+    render(<TokenUsageCard {...propsOf(scope)} />)
+    fireEvent.click(screen.getByRole('button', { name: '展开: Token 用量' }))
+    expect(screen.getByText('留空使用默认位置（~/.dsh/token-usage）。')).not.toBeNull()
+    // The directory hint carries no override prefix (that badge belongs to the
+    // region hint, unset here).
+    expect(screen.queryByText('已覆盖默认值')).toBeNull()
+  })
+
+  it('stages the picked directory into the input as a dirty draft', async () => {
+    const scope = new FakeScope(ready({}))
+    const pickDirectory = vi.fn(async () => 'D:/picked/usage')
+    render(<TokenUsageCard {...propsOf(scope, pickDirectory)} />)
+    fireEvent.click(screen.getByRole('button', { name: '展开: Token 用量' }))
+    fireEvent.click(screen.getByRole('button', { name: '浏览…' }))
+    await vi.waitFor(() => {
+      expect((screen.getByLabelText('数据目录') as HTMLInputElement).value).toBe('D:/picked/usage')
+    })
+    // The pick is staged, not saved: the badge says so until 保存 commits it.
+    expect(screen.getByText('未保存')).not.toBeNull()
+    expect(pickDirectory).toHaveBeenCalledTimes(1)
+  })
+
+  it('leaves the draft untouched when the dialog is dismissed', async () => {
+    const scope = new FakeScope(ready({ value: { path: 'D:/current' } }))
+    render(<TokenUsageCard {...propsOf(scope, async () => null)} />)
+    fireEvent.click(screen.getByRole('button', { name: '展开: Token 用量' }))
+    fireEvent.click(screen.getByRole('button', { name: '浏览…' }))
+    await new Promise(resolve => setTimeout(resolve, 50))
+    expect((screen.getByLabelText('数据目录') as HTMLInputElement).value).toBe('D:/current')
+    expect(screen.queryByText('未保存')).toBeNull()
+  })
+
+  it('keeps the draft when the picker fails', async () => {
+    const scope = new FakeScope(ready({}))
+    render(<TokenUsageCard {...propsOf(scope, async () => { throw new Error('picker unavailable') })} />)
+    fireEvent.click(screen.getByRole('button', { name: '展开: Token 用量' }))
+    fireEvent.click(screen.getByRole('button', { name: '浏览…' }))
+    await new Promise(resolve => setTimeout(resolve, 50))
+    expect((screen.getByLabelText('数据目录') as HTMLInputElement).value).toBe('')
+    expect(screen.queryByText('未保存')).toBeNull()
   })
 })

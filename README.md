@@ -54,9 +54,24 @@ Flat `pricing.json` shape (keys are model ids matching the recorded `model` exac
 
 A broken file or invalid entries leave the affected models unpriced without breaking the stats page; save and refresh the page to apply changes. Default location: `~/.dsh/token-usage/` (wherever `path` points when configured).
 
+### Changing the data directory
+
+The data directory is editable from the web settings: on **Settings → Plugins**, inside the collapsed **Token Usage** card, the **Data directory** input leaves the location at its default (`~/.dsh/token-usage/`) when blank; saving an absolute path **takes effect immediately** — the historical data migrates into the new directory (verbatim file copy, then the switch and the source cleanup) with no restart and no manual data move.
+
+The **Browse…** button next to the input opens the directory picker — the dsh framework's own directory-picking capability (the same chooser the workspace flows use, driven through `ctx.workspaces.pickDirectory()`): a native OS dialog on a local desktop, switching to an in-app browser for remote or headless clients. A picked path only stages the draft — you still press save to commit it.
+
+The migration is a two-phase commit (copy everything → flip the running directory → clean the source): at any failure point the data exists in both places or only in the source — never only in the target. **A directory change cannot be saved while a conversation is in progress** — events only append while a turn is open, so only an actively conversing session counts and an idle open tab never blocks a save — the card pre-checks through the `/token-usage/dir-guard` route before anything writes (the verdict is whether a conversation is still interacting), refusing the save up front and naming the in-progress conversation count on the failure line; nothing persists. Wait for the conversation to end, then save again and the move proceeds. The stats cache `rollup.json` is derived state: it does not travel, and the first stats read after the switch rebuilds it. The directory can also be set directly:
+
+```yml
+# in the plugin's profile config
+plugins:
+  token-usage:
+    path: D:/data/token-usage   # default: ~/.dsh/token-usage/
+```
+
 ### Choosing the pricing mirror
 
-The startup sync pulls from **Gitee** by default (fast inside mainland China). Installations outside mainland China can point the sync at the **GitHub mirror** of the same table — either from the web settings (on **Settings → Plugins**, the collapsed **Token Usage** card — described with a one-line *Pricing data source* banner — offers a region switch: default / CN / global, editable live) or with a single config line. No IP sniffing: you just pick once.
+The startup sync pulls from **Gitee** by default (fast inside mainland China). Installations outside mainland China can point the sync at the **GitHub mirror** of the same table — either from the web settings (the **Pricing region** dropdown in the same **Token Usage** card, editable live) or with a single config line. No IP sniffing: you just pick once.
 
 ```yml
 # in the plugin's profile config
@@ -65,10 +80,11 @@ plugins:
     pricingRegion: overseas   # default: domestic
 ```
 
-The web card exposes only the region switch; the full key set (all optional):
+The web card exposes the data directory and the region switch; the full key set (all optional):
 
 | Key | Default | Meaning |
 |---|---|---|
+| `path` | `~/.dsh/token-usage/` | Data directory (editable on the web card; saving migrates) |
 | `pricingUrl` | — | Explicit single feed (cordis.yml only); wins over every other key below |
 | `pricingUrlDomestic` | gitee feed | Domestic mirror override (cordis.yml only; for self-maintained forks) |
 | `pricingUrlOverseas` | github mirror | Overseas mirror override (cordis.yml only; for self-maintained forks) |

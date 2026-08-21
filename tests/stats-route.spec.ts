@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Context, Service } from '@deepseek-ai/cordis'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import * as plugin from '../src/index.ts'
-import { createStatsRoute, isSameOriginFetch, STATS_PATH } from '../src/stats-route.ts'
+import { createDirectoryGuardRoute, createMigrationRoute, createStatsRoute, DIR_GUARD_PATH, isSameOriginFetch, MIGRATION_PATH, STATS_PATH } from '../src/stats-route.ts'
 import { currencyOfRegion } from '../src/wire.ts'
 import type { UsageRecord } from '../src/usage-record.ts'
 import { messageEvent } from './helpers.ts'
@@ -85,7 +85,7 @@ describe('createStatsRoute', () => {
   it('serves the JSON summary on GET', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'token-usage-route-'))
     await writeFile(join(dir, 'usage-2026-01-15.jsonl'), `${JSON.stringify(fixtureRecord(100))}\n`)
-    const route = createStatsRoute(dir)
+    const route = createStatsRoute(() => dir)
     const { res, captured } = fakeResponse()
     await route.handler(fakeRequest(), res)
     expect(captured.status).toBe(200)
@@ -98,7 +98,7 @@ describe('createStatsRoute', () => {
 
   it('rejects non-GET methods with 405', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'token-usage-route-'))
-    const route = createStatsRoute(dir)
+    const route = createStatsRoute(() => dir)
     const { res, captured } = fakeResponse()
     await route.handler(fakeRequest({ method: 'POST' }), res)
     expect(captured.status).toBe(405)
@@ -106,7 +106,7 @@ describe('createStatsRoute', () => {
 
   it('refuses cross-site browser fetches with 403', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'token-usage-route-'))
-    const route = createStatsRoute(dir)
+    const route = createStatsRoute(() => dir)
     const { res, captured } = fakeResponse()
     await route.handler(fakeRequest({ headers: { 'sec-fetch-site': 'cross-site' } }), res)
     expect(captured.status).toBe(403)
@@ -114,7 +114,7 @@ describe('createStatsRoute', () => {
 
   it('answers an absent data directory with an empty summary', async () => {
     const dir = join(tmpdir(), `token-usage-absent-${Date.now()}`)
-    const route = createStatsRoute(dir)
+    const route = createStatsRoute(() => dir)
     const { res, captured } = fakeResponse()
     await route.handler(fakeRequest(), res)
     expect(captured.status).toBe(200)
@@ -122,7 +122,8 @@ describe('createStatsRoute', () => {
   })
 
   it('filters by an inclusive day range', async () => {
-    const route = createStatsRoute(await filteredDataDir())
+    const dir = await filteredDataDir()
+    const route = createStatsRoute(() => dir)
     const { res, captured } = fakeResponse()
     await route.handler(fakeRequest({ url: `${STATS_PATH}?from=2026-01-11&to=2026-01-12` }), res)
     expect(captured.status).toBe(200)
@@ -132,7 +133,8 @@ describe('createStatsRoute', () => {
   })
 
   it('filters by model and combines it with a day range', async () => {
-    const route = createStatsRoute(await filteredDataDir())
+    const dir = await filteredDataDir()
+    const route = createStatsRoute(() => dir)
     const { res, captured } = fakeResponse()
     await route.handler(fakeRequest({ url: `${STATS_PATH}?model=deepseek-chat&from=2026-01-10` }), res)
     expect(captured.status).toBe(200)
@@ -142,7 +144,8 @@ describe('createStatsRoute', () => {
   })
 
   it('treats blank query values as absent', async () => {
-    const route = createStatsRoute(await filteredDataDir())
+    const dir = await filteredDataDir()
+    const route = createStatsRoute(() => dir)
     const { res, captured } = fakeResponse()
     await route.handler(fakeRequest({ url: `${STATS_PATH}?from=&to=&model=` }), res)
     expect(captured.status).toBe(200)
@@ -150,14 +153,16 @@ describe('createStatsRoute', () => {
   })
 
   it('rejects a malformed day key with 400', async () => {
-    const route = createStatsRoute(await filteredDataDir())
+    const dir = await filteredDataDir()
+    const route = createStatsRoute(() => dir)
     const { res, captured } = fakeResponse()
     await route.handler(fakeRequest({ url: `${STATS_PATH}?from=2026-1-1` }), res)
     expect(captured.status).toBe(400)
   })
 
   it('rejects an inverted day range with 400', async () => {
-    const route = createStatsRoute(await filteredDataDir())
+    const dir = await filteredDataDir()
+    const route = createStatsRoute(() => dir)
     const { res, captured } = fakeResponse()
     await route.handler(fakeRequest({ url: `${STATS_PATH}?from=2026-01-12&to=2026-01-10` }), res)
     expect(captured.status).toBe(400)
@@ -166,7 +171,7 @@ describe('createStatsRoute', () => {
   it('serves an empty cost layer without a pricing table', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'token-usage-route-'))
     await writeFile(join(dir, 'usage-2026-01-15.jsonl'), `${JSON.stringify(fixtureRecord(100))}\n`)
-    const route = createStatsRoute(dir)
+    const route = createStatsRoute(() => dir)
     const { res, captured } = fakeResponse()
     await route.handler(fakeRequest(), res)
     const body = JSON.parse(captured.body) as {
@@ -184,7 +189,7 @@ describe('createStatsRoute', () => {
   it('defaults to CNY display with the built-in rate when no mirror exists', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'token-usage-route-'))
     await writeFile(join(dir, 'usage-2026-01-15.jsonl'), `${JSON.stringify(fixtureRecord(100))}\n`)
-    const route = createStatsRoute(dir)
+    const route = createStatsRoute(() => dir)
     const { res, captured } = fakeResponse()
     await route.handler(fakeRequest(), res)
     expect(JSON.parse(captured.body)).toMatchObject({ currency: 'CNY', usdExchangeRate: 7 })
@@ -197,7 +202,7 @@ describe('createStatsRoute', () => {
       version: 57, updatedAt: 1, currency: 'RMB', usdExchangeRate: 7.25,
       models: [{ modelId: 'deepseek-chat', inputCostPerMillion: 2, outputCostPerMillion: 8 }],
     }))
-    const route = createStatsRoute(dir, { currency: () => 'USD' })
+    const route = createStatsRoute(() => dir, { currency: () => 'USD' })
     const { res, captured } = fakeResponse()
     await route.handler(fakeRequest(), res)
     const body = JSON.parse(captured.body) as { currency: string; usdExchangeRate: number; totalCost: number }
@@ -216,7 +221,7 @@ describe('createStatsRoute', () => {
     await writeFile(join(dir, 'pricing.json'), JSON.stringify({
       'deepseek-chat': { inputPerMillion: 2, outputPerMillion: 8, cacheReadPerMillion: 0.5 },
     }))
-    const route = createStatsRoute(dir)
+    const route = createStatsRoute(() => dir)
     const { res, captured } = fakeResponse()
     await route.handler(fakeRequest(), res)
     const body = JSON.parse(captured.body) as {
@@ -254,7 +259,7 @@ describe('createStatsRoute', () => {
         dailySlots: [{ windows: [{ startMinute: 540, endMinute: 720 }], inputCostPerMillion: 3, outputCostPerMillion: 6, cacheReadCostPerMillion: 0.3 }],
       }],
     }))
-    const route = createStatsRoute(dir)
+    const route = createStatsRoute(() => dir)
     const { res, captured } = fakeResponse()
     await route.handler(fakeRequest(), res)
     const body = JSON.parse(captured.body) as {
@@ -275,7 +280,7 @@ describe('createStatsRoute', () => {
     await writeFile(join(dir, 'pricing.json'), JSON.stringify({
       'deepseek-chat': { inputPerMillion: 2, outputPerMillion: 8, cacheReadPerMillion: 0.5 },
     }))
-    const route = createStatsRoute(dir)
+    const route = createStatsRoute(() => dir)
     const { res, captured } = fakeResponse()
     await route.handler(fakeRequest({ url: `${STATS_PATH}?model=deepseek-chat&from=2026-01-10&to=2026-01-12` }), res)
     const body = JSON.parse(captured.body) as {
@@ -300,6 +305,109 @@ describe('isSameOriginFetch', () => {
   it('refuses cross-site and same-site values', () => {
     expect(isSameOriginFetch(fakeRequest({ headers: { 'sec-fetch-site': 'cross-site' } }))).toBe(false)
     expect(isSameOriginFetch(fakeRequest({ headers: { 'sec-fetch-site': 'same-site' } }))).toBe(false)
+  })
+})
+
+describe('createMigrationRoute', () => {
+  it('answers the live progress as JSON on GET', async () => {
+    let status: { phase: 'copying' | 'cleaning'; done: number; total: number } | undefined
+      = { phase: 'copying', done: 2, total: 5 }
+    const route = createMigrationRoute(() => status)
+    const { res, captured } = fakeResponse()
+    await route.handler(fakeRequest(), res)
+    expect(captured.status).toBe(200)
+    expect(captured.headers['content-type']).toBe('application/json; charset=utf-8')
+    expect(captured.headers['cache-control']).toBe('no-store')
+    expect(JSON.parse(captured.body)).toEqual({ phase: 'copying', done: 2, total: 5 })
+    // The next poll reads the moved fact: same route, new answer, no rebuild.
+    status = { phase: 'cleaning', done: 4, total: 5 }
+    const second = fakeResponse()
+    await route.handler(fakeRequest(), second.res)
+    expect(JSON.parse(second.captured.body)).toEqual({ phase: 'cleaning', done: 4, total: 5 })
+  })
+
+  it('answers null when no migration runs', async () => {
+    const route = createMigrationRoute(() => undefined)
+    const { res, captured } = fakeResponse()
+    await route.handler(fakeRequest(), res)
+    expect(captured.status).toBe(200)
+    expect(captured.body).toBe('null')
+  })
+
+  it('rejects non-GET methods with 405', async () => {
+    const route = createMigrationRoute(() => undefined)
+    const { res, captured } = fakeResponse()
+    await route.handler(fakeRequest({ method: 'POST' }), res)
+    expect(captured.status).toBe(405)
+  })
+
+  it('refuses cross-site browser fetches with 403', async () => {
+    const route = createMigrationRoute(() => undefined)
+    const { res, captured } = fakeResponse()
+    await route.handler(fakeRequest({ headers: { 'sec-fetch-site': 'cross-site' } }), res)
+    expect(captured.status).toBe(403)
+  })
+})
+
+describe('createDirectoryGuardRoute', () => {
+  it('answers the judge verdict for the proposed path on GET', async () => {
+    const judge = vi.fn((proposed: string | undefined) =>
+      ({ blocked: proposed !== 'D:/running', interactingSessions: 2 }))
+    const route = createDirectoryGuardRoute(judge)
+    const { res, captured } = fakeResponse()
+    await route.handler(fakeRequest({ url: `${DIR_GUARD_PATH}?path=${encodeURIComponent('D:/elsewhere')}` }), res)
+    expect(captured.status).toBe(200)
+    expect(captured.headers['content-type']).toBe('application/json; charset=utf-8')
+    expect(captured.headers['cache-control']).toBe('no-store')
+    expect(JSON.parse(captured.body)).toEqual({ blocked: true, interactingSessions: 2 })
+    expect(judge).toHaveBeenCalledWith('D:/elsewhere')
+  })
+
+  it('treats an absent or blank path as the clear-to-default gesture', async () => {
+    const judge = vi.fn((proposed: string | undefined) => ({ blocked: proposed !== undefined, interactingSessions: 0 }))
+    const route = createDirectoryGuardRoute(judge)
+    for (const url of [DIR_GUARD_PATH, `${DIR_GUARD_PATH}?path=`]) {
+      const { res, captured } = fakeResponse()
+      await route.handler(fakeRequest({ url }), res)
+      expect(JSON.parse(captured.body)).toEqual({ blocked: false, interactingSessions: 0 })
+    }
+    // Both the missing and the empty parameter mean "no stored path".
+    expect(judge).toHaveBeenCalledTimes(2)
+    expect(judge).toHaveBeenNthCalledWith(1, undefined)
+    expect(judge).toHaveBeenNthCalledWith(2, undefined)
+  })
+
+  it('rejects non-GET methods with 405', async () => {
+    const route = createDirectoryGuardRoute(() => ({ blocked: false, interactingSessions: 0 }))
+    const { res, captured } = fakeResponse()
+    await route.handler(fakeRequest({ method: 'POST' }), res)
+    expect(captured.status).toBe(405)
+  })
+
+  it('refuses cross-site browser fetches with 403', async () => {
+    const route = createDirectoryGuardRoute(() => ({ blocked: false, interactingSessions: 0 }))
+    const { res, captured } = fakeResponse()
+    await route.handler(fakeRequest({ headers: { 'sec-fetch-site': 'cross-site' } }), res)
+    expect(captured.status).toBe(403)
+  })
+})
+
+describe('createStatsRoute relocation', () => {
+  it('serves from whatever the directory thunk answers, without rebuilding', async () => {
+    const first = await mkdtemp(join(tmpdir(), 'token-usage-reloc-a-'))
+    const second = await mkdtemp(join(tmpdir(), 'token-usage-reloc-b-'))
+    await writeFile(join(first, 'usage-2026-01-15.jsonl'), `${JSON.stringify(fixtureRecord(100))}\n`)
+    await writeFile(join(second, 'usage-2026-01-16.jsonl'), `${JSON.stringify(fixtureRecord(200))}\n${JSON.stringify(fixtureRecord(300))}\n`)
+    // The running directory flips mid-life, the way a settled relocation does.
+    let dir = first
+    const route = createStatsRoute(() => dir)
+    const before = fakeResponse()
+    await route.handler(fakeRequest(), before.res)
+    expect(JSON.parse(before.captured.body).total.requests).toBe(1)
+    dir = second
+    const after = fakeResponse()
+    await route.handler(fakeRequest(), after.res)
+    expect(JSON.parse(after.captured.body).total.requests).toBe(2)
   })
 })
 
@@ -335,6 +443,7 @@ describe('plugin webServer wiring', () => {
     await next.plugin(MockWebServer)
     await next.plugin(class extends Service {
       constructor(context: Context) { super(context, 'sessions') }
+      list(): Array<{ id: string; events: unknown[] }> { return sessions.map(session => ({ id: session.id, events: session.events })) }
     })
     await next.plugin(class extends Service {
       constructor(context: Context) { super(context, 'sessionPersistence') }
@@ -363,6 +472,17 @@ describe('plugin webServer wiring', () => {
     }
     expect(route).toBeDefined()
     expect(route!.kind).toBe('exact')
+    // The relocation progress route registers alongside the stats route.
+    expect(routes.some(candidate => candidate.path === MIGRATION_PATH && candidate.kind === 'exact')).toBe(true)
+
+    // The directory-guard route registers too and answers the live verdict:
+    // no session is mid-conversation here, so a proposed move is not blocked.
+    const guardRoute = routes.find(candidate => candidate.path === DIR_GUARD_PATH)
+    expect(guardRoute).toBeDefined()
+    const guardAnswer = fakeResponse()
+    await guardRoute!.handler(fakeRequest({ url: `${DIR_GUARD_PATH}?path=${encodeURIComponent('D:/elsewhere')}` }), guardAnswer.res)
+    expect(guardAnswer.captured.status).toBe(200)
+    expect(JSON.parse(guardAnswer.captured.body)).toEqual({ blocked: false, interactingSessions: 0 })
 
     // A live hook row is served by the route.
     next.emit('session/event', { id: 's1' }, messageEvent({ messageId: 'm1' }))

@@ -12,6 +12,9 @@ import { parseRecord, serializeRecord, type UsageRecord } from './usage-record.t
 
 const DAY_FILE = /^usage-\d{4}-\d{2}-\d{2}\.jsonl$/u
 
+/** Test for this store's per-day file names; the migration shares the naming contract. */
+export { DAY_FILE }
+
 /** Day-file name for a local-time date, e.g. `usage-2026-01-15.jsonl`. */
 export function dayFileName(date: Date): string {
   const year = date.getFullYear()
@@ -49,6 +52,16 @@ export class UsageLog {
   /** Whether a request id is already known to this log. */
   has(requestId: string): boolean {
     return this.seen.has(requestId)
+  }
+
+  /**
+   * Settle every queued append. The chain never rejects (each task absorbs
+   * its own failure), so this is the quiescence point a data-directory
+   * migration waits on before reading the files.
+   * @returns settlement after the last queued append.
+   */
+  flush(): Promise<void> {
+    return this.queue
   }
 
   /**

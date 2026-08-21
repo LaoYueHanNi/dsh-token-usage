@@ -48,11 +48,17 @@ export declare const zh: {
     readonly 'unpriced.warning': "{count} 个模型未定价：{models}（费用按 {zero} 计）";
     readonly dataDir: "数据目录：{path}";
     readonly 'card.title': "Token 用量";
-    readonly 'card.description': "设置定价数据源";
+    readonly 'card.description': "数据目录与定价数据源";
     readonly 'card.expand': "展开";
     readonly 'card.collapse': "折叠";
     readonly 'card.unsaved': "未保存";
     readonly 'card.readOnly': "设置文档当前为只读，本次无法修改。";
+    readonly 'card.pathLabel': "数据目录";
+    readonly 'card.pathHint': "留空使用默认位置（~/.dsh/token-usage）。";
+    readonly 'card.browse': "浏览…";
+    readonly 'card.picking': "选择中…";
+    readonly 'card.migratingCopy': "正在复制数据 {done}/{total} 个文件…";
+    readonly 'card.migratingClean': "正在清理旧目录 {done}/{total} 个文件…";
     readonly 'card.regionLabel': "定价区域";
     readonly 'card.regionDefault': "默认（国内 Gitee）";
     readonly 'card.region.domestic': "国内（Gitee）";
@@ -62,6 +68,7 @@ export declare const zh: {
     readonly 'card.save': "保存";
     readonly 'card.saving': "保存中…";
     readonly 'card.saveFailed': "保存未生效，请重试。";
+    readonly 'card.saveBlockedSessions': "有会话正在进行对话，无法保存目录修改；请等待对话结束（当前 {count} 个）。";
     readonly 'card.discard': "放弃";
     readonly loadFailed: "统计加载失败：{message}";
     readonly empty: "暂无数据。可调整筛选条件；模型请求成功后会自动写入，安装前已发生的历史记录会在首次启动时自动补齐。";
