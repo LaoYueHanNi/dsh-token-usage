@@ -55,6 +55,20 @@ describe('UsageLog.record', () => {
     expect(lines[1]).toContain('"requestId":"b"')
   })
 
+  it('recreates the data directory when it vanishes under a running log', async () => {
+    const dir = await tempDir()
+    const log = new UsageLog(dir, () => new Date(2026, 0, 15, 12))
+    expect(await log.record(record('a', 1))).toBe(true)
+    // The location is removed underneath the process (a migration that stayed
+    // behind, a user cleanup): the next append must self-heal, not fail
+    // forever.
+    await rm(dir, { recursive: true, force: true })
+    expect(await log.record(record('b', 2))).toBe(true)
+    const lines = (await readFile(join(dir, 'usage-2026-01-15.jsonl'), 'utf8')).trim().split('\n')
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toContain('"requestId":"b"')
+  })
+
   it('dedupes by request id', async () => {
     const dir = await tempDir()
     const log = new UsageLog(dir)

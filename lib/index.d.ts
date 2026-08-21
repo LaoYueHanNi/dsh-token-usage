@@ -32,6 +32,12 @@ export interface Config {
     /** Which mirror to pull when `pricingUrl` is unset: `domestic` (default,
      * gitee) or `overseas` (github). Set once per install — no IP sniffing. */
     pricingRegion?: 'domestic' | 'overseas';
+    /** How long the first start waits for a settings service to repoint the
+     * section source before falling back to the composition entry. A settings
+     * service attached within the window starts on the stored directory; the
+     * deferred fallback then finds the same directory and is a no-op. Never
+     * user-facing — a test-only tilt at the boot deferral. */
+    startupDeferMs?: number;
 }
 /** Reject stale or misspelled config keys before defaults can hide them. */
 export declare function validateConfig(config: Config): void;

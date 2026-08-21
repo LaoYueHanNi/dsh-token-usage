@@ -144,7 +144,9 @@ describe('plugin integration', () => {
     const next = new Context()
     await next.plugin(MockSessions)
     await next.plugin(persistenceService(sessions))
-    await next.plugin(plugin)
+    // No settings service: the deferred boot must fire immediately so the
+    // assertions below observe the composition-entry directory without delay.
+    await next.plugin(plugin, { startupDeferMs: 0 })
     ctx = next
     return { dir: join(home, 'token-usage') }
   }
@@ -344,6 +346,48 @@ describe('live data-directory relocation', () => {
     }
     vi.unstubAllEnvs()
     vi.unstubAllGlobals()
+  })
+
+  it('starts directly on the stored directory without a boot-time migration', async () => {
+    const dirB = join(home, 'B')
+    const next = new Context()
+    await next.plugin(MockSessions)
+    await next.plugin(persistenceService(sessions))
+    await next.plugin(FakeSettings)
+    settings = next.get('settings') as FakeSettings
+    sessionsService = next.get('sessions') as MockSessions
+    // The stored override from a previous run, present BEFORE the plugin
+    // loads — the way settings.yaml reads at boot.
+    await settings.commit('token-usage', { path: dirB })
+    await next.plugin(plugin, {})
+    host = next
+
+    // The running directory is the stored one...
+    host.emit('session/event', { id: 's1' }, messageEvent({ messageId: 'm1' }))
+    await pollLogFile(dirB)
+    // ...and the default directory was never opened, let alone migrated
+    // away: a synchronous first start would have opened it before the
+    // settings attach repointed the section source.
+    expect(existsSync(join(home, 'token-usage'))).toBe(false)
+  })
+
+  it('settles onto the stored directory when mounted concurrently with the settings service', async () => {
+    // The dsh Loader mounts every profile entry concurrently, so the plugin
+    // and the settings provider start in no guaranteed order. The deferred
+    // boot must still settle on the stored directory, never the default.
+    const dirB = join(home, 'B')
+    const next = new Context()
+    await Promise.all([
+      next.plugin(MockSessions),
+      next.plugin(persistenceService(sessions)),
+      next.plugin(BareSettingsProvider, { 'token-usage': { path: dirB } }),
+      next.plugin(plugin),
+    ])
+    host = next
+
+    host.emit('session/event', { id: 's1' }, messageEvent({ messageId: 'm1' }))
+    await pollLogFile(dirB)
+    expect(existsSync(join(home, 'token-usage'))).toBe(false)
   })
 
   it('refuses the directory save itself while conversations run, then moves once they end', async () => {
