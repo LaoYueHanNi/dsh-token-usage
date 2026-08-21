@@ -6,6 +6,9 @@
  * @module token-usage/usage-log
  */
 import { type UsageRecord } from './usage-record.ts';
+declare const DAY_FILE: RegExp;
+/** Test for this store's per-day file names; the migration shares the naming contract. */
+export { DAY_FILE };
 /** Day-file name for a local-time date, e.g. `usage-2026-01-15.jsonl`. */
 export declare function dayFileName(date: Date): string;
 /**
@@ -29,6 +32,13 @@ export declare class UsageLog {
     constructor(dir: string, now?: () => Date);
     /** Whether a request id is already known to this log. */
     has(requestId: string): boolean;
+    /**
+     * Settle every queued append. The chain never rejects (each task absorbs
+     * its own failure), so this is the quiescence point a data-directory
+     * migration waits on before reading the files.
+     * @returns settlement after the last queued append.
+     */
+    flush(): Promise<void>;
     /**
      * Rebuild the dedupe set from every existing day file. Malformed lines are
      * skipped with a console diagnostic; unreadable files are skipped the same
