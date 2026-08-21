@@ -447,11 +447,22 @@ describe('plugin webServer wiring', () => {
     })
     await next.plugin(class extends Service {
       constructor(context: Context) { super(context, 'sessionPersistence') }
-      async list(): Promise<Array<{ id: string }>> { return sessions.map(session => ({ id: session.id })) }
+      async listSnapshots(): Promise<Array<{ header: { id: string; version: number; createdAt: number }; revision: string }>> {
+        return sessions.map(session => ({
+          header: { id: session.id, version: 0, createdAt: 0 },
+          revision: 'rev-1',
+        }))
+      }
       async inspect(id: string): Promise<{ events: unknown[] }> {
         const session = sessions.find(candidate => candidate.id === id)
         if (session === undefined) throw new Error(`missing session ${id}`)
         return { events: session.events }
+      }
+      async readFrom(id: string, fromSeq: number): Promise<{ meta: { id: string }; events: unknown[] }> {
+        const session = sessions.find(candidate => candidate.id === id)
+        if (session === undefined) throw new Error(`missing session ${id}`)
+        const events = session.events.filter(event => event.seq >= fromSeq)
+        return { meta: { id }, events }
       }
     })
     await next.plugin(class extends Service {

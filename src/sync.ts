@@ -23,10 +23,26 @@ export interface SyncResult {
   skipped: number
 }
 
+/** One stored session paired with a backend-owned change token. */
+export interface SessionSnapshot {
+  header: SessionHeader
+  /**
+   * Opaque revision token. Equal across observations of the unchanged log;
+   * changes when the stored events change. Callers must treat it as
+   * equality-only — its content is backend-internal.
+   */
+  revision: string
+}
+
 /** The persistence surface the sync needs (duck-typed for tests). */
 export interface SyncPersistence {
-  /** Every materialized session, in arbitrary order. */
-  list(signal?: AbortSignal): Promise<SessionHeader[]>
+  /**
+   * Lightweight listing with a per-session revision token. The token lets the
+   * sync short-circuit unchanged sessions — `readFrom` on a JSONL backend
+   * walks the entire file even when the requested suffix is empty, so
+   * comparing revisions avoids that cost for the common no-event restart.
+   */
+  listSnapshots(signal?: AbortSignal): Promise<SessionSnapshot[]>
   /**
    * Read the stored events from `fromSeq` onward — the suffix-only primitive
    * that powers watermark-based sync. Returns an empty event list when
@@ -52,10 +68,10 @@ export interface SyncDeps {
  */
 export async function syncHistory(deps: SyncDeps, signal?: AbortSignal): Promise<SyncResult> {
   await deps.log.scan()
-  const sessions = await deps.persistence.list(signal)
+  const snapshots = await deps.persistence.listSnapshots(signal)
   let added = 0
   let skipped = 0
-  for (const header of sessions) {
+  for (const { header } of snapshots) {
     signal?.throwIfAborted()
     const inspection = await deps.persistence.readFrom(header.id, 0, signal)
     for (const event of inspection.events) {
@@ -89,12 +105,23 @@ export async function autoSyncIfNeeded(
 ): Promise<SyncResult | null> {
   await deps.log.scan()
   const progress = await readSyncProgress(dir)
-  const sessions = await deps.persistence.list(signal)
+  const snapshots = await deps.persistence.listSnapshots(signal)
   let added = 0
   let skipped = 0
-  for (const header of sessions) {
+  for (const { header, revision } of snapshots) {
     signal?.throwIfAborted()
-    const lastSynced = progress.sessions[header.id]?.lastSyncedSeq ?? -1
+    const sessionProgress = progress.sessions[header.id]
+    const lastSynced = sessionProgress?.lastSyncedSeq ?? -1
+    // Fast path: the stored log has not changed since the last sync we ran on
+    // it, so the suffix past the watermark is empty by construction — skip
+    // the `readFrom` call entirely. Sequential backends would otherwise walk
+    // the entire artifact just to confirm an empty suffix, and 64 sessions
+    // × per-file scan is the cost the user sees as a startup stall.
+    if (sessionProgress?.lastSeenRevision !== undefined
+        && sessionProgress.lastSeenRevision === revision) {
+      progress.sessions[header.id] = { lastSyncedSeq: lastSynced, lastSeenRevision: revision }
+      continue
+    }
     const fromSeq = lastSynced + 1
     const { events } = await deps.persistence.readFrom(header.id, fromSeq, signal)
     let maxSeq = lastSynced
@@ -106,10 +133,14 @@ export async function autoSyncIfNeeded(
       if (await deps.log.record(record)) added += 1
       else skipped += 1
     }
-    progress.sessions[header.id] = { lastSyncedSeq: maxSeq }
+    progress.sessions[header.id] = { lastSyncedSeq: maxSeq, lastSeenRevision: revision }
   }
-  const stamped: SyncProgress = { version: 2, ...(added > 0 ? { syncedAt: Date.now() } : {}), sessions: progress.sessions }
+  const stamped: SyncProgress = {
+    version: 2,
+    ...(added > 0 ? { syncedAt: Date.now() } : {}),
+    sessions: progress.sessions,
+  }
   await writeSyncProgress(dir, stamped)
-  if (sessions.length === 0 && added === 0) return null
+  if (snapshots.length === 0 && added === 0) return null
   return { added, skipped }
 }

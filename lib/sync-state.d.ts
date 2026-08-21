@@ -15,6 +15,14 @@
 export interface SessionProgress {
     /** Highest event seq from this session that has been folded into the log. */
     lastSyncedSeq: number;
+    /**
+     * The `listSnapshots` revision we observed on the last sync. Equal to the
+     * current revision, the session's stored log has not changed since the last
+     * run, so `readFrom(lastSyncedSeq + 1)` would only walk the artifact to
+     * confirm an empty suffix — skip it instead. Absent on records written
+     * before this field existed; treat as "no observation" and do one full sync.
+     */
+    lastSeenRevision?: string;
 }
 /** The full on-disk sync progress: a per-session watermark map. */
 export interface SyncProgress {

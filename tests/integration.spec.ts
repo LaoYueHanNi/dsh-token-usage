@@ -11,13 +11,23 @@ import { messageEvent } from './helpers.ts'
 
 /** Returns persisted sessions from a shared mutable list. */
 function persistenceService(sessions: Array<{ id: string; events: Array<{ seq: number; type: string; time?: number; data?: unknown }> }>) {
+  // Per-session revision tokens, bumped whenever a test pushes more events
+  // onto a session — mirrors the backend's `listSnapshots` contract where
+  // an event append changes the stored log's revision.
+  const revisions = new Map<string, number>()
+  for (const session of sessions) revisions.set(session.id, 1)
   return class extends Service {
+    readonly readFromCalls = new Map<string, number>()
+
     constructor(ctx: Context) {
       super(ctx, 'sessionPersistence')
     }
 
-    async list(): Promise<Array<{ id: string }>> {
-      return sessions.map(session => ({ id: session.id }))
+    async listSnapshots(): Promise<Array<{ header: { id: string; version: number; createdAt: number }; revision: string }>> {
+      return sessions.map(session => ({
+        header: { id: session.id, version: 0, createdAt: 0 },
+        revision: `rev-${String(revisions.get(session.id) ?? 1)}`,
+      }))
     }
 
     async inspect(id: string): Promise<{ events: unknown[] }> {
@@ -28,6 +38,7 @@ function persistenceService(sessions: Array<{ id: string; events: Array<{ seq: n
 
     /** readFrom returns events at or past fromSeq — sync needs the suffix. */
     async readFrom(id: string, fromSeq: number): Promise<{ meta: { id: string }; events: unknown[] }> {
+      this.readFromCalls.set(id, (this.readFromCalls.get(id) ?? 0) + 1)
       const session = sessions.find(candidate => candidate.id === id)
       if (session === undefined) throw new Error(`missing session ${id}`)
       const events = session.events.filter(event => event.seq >= fromSeq)
@@ -287,6 +298,42 @@ describe('plugin integration', () => {
     // m9 was the first mount's live-hook row; m10 is the re-install catch-up.
     // The second mount must NOT duplicate m9 (dedupe via the day-file scan).
     expect(ids.sort()).toEqual(['m10', 'm9'])
+  })
+
+  it('short-circuits readFrom when every session revision is unchanged', async () => {
+    // The startup-stall fix: when no session has been touched between
+    // startups, the revision short-circuit must keep `readFrom` from being
+    // called at all (JSONL backends would otherwise parse every artifact
+    // just to confirm an empty suffix).
+    sessions.push({ id: 'a', events: [messageEvent({ messageId: 'm1', seq: 1 })] })
+    sessions.push({ id: 'b', events: [messageEvent({ messageId: 'm2', seq: 1 })] })
+    const first = await mount()
+    await waitForState(first.dir)
+
+    // Capture the persistence service the second mount will observe so we
+    // can assert it issued zero `readFrom` calls during the second sync.
+    ctx!.registry.delete(plugin)
+    ctx = undefined
+    let persistence: { readFromCalls: Map<string, number> } | undefined
+    const next = new Context()
+    await next.plugin(MockSessions)
+    const PService = persistenceService(sessions)
+    await next.plugin(PService)
+    await next.plugin(plugin, { startupDeferMs: 0 })
+    persistence = next.get('sessionPersistence') as { readFromCalls: Map<string, number> }
+    ctx = next
+
+    // Give the fire-and-forget startup sync time to settle.
+    const deadline = Date.now() + 2_000
+    while (Date.now() < deadline) {
+      const text = await readFile(join(first.dir, 'state.json'), 'utf8').catch(() => '')
+      const progress = JSON.parse(text) as { sessions: Record<string, { lastSeenRevision?: string }> }
+      if (progress.sessions['a']?.lastSeenRevision !== undefined
+          && progress.sessions['b']?.lastSeenRevision !== undefined) break
+      await new Promise(resolve => setTimeout(resolve, 20))
+    }
+    expect(persistence!.readFromCalls.get('a') ?? 0).toBe(0)
+    expect(persistence!.readFromCalls.get('b') ?? 0).toBe(0)
   })
 
   it('syncs exactly once at startup, from the settings-resolved region', async () => {

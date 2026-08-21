@@ -48,6 +48,28 @@ describe('readSyncProgress', () => {
     await writeFile(join(dir, 'state.json'), JSON.stringify({ version: 2, sessions: { s1: { lastSyncedSeq: 'oops' } } }))
     expect(await readSyncProgress(dir)).toEqual({ version: 2, sessions: {} })
   })
+
+  it('reads a v2 session entry with lastSeenRevision verbatim', async () => {
+    const dir = await tempDir()
+    const written: SyncProgress = {
+      version: 2,
+      sessions: {
+        's1': { lastSyncedSeq: 42, lastSeenRevision: 'rev-17' },
+        's2': { lastSyncedSeq: 7, lastSeenRevision: 'rev-3' },
+      },
+    }
+    await writeSyncProgress(dir, written)
+    expect(await readSyncProgress(dir)).toEqual(written)
+  })
+
+  it('treats a v2 session entry with non-string lastSeenRevision as corrupt', async () => {
+    const dir = await tempDir()
+    await writeFile(join(dir, 'state.json'), JSON.stringify({
+      version: 2,
+      sessions: { s1: { lastSyncedSeq: 42, lastSeenRevision: 17 } },
+    }))
+    expect(await readSyncProgress(dir)).toEqual({ version: 2, sessions: {} })
+  })
 })
 
 describe('writeSyncProgress', () => {
@@ -72,5 +94,29 @@ describe('writeSyncProgress', () => {
     expect(parsed.syncedAt).toBeUndefined()
     expect(parsed.sessions).toEqual({})
     expect(parsed.version).toBe(2)
+  })
+
+  it('round-trips lastSeenRevision when present and omits it when absent', async () => {
+    const dir = await tempDir()
+    await writeSyncProgress(dir, {
+      version: 2,
+      sessions: {
+        's1': { lastSyncedSeq: 42, lastSeenRevision: 'rev-17' },
+        's2': { lastSyncedSeq: 7 },
+      },
+    })
+    const text = await readFile(join(dir, 'state.json'), 'utf8')
+    const parsed = JSON.parse(text) as { sessions: Record<string, Record<string, unknown>> }
+    expect(parsed.sessions.s1).toEqual({ lastSyncedSeq: 42, lastSeenRevision: 'rev-17' })
+    // `undefined` values must NOT be serialized as a key — the on-disk shape
+    // stays compatible with the strict `isV2` validator across upgrades.
+    expect('lastSeenRevision' in parsed.sessions.s2).toBe(false)
+    expect(await readSyncProgress(dir)).toEqual({
+      version: 2,
+      sessions: {
+        's1': { lastSyncedSeq: 42, lastSeenRevision: 'rev-17' },
+        's2': { lastSyncedSeq: 7 },
+      },
+    })
   })
 })

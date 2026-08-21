@@ -22,6 +22,14 @@ const TMP_FILE = 'state.json.tmp'
 export interface SessionProgress {
   /** Highest event seq from this session that has been folded into the log. */
   lastSyncedSeq: number
+  /**
+   * The `listSnapshots` revision we observed on the last sync. Equal to the
+   * current revision, the session's stored log has not changed since the last
+   * run, so `readFrom(lastSyncedSeq + 1)` would only walk the artifact to
+   * confirm an empty suffix — skip it instead. Absent on records written
+   * before this field existed; treat as "no observation" and do one full sync.
+   */
+  lastSeenRevision?: string
 }
 
 /** The full on-disk sync progress: a per-session watermark map. */
@@ -36,8 +44,13 @@ export interface SyncProgress {
 
 function isSessionProgress(value: unknown): value is SessionProgress {
   if (typeof value !== 'object' || value === null) return false
-  const seq = (value as Record<string, unknown>).lastSyncedSeq
-  return typeof seq === 'number' && Number.isFinite(seq) && seq >= 0
+  const record = value as Record<string, unknown>
+  const seq = record.lastSyncedSeq
+  if (typeof seq !== 'number' || !Number.isFinite(seq) || seq < 0) return false
+  // Optional: when present it must be a string; absent means "no observation"
+  // (records predating this field) and forces one full sync on the next run.
+  if (record.lastSeenRevision !== undefined && typeof record.lastSeenRevision !== 'string') return false
+  return true
 }
 
 function isV2(value: unknown): value is SyncProgress {
@@ -101,7 +114,16 @@ function emptyProgress(): SyncProgress {
 export async function writeSyncProgress(dir: string, progress: SyncProgress): Promise<void> {
   const target = join(dir, STATE_FILE)
   const tmp = join(dir, TMP_FILE)
-  const payload: Record<string, unknown> = { version: 2, sessions: progress.sessions }
+  // Mirror the on-disk shape into a plain object so `JSON.stringify` skips
+  // `undefined` `lastSeenRevision` rather than writing the key with no value
+  // (which would later fail `isV2` because the key is present but undefined).
+  const sessions: Record<string, Record<string, unknown>> = {}
+  for (const [id, entry] of Object.entries(progress.sessions)) {
+    const row: Record<string, unknown> = { lastSyncedSeq: entry.lastSyncedSeq }
+    if (entry.lastSeenRevision !== undefined) row.lastSeenRevision = entry.lastSeenRevision
+    sessions[id] = row
+  }
+  const payload: Record<string, unknown> = { version: 2, sessions }
   if (progress.syncedAt !== undefined) payload.syncedAt = progress.syncedAt
   await writeFile(tmp, JSON.stringify(payload), 'utf8')
   await rename(tmp, target)

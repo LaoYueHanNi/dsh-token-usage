@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { SessionEvent, SessionHeader, SessionId } from '@deepseek-ai/dsh-session'
 import type { UsageLog } from '../src/usage-log.ts'
-import { autoSyncIfNeeded, syncHistory, type SyncPersistence } from '../src/sync.ts'
+import { autoSyncIfNeeded, syncHistory, type SessionSnapshot, type SyncPersistence } from '../src/sync.ts'
 import { readSyncProgress } from '../src/sync-state.ts'
 import { messageEvent } from './helpers.ts'
 
@@ -17,20 +17,28 @@ interface FakeSession {
  *  session array so tests can append events without rebuilding the fake. */
 class FakePersistence implements SyncPersistence {
   readonly sessions: FakeSession[]
+  /** Per-session revision tokens — tests can mutate them to drive the
+   *  short-circuit branch. Defaults are stable across a session's lifetime. */
+  readonly revisions = new Map<string, string>()
   /** Count of `readFrom` calls per session id — tests can assert suffix-only
    *  semantics without instrumenting the event source itself. */
   readonly readFromCalls = new Map<string, number>()
 
   constructor(sessions: FakeSession[]) {
     this.sessions = sessions
+    let n = 0
+    for (const session of sessions) this.revisions.set(session.id, `rev-${++n}`)
   }
 
   private headerFor(session: FakeSession): SessionHeader {
     return { version: 0, id: session.id as SessionId, createdAt: 1_700_000_000_000 }
   }
 
-  async list(): Promise<SessionHeader[]> {
-    return this.sessions.map(session => this.headerFor(session))
+  async listSnapshots(): Promise<SessionSnapshot[]> {
+    return this.sessions.map(session => ({
+      header: this.headerFor(session),
+      revision: this.revisions.get(session.id) ?? 'rev-unknown',
+    }))
   }
 
   async readFrom(id: SessionId, fromSeq: number): Promise<{ meta: SessionHeader; events: SessionEvent[] }> {
@@ -103,8 +111,11 @@ describe('syncHistory', () => {
     let inspected = 0
     const log = new FakeLog()
     const persistence: SyncPersistence = {
-      async list() {
-        return [{ version: 0, id: 's1' as SessionId, createdAt: 0 }, { version: 0, id: 's2' as SessionId, createdAt: 0 }]
+      async listSnapshots() {
+        return [
+          { header: { version: 0, id: 's1' as SessionId, createdAt: 0 }, revision: 'r1' },
+          { header: { version: 0, id: 's2' as SessionId, createdAt: 0 }, revision: 'r2' },
+        ]
       },
       async readFrom() {
         inspected += 1
@@ -120,7 +131,7 @@ describe('syncHistory', () => {
 })
 
 describe('autoSyncIfNeeded', () => {
-  it('does a full sync on first run and writes the watermark', async () => {
+  it('does a full sync on first run and writes the watermark and revision', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'token-usage-auto-'))
     const log = new FakeLog()
     const persistence = new FakePersistence([{ id: 's1', events: [messageEventWith('m1', 1), messageEventWith('m2', 2)] }])
@@ -128,7 +139,9 @@ describe('autoSyncIfNeeded', () => {
     expect(result).toEqual({ added: 2, skipped: 0 })
     expect(log.rows.map(row => row.requestId)).toEqual(['m1', 'm2'])
     const progress = await readSyncProgress(dir)
-    expect(progress.sessions['s1']).toEqual({ lastSyncedSeq: 2 })
+    // Both the seq watermark and the revision we observed must persist — the
+    // revision powers the next-run short-circuit.
+    expect(progress.sessions['s1']).toEqual({ lastSyncedSeq: 2, lastSeenRevision: 'rev-1' })
     expect(progress.syncedAt).toEqual(expect.any(Number))
   })
 
@@ -140,8 +153,11 @@ describe('autoSyncIfNeeded', () => {
     await autoSyncIfNeeded({ persistence, log }, dir)
     // Reset the per-process dedupe set (mirrors a fresh UsageLog on the next boot).
     const freshLog = new FakeLog()
-    // Append new events after the watermark was written.
+    // Append new events after the watermark was written. Real backends bump
+    // the revision on every append; mirror that here so the short-circuit
+    // (same revision ⇒ skip) does not swallow this test's intent.
     session.events.push(messageEventWith('m3', 3), messageEventWith('m4', 4))
+    persistence.revisions.set('s1', 'rev-2')
 
     const result = await autoSyncIfNeeded({ persistence, log: freshLog }, dir)
     expect(result).toEqual({ added: 2, skipped: 0 })
@@ -149,7 +165,47 @@ describe('autoSyncIfNeeded', () => {
     expect(persistence.readFromCalls.get('s1')).toBe(2)
 
     const progress = await readSyncProgress(dir)
-    expect(progress.sessions['s1']).toEqual({ lastSyncedSeq: 4 })
+    expect(progress.sessions['s1']).toEqual({ lastSyncedSeq: 4, lastSeenRevision: 'rev-2' })
+  })
+
+  it('skips readFrom when the stored log has not changed since the last sync', async () => {
+    // Mirrors the typical no-event restart: the previous sync already wrote
+    // the watermark + revision, the persisted log is unchanged, and reading
+    // `readFrom(lastSynced + 1)` would only walk the artifact to confirm an
+    // empty suffix. The sync must avoid that cost.
+    const dir = await mkdtemp(join(tmpdir(), 'token-usage-auto-'))
+    const session: FakeSession = { id: 's1', events: [messageEventWith('m1', 1), messageEventWith('m2', 2)] }
+    const persistence = new FakePersistence([session])
+    await autoSyncIfNeeded({ persistence, log: new FakeLog() }, dir)
+    expect(persistence.readFromCalls.get('s1')).toBe(1)
+
+    // Same revision, no new events — short-circuit.
+    const freshLog = new FakeLog()
+    const result = await autoSyncIfNeeded({ persistence, log: freshLog }, dir)
+    expect(result).toEqual({ added: 0, skipped: 0 })
+    expect(freshLog.rows).toHaveLength(0)
+    expect(persistence.readFromCalls.get('s1')).toBe(1)
+  })
+
+  it('still re-syncs when the revision advances', async () => {
+    // A new event appended after the last sync bumps the revision — even if
+    // the seq watermark would also catch it, the revision advance alone
+    // forces `readFrom` so the short-circuit never silently drops a tail.
+    const dir = await mkdtemp(join(tmpdir(), 'token-usage-auto-'))
+    const session: FakeSession = { id: 's1', events: [messageEventWith('m1', 1), messageEventWith('m2', 2)] }
+    const persistence = new FakePersistence([session])
+    await autoSyncIfNeeded({ persistence, log: new FakeLog() }, dir)
+    expect(persistence.readFromCalls.get('s1')).toBe(1)
+
+    // Bump revision and append a new event past the watermark.
+    persistence.revisions.set('s1', 'rev-2')
+    session.events.push(messageEventWith('m3', 3))
+
+    const freshLog = new FakeLog()
+    const result = await autoSyncIfNeeded({ persistence, log: freshLog }, dir)
+    expect(result).toEqual({ added: 1, skipped: 0 })
+    expect(freshLog.rows.map(row => row.requestId)).toEqual(['m3'])
+    expect(persistence.readFromCalls.get('s1')).toBe(2)
   })
 
   it('does not pass a fromSeq beyond the stored prefix on a re-install', async () => {
@@ -175,7 +231,7 @@ describe('autoSyncIfNeeded', () => {
     const result = await autoSyncIfNeeded({ persistence, log }, dir)
     expect(result).toEqual({ added: 1, skipped: 0 })
     const progress = await readSyncProgress(dir)
-    expect(progress.sessions['s1']).toEqual({ lastSyncedSeq: 1 })
+    expect(progress.sessions['s1']).toEqual({ lastSyncedSeq: 1, lastSeenRevision: 'rev-1' })
   })
 
   it('writes an empty progress map and returns null when there are no sessions', async () => {
@@ -200,7 +256,7 @@ describe('autoSyncIfNeeded', () => {
     const result = await autoSyncIfNeeded({ persistence, log }, dir)
     expect(result).toEqual({ added: 1, skipped: 1 })
     const progress = await readSyncProgress(dir)
-    expect(progress.sessions['s1']).toEqual({ lastSyncedSeq: 2 })
+    expect(progress.sessions['s1']).toEqual({ lastSyncedSeq: 2, lastSeenRevision: 'rev-1' })
   })
 
   it('folds events from sessions added since the previous sync', async () => {
@@ -209,13 +265,16 @@ describe('autoSyncIfNeeded', () => {
     const log = new FakeLog()
     await autoSyncIfNeeded({ persistence, log }, dir)
 
-    // A brand-new session the previous sync never saw.
+    // A brand-new session the previous sync never saw. FakePersistence assigns
+    // a fresh revision to each session it sees, so this is exactly the case
+    // where the short-circuit cannot fire.
     persistence.sessions.push({ id: 's2', events: [messageEventWith('m2', 1)] })
+    persistence.revisions.set('s2', 'rev-2')
     const freshLog = new FakeLog()
     const result = await autoSyncIfNeeded({ persistence, log: freshLog }, dir)
     expect(result).toEqual({ added: 1, skipped: 0 })
     const progress = await readSyncProgress(dir)
-    expect(progress.sessions['s2']).toEqual({ lastSyncedSeq: 1 })
+    expect(progress.sessions['s2']).toEqual({ lastSyncedSeq: 1, lastSeenRevision: 'rev-2' })
   })
 })
 

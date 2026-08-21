@@ -18,10 +18,25 @@ export interface SyncResult {
     /** Requests already present in the log (deduped). */
     skipped: number;
 }
+/** One stored session paired with a backend-owned change token. */
+export interface SessionSnapshot {
+    header: SessionHeader;
+    /**
+     * Opaque revision token. Equal across observations of the unchanged log;
+     * changes when the stored events change. Callers must treat it as
+     * equality-only — its content is backend-internal.
+     */
+    revision: string;
+}
 /** The persistence surface the sync needs (duck-typed for tests). */
 export interface SyncPersistence {
-    /** Every materialized session, in arbitrary order. */
-    list(signal?: AbortSignal): Promise<SessionHeader[]>;
+    /**
+     * Lightweight listing with a per-session revision token. The token lets the
+     * sync short-circuit unchanged sessions — `readFrom` on a JSONL backend
+     * walks the entire file even when the requested suffix is empty, so
+     * comparing revisions avoids that cost for the common no-event restart.
+     */
+    listSnapshots(signal?: AbortSignal): Promise<SessionSnapshot[]>;
     /**
      * Read the stored events from `fromSeq` onward — the suffix-only primitive
      * that powers watermark-based sync. Returns an empty event list when
