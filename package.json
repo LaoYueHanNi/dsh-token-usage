@@ -1,9 +1,9 @@
 {
   "name": "dsh-token-usage",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "private": true,
   "type": "module",
-  "description": "dsh local plugin: persist per-request model token usage (live hook + first-run history backfill + web settings stats page)",
+  "description": "dsh local plugin: persist per-request model token usage (live hook + startup history backfill + window catch-up + web settings stats page)",
   "main": "lib/index.js",
   "exports": {
     ".": "./lib/index.js",
