@@ -21,15 +21,13 @@ export declare function dayFileName(date: Date): string;
  */
 export declare class UsageLog {
     private readonly dir;
-    private readonly now;
     private readonly seen;
     private queue;
     private ready;
     /**
      * @param dir - absolute data directory (created lazily on first write).
-     * @param now - clock source for day-file selection (test seam).
      */
-    constructor(dir: string, now?: () => Date);
+    constructor(dir: string);
     /** Whether a request id is already known to this log. */
     has(requestId: string): boolean;
     /**
@@ -58,6 +56,9 @@ export declare class UsageLog {
      * cached creation: the data location may be removed underneath a running
      * process (a migration that stayed behind, a user cleanup), and failing
      * every append forever after would silently drop the whole session's rows.
+     * The day file is keyed by the record's own event time, not the wall clock:
+     * a startup sync folds past events into their actual-day files instead of
+     * into "today", so per-day rollups stay date-correct without any rewrite.
      */
     private appendOnce;
 }

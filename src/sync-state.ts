@@ -1,7 +1,13 @@
 /**
- * One-shot initialization marker: whether the plugin ever completed a history
- * sync. The marker exists only to gate the FIRST automatic sync; every later
- * sync is the user's decision (the manual command).
+ * Per-session sync progress: the seq watermark of every session already folded
+ * into the durable log. Read at startup so each session's first sync on a
+ * machine only walks the suffix past the watermark; writes back atomically
+ * (temp + rename) so a crash mid-write leaves either the old or the new
+ * progress, never a torn watermark that would double-record the next run.
+ *
+ * v1 (`{"initializedAt": number}`) is recognized for backward compatibility
+ * and treated as an empty progress map: the first run after the upgrade
+ * performs one full sync, then persists the new shape.
  *
  * @module token-usage/sync-state
  */
@@ -12,52 +18,91 @@ import { join } from 'node:path'
 const STATE_FILE = 'state.json'
 const TMP_FILE = 'state.json.tmp'
 
-/** Contents of the initialized marker. */
-export interface SyncState {
-  /** Epoch milliseconds when the first automatic sync completed. */
-  initializedAt: number
+/** One session's persisted sync watermark. */
+export interface SessionProgress {
+  /** Highest event seq from this session that has been folded into the log. */
+  lastSyncedSeq: number
 }
 
-function isSyncState(value: unknown): value is SyncState {
+/** The full on-disk sync progress: a per-session watermark map. */
+export interface SyncProgress {
+  /** Schema version; currently 2. */
+  version: 2
+  /** Last successful sync completion wall time (epoch ms). Optional debug breadcrumb. */
+  syncedAt?: number
+  /** Per-session watermark map. */
+  sessions: Record<string, SessionProgress>
+}
+
+function isSessionProgress(value: unknown): value is SessionProgress {
+  if (typeof value !== 'object' || value === null) return false
+  const seq = (value as Record<string, unknown>).lastSyncedSeq
+  return typeof seq === 'number' && Number.isFinite(seq) && seq >= 0
+}
+
+function isV2(value: unknown): value is SyncProgress {
+  if (typeof value !== 'object' || value === null) return false
+  const root = value as Record<string, unknown>
+  if (root.version !== 2) return false
+  if (root.syncedAt !== undefined
+      && (typeof root.syncedAt !== 'number' || !Number.isFinite(root.syncedAt))) return false
+  if (typeof root.sessions !== 'object' || root.sessions === null) return false
+  const sessions = root.sessions as Record<string, unknown>
+  for (const key of Object.keys(sessions)) {
+    if (!isSessionProgress(sessions[key])) return false
+  }
+  return true
+}
+
+function isV1Initialized(value: unknown): boolean {
   return typeof value === 'object' && value !== null
     && typeof (value as Record<string, unknown>).initializedAt === 'number'
     && Number.isFinite((value as Record<string, unknown>).initializedAt)
 }
 
 /**
- * Whether the first automatic sync already completed. A missing or malformed
- * marker reads as uninitialized: the next startup re-runs the sync, whose
- * dedupe makes the repetition a no-op.
+ * Read the sync progress. A missing, malformed, or v1-only file reads as an
+ * empty v2 progress map: the first run after a missing/v1 marker performs one
+ * full sync, then persists the v2 shape. v2 corruption reads as empty so a
+ * crash mid-write cannot strand the user on a half-finished watermark.
  * @param dir - the data directory holding the marker.
  */
-export async function isInitialized(dir: string): Promise<boolean> {
+export async function readSyncProgress(dir: string): Promise<SyncProgress> {
   let text: string
   try {
     text = await readFile(join(dir, STATE_FILE), 'utf8')
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return emptyProgress()
     console.error('[token-usage] cannot read state:', error)
-    return false
+    return emptyProgress()
   }
   let value: unknown
   try {
     value = JSON.parse(text)
   } catch {
-    // Malformed marker: treat as uninitialized (the sync re-runs idempotently).
-    return false
+    return emptyProgress()
   }
-  return isSyncState(value)
+  if (isV2(value)) return value
+  if (isV1Initialized(value)) return emptyProgress()
+  return emptyProgress()
+}
+
+function emptyProgress(): SyncProgress {
+  return { version: 2, sessions: {} }
 }
 
 /**
- * Persist the initialized marker atomically (temp file + rename), so a crash
- * mid-write never leaves a torn marker that would misread as initialized.
+ * Persist the sync progress atomically (temp file + rename), so a crash
+ * mid-write never leaves a torn watermark that would double-record the next
+ * run. Absent optional fields are omitted under `exactOptionalPropertyTypes`.
  * @param dir - the data directory holding the marker.
- * @param now - clock source (test seam).
+ * @param progress - the progress to persist.
  */
-export async function markInitialized(dir: string, now: () => Date = () => new Date()): Promise<void> {
+export async function writeSyncProgress(dir: string, progress: SyncProgress): Promise<void> {
   const target = join(dir, STATE_FILE)
   const tmp = join(dir, TMP_FILE)
-  await writeFile(tmp, JSON.stringify({ initializedAt: now().getTime() }), 'utf8')
+  const payload: Record<string, unknown> = { version: 2, sessions: progress.sessions }
+  if (progress.syncedAt !== undefined) payload.syncedAt = progress.syncedAt
+  await writeFile(tmp, JSON.stringify(payload), 'utf8')
   await rename(tmp, target)
 }

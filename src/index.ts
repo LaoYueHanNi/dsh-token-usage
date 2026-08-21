@@ -417,17 +417,25 @@ export function apply(ctx: Context, config: Config = {}) {
       void current?.log.record(record)
     })
 
-    // One-shot backfill for requests recorded before this plugin was installed.
-    // Fire-and-forget: a failure leaves the marker unwritten and the next
-    // startup retries; a crash mid-run is absorbed by the sync's dedupe.
+    // Every-startup sync: replays the suffix past the per-session watermark
+    // (a missing or v1 marker forces one full sync on this machine). Catches
+    // events that fell into the restart window between sessions — the live
+    // hook below only sees events that fire AFTER it attaches, so anything
+    // the previous process handled but never recorded needs to be folded
+    // back from the persisted session log. A re-install that did not go
+    // through `remove` keeps the watermark and therefore the same
+    // suffix-only behavior on the next startup, so re-installing never
+    // silently drops a window. Fire-and-forget: a failure leaves the
+    // watermark at its old value and the next startup retries — the dedupe
+    // set built from existing day files absorbs any rows that did land.
     void autoSyncIfNeeded({ persistence: ctx.sessionPersistence, log }, dir)
       .then((result) => {
         if (result !== null) {
-          console.log(`[token-usage] first-run sync: ${result.added} added, ${result.skipped} skipped`)
+          console.log(`[token-usage] startup sync: ${result.added} added, ${result.skipped} skipped`)
         }
       })
       .catch((error: unknown) => {
-        console.error('[token-usage] first-run sync failed:', error)
+        console.error('[token-usage] startup sync failed:', error)
       })
 
     // The stats endpoint backing the web settings page. Optional by design:

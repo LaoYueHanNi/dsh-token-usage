@@ -17,7 +17,7 @@ Repo: <https://github.com/LaoYueHanNi/dsh-token-usage>
 - **Live hook**: every successful model request is appended to per-day JSONL files (request id, model, input / output / cache-read / cache-write tokens, time, session id).
 - **Web stats page**: filters (date range + model + `1d`/`7d`/`30d` shortcuts), summary cards, daily trend chart (hover a day for its total), per-model table.
 - **Cost figures & model pricing**: per-request cost is computed live from per-model rates (¥ per million tokens) — a highlighted total-cost card, a cost column in the per-model table, and a warning strip for unpriced models (their cost counts as ¥0). Every priced model's name carries a small **rates button** that opens a dialog with that model's full price table: **each row is one billing condition** (default rates, context tiers like `≥ 512K`, peak windows like `09:00-12:00`, grouped under time rules' date windows), with the in/out/cache/write rates as aligned columns — mirroring exactly what the per-record resolver bills. Rates merge from two files: every startup mirrors the cloud model-price-table feed (the same source cc-switch-analyzer pulls) automatically, and `pricing.json` holds manual overrides.
-- **History backfill**: the first startup syncs requests that happened before installation (idempotent).
+- **History backfill + window catch-up**: every startup syncs the persisted session log into the durable JSONL. A per-session seq watermark keeps re-installs and dsh restarts from losing the window of events that fire between cordis listener registration and the new process — anything the live hook missed still gets folded in, idempotently via request-id dedupe.
 
 ## Model pricing
 

@@ -10,7 +10,7 @@ import { DEFAULT_PRICING_URL_OVERSEAS } from '../src/pricing.ts'
 import { messageEvent } from './helpers.ts'
 
 /** Returns persisted sessions from a shared mutable list. */
-function persistenceService(sessions: Array<{ id: string; events: unknown[] }>) {
+function persistenceService(sessions: Array<{ id: string; events: Array<{ seq: number; type: string; time?: number; data?: unknown }> }>) {
   return class extends Service {
     constructor(ctx: Context) {
       super(ctx, 'sessionPersistence')
@@ -24,6 +24,14 @@ function persistenceService(sessions: Array<{ id: string; events: unknown[] }>) 
       const session = sessions.find(candidate => candidate.id === id)
       if (session === undefined) throw new Error(`missing session ${id}`)
       return { events: session.events }
+    }
+
+    /** readFrom returns events at or past fromSeq — sync needs the suffix. */
+    async readFrom(id: string, fromSeq: number): Promise<{ meta: { id: string }; events: unknown[] }> {
+      const session = sessions.find(candidate => candidate.id === id)
+      if (session === undefined) throw new Error(`missing session ${id}`)
+      const events = session.events.filter(event => event.seq >= fromSeq)
+      return { meta: { id }, events }
     }
   }
 }
@@ -124,14 +132,30 @@ async function pollLogFile(dir: string): Promise<string> {
   throw new Error('no log file appeared')
 }
 
-/** Wait until the first-run auto sync wrote its initialized marker. */
+/** Wait until the per-session sync watermark lands in state.json. */
 async function waitForState(dir: string): Promise<void> {
   const deadline = Date.now() + 2_000
   while (Date.now() < deadline) {
     if ((await readdir(dir).catch(() => [] as string[])).includes('state.json')) return
     await new Promise(resolve => setTimeout(resolve, 20))
   }
-  throw new Error('initialized marker never appeared')
+  throw new Error('sync watermark never appeared')
+}
+
+/** Read every requestId out of every day file in the directory. */
+async function readIds(dir: string): Promise<string[]> {
+  const names = (await readdir(dir).catch(() => [] as string[]))
+    .filter(name => name.endsWith('.jsonl'))
+  const ids: string[] = []
+  for (const name of names) {
+    const text = await readFile(join(dir, name), 'utf8').catch(() => '')
+    for (const line of text.split('\n')) {
+      if (line === '') continue
+      const row = JSON.parse(line) as { requestId: string }
+      ids.push(row.requestId)
+    }
+  }
+  return ids
 }
 
 describe('plugin integration', () => {
@@ -228,7 +252,7 @@ describe('plugin integration', () => {
     expect(names.filter(name => name.endsWith('.jsonl'))).toHaveLength(0)
   })
 
-  it('runs the first-run auto sync once and marks initialized', async () => {
+  it('runs the first-run auto sync and writes the per-session watermark', async () => {
     sessions.push({ id: 'old', events: [messageEvent({ messageId: 'm9', seq: 3 })] })
     const mounted = await mount()
     await waitForState(mounted.dir)
@@ -237,25 +261,32 @@ describe('plugin integration', () => {
     expect(row).toMatchObject({ requestId: 'm9', sessionId: 'old', model: 'deepseek-chat' })
   })
 
-  it('does not auto-sync on later startups', async () => {
+  it('re-syncs the suffix past the watermark on later startups', async () => {
     sessions.push({ id: 'old', events: [messageEvent({ messageId: 'm9', seq: 3 })] })
     const first = await mount()
     await waitForState(first.dir)
     await pollLogFile(first.dir)
 
-    // Unload the first instance, then add history a later startup would miss.
+    // Unload the first instance, then add history that the live hook would
+    // miss in a normal re-install flow.
     ctx!.registry.delete(plugin)
     ctx = undefined
     sessions.push({ id: 'newer', events: [messageEvent({ messageId: 'm10', seq: 1 })] })
 
     const second = await mount()
-    // The marker exists, so no auto sync may run for the newer session.
-    await new Promise(resolve => setTimeout(resolve, 100))
-    const names = await readdir(second.dir).catch(() => [] as string[])
-    const files = names.filter(name => name.endsWith('.jsonl'))
-    expect(files).toHaveLength(1)
-    const text = await readFile(join(second.dir, files[0]!), 'utf8')
-    expect(text.trim().split('\n')).toHaveLength(1)
+    // A re-install must catch up on the newer session even though the
+    // watermark already exists for `old`. Wait for the suffix to land.
+    const deadline = Date.now() + 2_000
+    while (Date.now() < deadline) {
+      const text = await readFile(join(second.dir, 'state.json'), 'utf8').catch(() => '')
+      const progress = JSON.parse(text) as { sessions: Record<string, unknown> }
+      if (progress.sessions['newer'] !== undefined) break
+      await new Promise(resolve => setTimeout(resolve, 20))
+    }
+    const ids = await readIds(second.dir)
+    // m9 was the first mount's live-hook row; m10 is the re-install catch-up.
+    // The second mount must NOT duplicate m9 (dedupe via the day-file scan).
+    expect(ids.sort()).toEqual(['m10', 'm9'])
   })
 
   it('syncs exactly once at startup, from the settings-resolved region', async () => {
