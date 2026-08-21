@@ -458,7 +458,7 @@ describe('plugin webServer wiring', () => {
       constructor(context: Context) { super(context, 'commands') }
       register(): () => void { return () => {} }
     })
-    await next.plugin(plugin)
+    await next.plugin(plugin, { startupDeferMs: 0 })
     ctx = next
 
     // ctx.inject runs the callback in a child fiber; wait for it to activate.

@@ -50,5 +50,15 @@ export declare class UsageLog {
      * @returns true when the row was appended, false when deduped.
      */
     record(record: UsageRecord): Promise<boolean>;
+    /** The directory is created once and remembered; an external deletion
+     * forces a rebuild on the next append (see {@link appendOnce}). */
+    private ensureDir;
+    /**
+     * Append one row, self-healing once when the directory vanished after the
+     * cached creation: the data location may be removed underneath a running
+     * process (a migration that stayed behind, a user cleanup), and failing
+     * every append forever after would silently drop the whole session's rows.
+     */
+    private appendOnce;
 }
 //# sourceMappingURL=usage-log.d.ts.map

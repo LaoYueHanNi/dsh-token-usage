@@ -48,13 +48,19 @@ export interface Config {
   /** Which mirror to pull when `pricingUrl` is unset: `domestic` (default,
    * gitee) or `overseas` (github). Set once per install — no IP sniffing. */
   pricingRegion?: 'domestic' | 'overseas'
+  /** How long the first start waits for a settings service to repoint the
+   * section source before falling back to the composition entry. A settings
+   * service attached within the window starts on the stored directory; the
+   * deferred fallback then finds the same directory and is a no-op. Never
+   * user-facing — a test-only tilt at the boot deferral. */
+  startupDeferMs?: number
 }
 
 /** Reject stale or misspelled config keys before defaults can hide them. */
 export function validateConfig(config: Config): void {
   const unknown = Object.keys(config).find(key =>
     key !== 'path' && key !== 'pricingUrl' && key !== 'pricingUrlDomestic'
-    && key !== 'pricingUrlOverseas' && key !== 'pricingRegion')
+    && key !== 'pricingUrlOverseas' && key !== 'pricingRegion' && key !== 'startupDeferMs')
   if (unknown !== undefined) {
     throw new Error(`TokenUsageConfig: unknown key "${unknown}"`)
   }
@@ -75,6 +81,10 @@ export function validateConfig(config: Config): void {
   if (config.pricingRegion !== undefined
       && config.pricingRegion !== 'domestic' && config.pricingRegion !== 'overseas') {
     throw new Error('TokenUsageConfig: "pricingRegion" must be "domestic" or "overseas"')
+  }
+  if (config.startupDeferMs !== undefined
+      && (!Number.isFinite(config.startupDeferMs) || config.startupDeferMs < 0)) {
+    throw new Error('TokenUsageConfig: "startupDeferMs" must be a non-negative number')
   }
 }
 
@@ -451,14 +461,12 @@ export function apply(ctx: Context, config: Config = {}) {
     console.log(`[token-usage] plugin loaded (data dir: ${dir})`)
   }
 
-  // Every profile composes the base bundle, whose settings-file provider
-  // registers before profile plugins load, so the inject inside
-  // `installSettingsSection` fires during this apply and the section source
-  // repoints at the resolved section immediately. When no settings service
-  // is mounted (standalone mounts, package tests) the inject stays dormant
-  // and the entry config stays the source. A stored section then acts on
-  // both concerns live: a directory change relocates, a region switch (any
-  // effective-URL change) re-syncs the pricing mirror.
+  // A stored section acts on both concerns live: a directory change
+  // relocates, a region switch (any effective-URL change) re-syncs the
+  // pricing mirror. The first start intentionally defers (see the deferred
+  // startup below): the settings inject's onChange fires after setSource and
+  // opens the plugin on the settings-resolved directory; with no settings
+  // service the fallback timer opens the composition entry instead.
   installSettingsSection(ctx, TOKEN_USAGE_NS, sectionSchema, sectionOf(config), {
     validate: (value) => validateSectionChange(value, {
       runningDir: current?.dir,
@@ -467,13 +475,21 @@ export function apply(ctx: Context, config: Config = {}) {
     setSource: (source) => { sectionSource = source },
     onChange: () => { start(); requestSync() },
   })
-  // The composition-without-settings path: `start` is idempotent, so this
-  // direct call and the onChange above compose — whichever runs first opens
-  // the directory, a later change moves it live.
-  start()
-  // The startup sync: coalesced with the settings attach above, so exactly one
-  // "pricing sync" fetch lands per restart at the effective (settings-aware)
-  // URL. Without a settings service the inject stays dormant and this is the
-  // one and only startup sync.
-  requestSync()
+  // The bootstrap defers the first start briefly. The dsh Loader mounts every
+  // profile entry CONCURRENTLY, so this plugin's apply() runs in no guaranteed
+  // order relative to the base bundle's settings-file provider: probing the
+  // settings service synchronously cannot tell "not attached yet" from "never
+  // attached", and starting on the composition entry first would open the
+  // DEFAULT directory and then relocate default → stored on every boot. So the
+  // first start waits a short window for the settings inject (whose onChange
+  // fires after setSource, on the settings-resolved directory), then falls
+  // back to the composition entry — the idempotent start makes the deferred
+  // call a no-op when the inject already won the window. No settings service
+  // mounted: the inject stays dormant and the fallback is the one start.
+  const startupDeferMs = config.startupDeferMs ?? 500
+  const startup = setTimeout(() => {
+    start()
+    requestSync()
+  }, startupDeferMs)
+  ctx.effect(() => () => clearTimeout(startup), 'token-usage: deferred startup')
 }

@@ -106,9 +106,8 @@ export class UsageLog {
     // Claim before queueing: a concurrent call with the same id dedupes here.
     this.seen.add(record.requestId)
     const task = this.queue.then(async () => {
-      this.ready ??= mkdir(this.dir, { recursive: true }).then(() => undefined)
-      await this.ready
-      await appendFile(dayFilePath(this.dir, this.now()), `${serializeRecord(record)}\n`, { flag: 'a' })
+      await this.ensureDir()
+      await this.appendOnce(record)
     })
     // A failed append must not poison the chain for later rows.
     this.queue = task.catch(() => {})
@@ -120,5 +119,30 @@ export class UsageLog {
         console.error('[token-usage] append failed:', error)
         return false
       })
+  }
+
+  /** The directory is created once and remembered; an external deletion
+   * forces a rebuild on the next append (see {@link appendOnce}). */
+  private async ensureDir(): Promise<void> {
+    this.ready ??= mkdir(this.dir, { recursive: true }).then(() => undefined)
+    await this.ready
+  }
+
+  /**
+   * Append one row, self-healing once when the directory vanished after the
+   * cached creation: the data location may be removed underneath a running
+   * process (a migration that stayed behind, a user cleanup), and failing
+   * every append forever after would silently drop the whole session's rows.
+   */
+  private async appendOnce(record: UsageRecord): Promise<void> {
+    const path = dayFilePath(this.dir, this.now())
+    try {
+      await appendFile(path, `${serializeRecord(record)}\n`, { flag: 'a' })
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      this.ready = undefined
+      await this.ensureDir()
+      await appendFile(path, `${serializeRecord(record)}\n`, { flag: 'a' })
+    }
   }
 }

@@ -46,6 +46,12 @@ describe('validateConfig', () => {
     expect(() => validateConfig({ foo: 1 } as unknown as Config)).toThrow(/unknown key "foo"/)
   })
 
+  it('accepts a non-negative startup deferral and rejects a negative one', () => {
+    expect(() => validateConfig({ startupDeferMs: 0 })).not.toThrow()
+    expect(() => validateConfig({ startupDeferMs: 500 })).not.toThrow()
+    expect(() => validateConfig({ startupDeferMs: -1 } as unknown as Config)).toThrow(/non-negative/)
+  })
+
   it('rejects a blank path', () => {
     expect(() => validateConfig({ path: '' })).toThrow(/non-empty string/)
   })
