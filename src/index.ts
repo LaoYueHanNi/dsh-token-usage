@@ -28,6 +28,7 @@ import type {} from '@deepseek-ai/dsh-session-persistence'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import { UsageLog } from './usage-log.ts'
 import { cleanSource, copyData, type MigrationProgress } from './migrate.ts'
+import { LiveProgressBuffer } from './live-progress.ts'
 import { resolvePricingUrl, syncCloudPricing, type PricingSourceInput } from './pricing.ts'
 import { recordFromEvent } from './usage-record.ts'
 import { autoSyncIfNeeded } from './sync.ts'
@@ -388,6 +389,25 @@ export function apply(ctx: Context, config: Config = {}) {
   }, 'token-usage: pricing sync coalescer')
 
   /**
+   * The live-progress buffer is created inside `start()` alongside the log,
+   * so the section source and the running directory can never disagree.
+   * The effect that disposes the buffer on shutdown is registered up front
+   * because cordis effect cleanup must run on the same context that owns
+   * the live hook — wiring it from inside `start()` (which may run again
+   * after a directory change) would re-register the disposer on every
+   * relocation.
+   */
+  let liveProgress: LiveProgressBuffer | undefined
+  let liveProgressToken = 0
+  // The disposer captures the current buffer at disposal time and flushes
+  // whatever entries the live hook accumulated under it. Multiple
+  // start()-driven recreations are safe: the latest token wins.
+  ctx.effect(() => () => {
+    const buf = liveProgress
+    if (buf !== undefined) void buf.dispose()
+  }, 'token-usage: live progress buffer')
+
+  /**
    * Open (or move) the running data directory at the section-resolved
    * location. Idempotent: the first call opens the directory and registers
    * the listeners and routes; a later call with a different resolved
@@ -410,11 +430,33 @@ export function apply(ctx: Context, config: Config = {}) {
     const log = new UsageLog(dir)
     current = { dir, log }
 
+    // Build the buffer with the same directory the log just opened, prime
+    // it with the on-disk baseline, and arm the wall-clock drain. The live
+    // hook below is wired after this resolves so the first append merges
+    // into the right baseline (not a stale empty map).
+    const myToken = ++liveProgressToken
+    const buf = new LiveProgressBuffer({ dir, persistence: ctx.sessionPersistence })
+    liveProgress = buf
+    buf.loadBaseline()
+      .then(() => { if (myToken === liveProgressToken) buf.start() })
+      .catch((error: unknown) => {
+        console.error('[token-usage] live progress buffer init failed:', error)
+      })
+
     ctx.on('session/event', (session: Session, event: SessionEvent) => {
       if (event.type !== 'assistant/message') return
       const record = recordFromEvent(event, session.id)
       // Fire-and-forget: the log serializes appends and reports its own failures.
-      void current?.log.record(record)
+      // On a successful append, push the latest watermark into the in-memory
+      // progress buffer so the next startup can short-circuit (no readFrom)
+      // for sessions whose stored log has not changed since this run. A
+      // failed append releases the dedupe claim and stays in the cache as if
+      // it never happened, so the next startup sync still catches up.
+      void current?.log.record(record).then((appended) => {
+        if (!appended) return
+        void liveProgress?.markSynced(session.id, event.seq)
+        void liveProgress?.flushExpired()
+      })
     })
 
     // Every-startup sync: replays the suffix past the per-session watermark
