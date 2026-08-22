@@ -74,7 +74,7 @@ describe('syncHistory', () => {
     const persistence = fakePersistence([{ id: 's1', events: [messageEventWith('m1', 1)] }])
     const controller = new AbortController()
     controller.abort()
-    await expect(syncHistory({ persistence, log }, controller.signal)).rejects.toMatchObject({ name: 'AbortError' })
+    await expect(syncHistory({ persistence, log }, undefined, controller.signal)).rejects.toMatchObject({ name: 'AbortError' })
   })
 
   it('stops mid-sync when the signal fires', async () => {
@@ -115,6 +115,38 @@ describe('autoSyncIfNeeded', () => {
     await autoSyncIfNeeded({ persistence, log }, dir)
     expect(await autoSyncIfNeeded({ persistence, log }, dir)).toBeNull()
     expect(log.rows).toHaveLength(1)
+  })
+})
+
+describe('syncHistory progress', () => {
+  it('emits a tick before the first session and one tick per session', async () => {
+    const log = new FakeLog()
+    const persistence = fakePersistence([
+      { id: 's1', events: [messageEventWith('m1', 1)] },
+      { id: 's2', events: [messageEventWith('m2', 1), messageEventWith('m3', 2)] },
+    ])
+    const ticks: Array<{ processed: number; total: number; added: number; skipped: number }> = []
+    const result = await syncHistory({ persistence, log },
+      tick => { ticks.push({ ...tick }) },
+    )
+    expect(result).toEqual({ added: 3, skipped: 0 })
+    // One leading tick at processed: 0, then one per session.
+    expect(ticks).toEqual([
+      { processed: 0, total: 2, added: 0, skipped: 0 },
+      { processed: 1, total: 2, added: 1, skipped: 0 },
+      { processed: 2, total: 2, added: 3, skipped: 0 },
+    ])
+  })
+
+  it('reports total: 0 when the persistence lists no sessions', async () => {
+    const log = new FakeLog()
+    const persistence = fakePersistence([])
+    const ticks: number[] = []
+    const result = await syncHistory({ persistence, log },
+      tick => { ticks.push(tick.total) },
+    )
+    expect(result).toEqual({ added: 0, skipped: 0 })
+    expect(ticks).toEqual([0])
   })
 })
 

@@ -70,6 +70,13 @@ export declare const zh: {
     readonly 'card.saveFailed': "保存未生效，请重试。";
     readonly 'card.saveBlockedSessions': "有会话正在进行对话，无法保存目录修改；请等待对话结束（当前 {count} 个）。";
     readonly 'card.discard': "放弃";
+    readonly 'card.fullSync.title': "全量扫描同步";
+    readonly 'card.fullSync.hint': "手动扫一遍所有 session 日志，把可能漏掉的历史请求补进来（已记录的会跳过）。";
+    readonly 'card.fullSync.button': "开始扫描";
+    readonly 'card.fullSync.running': "扫描中…";
+    readonly 'card.fullSync.progress': "已处理 {processed}/{total} 个 session，新增 {added} 条，跳过 {skipped} 条";
+    readonly 'card.fullSync.done': "扫描完成：新增 {added} 条，跳过 {skipped} 条";
+    readonly 'card.fullSync.failed': "扫描失败：{error}";
     readonly loadFailed: "统计加载失败：{message}";
     readonly empty: "暂无数据。可调整筛选条件；模型请求成功后会自动写入，安装前已发生的历史记录会在首次启动时自动补齐。";
     readonly 'chart.empty': "区间内暂无数据";

@@ -30,9 +30,9 @@ import { UsageLog } from './usage-log.ts'
 import { cleanSource, copyData, type MigrationProgress } from './migrate.ts'
 import { resolvePricingUrl, syncCloudPricing, type PricingSourceInput } from './pricing.ts'
 import { recordFromEvent } from './usage-record.ts'
-import { autoSyncIfNeeded } from './sync.ts'
-import { createDirectoryGuardRoute, createMigrationRoute, createStatsRoute } from './stats-route.ts'
-import { currencyOfRegion, type DirectoryGuardView } from './wire.ts'
+import { autoSyncIfNeeded, syncHistory } from './sync.ts'
+import { createDirectoryGuardRoute, createFullSyncRoute, createMigrationRoute, createStatsRoute, type FullSyncTrigger } from './stats-route.ts'
+import { currencyOfRegion, type DirectoryGuardView, type FullSyncView } from './wire.ts'
 
 export interface Config {
   /** Data directory; defaults to `$DSH_HOME/token-usage` (`~/.dsh/token-usage`). */
@@ -251,6 +251,15 @@ export function apply(ctx: Context, config: Config = {}) {
   let relocating: Promise<void> = Promise.resolve()
   // Live migration progress, polled by the browser card while a move runs.
   let migration: MigrationProgress | undefined
+  // Live full-sync state, polled by the browser card while a manual scan runs.
+  // The default `idle` means "never triggered" (or "the last run settled and
+  // the card cleared it"); a card opening this section does not auto-clear
+  // a terminal `done` / `failed` — those linger so the user can read the
+  // result, and the next `triggerFullSync` overwrites them.
+  let fullSyncStatus: FullSyncView = { status: 'idle' }
+  // At most one manual scan at a time: a second POST returns 409 and the card
+  // shows the button as disabled until the running scan settles.
+  let fullSyncRunning = false
 
   /**
    * The directory currently in force; before the first start it resolves
@@ -388,6 +397,57 @@ export function apply(ctx: Context, config: Config = {}) {
   }, 'token-usage: pricing sync coalescer')
 
   /**
+   * Kick off one full scan over every persisted session log and stream the
+   * live counts into {@link fullSyncStatus}. The scan is the same shape as
+   * the one-shot startup sync (list + inspect + UsageLog dedupe) — there is
+   * no watermark shortcut here, so the user gets a guarantee that every
+   * persisted request row the log does not yet hold will land. The run is
+   * fire-and-forget: a second trigger while one is in flight returns
+   * `{ started: false, reason: 'already-running' }` and the route answers
+   * 409 so the card can keep its button disabled.
+   */
+  const triggerFullSync = (): FullSyncTrigger => {
+    if (fullSyncRunning) return { started: false, reason: 'already-running' }
+    const target = current
+    if (target === undefined) return { started: false, reason: 'already-running' }
+    fullSyncRunning = true
+    fullSyncStatus = { status: 'running', processed: 0, total: 0, added: 0, skipped: 0 }
+    void syncHistory({ persistence: ctx.sessionPersistence, log: target.log },
+      (tick) => {
+        // The route's status thunk reads `fullSyncStatus` by reference, so each
+        // tick is visible to the next poll without any other wiring.
+        fullSyncStatus = { status: 'running', ...tick }
+      },
+    )
+      .then((result) => {
+        // `syncHistory` always emits a final tick at `processed: total`, but
+        // we re-stamp the done state from the resolved result so the
+        // `added` / `skipped` totals match the function's return exactly
+        // (the last tick carries the in-loop counters; this stamp aligns
+        // them with the result in case of any trailing read).
+        const last = fullSyncStatus.status === 'running' ? fullSyncStatus
+          : { processed: 0, total: 0, added: 0, skipped: 0 }
+        fullSyncStatus = {
+          status: 'done',
+          processed: last.processed,
+          total: last.total,
+          added: result.added,
+          skipped: result.skipped,
+        }
+        console.log(`[token-usage] full sync done: ${String(result.added)} added, ${String(result.skipped)} skipped`)
+      })
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error)
+        fullSyncStatus = { status: 'failed', error: message }
+        console.error('[token-usage] full sync failed:', error)
+      })
+      .finally(() => {
+        fullSyncRunning = false
+      })
+    return { started: true }
+  }
+
+  /**
    * Open (or move) the running data directory at the section-resolved
    * location. Idempotent: the first call opens the directory and registers
    * the listeners and routes; a later call with a different resolved
@@ -456,6 +516,12 @@ export function apply(ctx: Context, config: Config = {}) {
           interactingSessions: countInteractingSessions(ctx.sessions.list()),
         })),
       ), 'token-usage: directory guard route')
+      // The card's manual "scan again" affordance: `POST` kicks off a run,
+      // `GET` returns the live progress. The route is read-only over the
+      // shared status; the actual scan runs as the closure above.
+      webCtx.effect(() => webCtx.webServer.register(
+        createFullSyncRoute(() => fullSyncStatus, triggerFullSync),
+      ), 'token-usage: full sync route')
     })
 
     console.log(`[token-usage] plugin loaded (data dir: ${dir})`)

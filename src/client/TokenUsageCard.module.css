@@ -278,3 +278,109 @@
   outline: 2px solid var(--dsw-alias-brand-primary);
   outline-offset: 1px;
 }
+
+/* Manual full-sync section: the button + live progress bar + terminal result.
+   Lives between the migration block and the footer so its lifecycle (idle /
+   running / done / failed) reads as the card's own state, not the form's. */
+.fullSync {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-2);
+}
+
+.fullSyncHeader {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.fullSyncTitle {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--dsw-alias-label-primary);
+}
+
+.fullSyncHint {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.fullSyncButton {
+  appearance: none;
+  align-self: flex-start;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 6px;
+  padding: 4px 12px;
+  font: inherit;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-secondary);
+  background: none;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.fullSyncButton:hover:not(:disabled) {
+  color: var(--dsw-alias-label-primary);
+  border-color: var(--dsw-alias-label-dimmed);
+}
+
+.fullSyncButton:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.fullSyncButton:focus-visible {
+  outline: 2px solid var(--dsw-alias-brand-primary);
+  outline-offset: 1px;
+}
+
+.fullSyncProgress {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.fullSyncProgressLabel {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--dsw-alias-label-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.fullSyncBar {
+  display: block;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--dsw-alias-bg-multi-select);
+  overflow: hidden;
+}
+
+.fullSyncFill {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--dsw-alias-brand-primary);
+  transition: width .2s ease;
+}
+
+.fullSyncResult {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--dsw-alias-label-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.fullSyncError {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--dsw-alias-label-error);
+}

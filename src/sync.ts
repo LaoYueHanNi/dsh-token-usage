@@ -20,6 +20,25 @@ export interface SyncResult {
   skipped: number
 }
 
+/**
+ * One progress tick of a long sync: the host forwards these to the card so the
+ * user can see how far the manual scan has gotten. The first tick is emitted
+ * before the first session is read (so the bar shows `0/total` immediately),
+ * and one tick follows each completed session. `total` is the session count
+ * seen at the start of the run; a session that appears mid-run does not
+ * change it.
+ */
+export interface SyncProgressTick {
+  /** Sessions fully processed so far. */
+  processed: number
+  /** Total sessions this run intends to walk (frozen at the start). */
+  total: number
+  /** Rows appended to the log so far. */
+  added: number
+  /** Rows skipped by dedupe so far. */
+  skipped: number
+}
+
 /** The persistence surface the sync needs (duck-typed for tests). */
 export interface SyncPersistence {
   /** Every materialized session, in arbitrary order. */
@@ -39,13 +58,24 @@ export interface SyncDeps {
  * data files first, so a second run is a no-op and rows recorded live in a
  * previous process are not duplicated.
  * @param deps - persistence and the shared log.
+ * @param onTick - optional progress callback; fires once before the first
+ * session (with `processed: 0` and the final `total`), then once per session
+ * as it finishes. The card passes this to drive its progress bar; the
+ * one-shot startup sync omits it.
  * @param signal - cancellation; an aborted run throws `AbortError`.
  */
-export async function syncHistory(deps: SyncDeps, signal?: AbortSignal): Promise<SyncResult> {
+export async function syncHistory(
+  deps: SyncDeps,
+  onTick?: (tick: SyncProgressTick) => void,
+  signal?: AbortSignal,
+): Promise<SyncResult> {
   await deps.log.scan()
   const sessions = await deps.persistence.list(signal)
   let added = 0
   let skipped = 0
+  const total = sessions.length
+  let processed = 0
+  onTick?.({ processed, total, added, skipped })
   for (const session of sessions) {
     signal?.throwIfAborted()
     const inspection = await deps.persistence.inspect(session.id, signal)
@@ -56,6 +86,8 @@ export async function syncHistory(deps: SyncDeps, signal?: AbortSignal): Promise
       if (await deps.log.record(record)) added += 1
       else skipped += 1
     }
+    processed += 1
+    onTick?.({ processed, total, added, skipped })
   }
   return { added, skipped }
 }

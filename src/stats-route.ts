@@ -13,8 +13,8 @@ import type { MigrationProgress } from './migrate.ts'
 import { readPricingTable, readUsdExchangeRate, resolveRate } from './pricing.ts'
 import { attachCosts, buildSummary, filterSummary } from './stats.ts'
 import type { RateResolver } from './stats.ts'
-import { DIR_GUARD_PATH, MIGRATION_PATH, STATS_PATH, UNPRICED_KEY } from './wire.ts'
-import type { DirectoryGuardView, DisplayCurrency } from './wire.ts'
+import { DIR_GUARD_PATH, FULL_SYNC_PATH, MIGRATION_PATH, STATS_PATH, UNPRICED_KEY } from './wire.ts'
+import type { DirectoryGuardView, DisplayCurrency, FullSyncView } from './wire.ts'
 
 /** The stats endpoint path, exported for tests and the client half. */
 export { STATS_PATH } from './wire.ts'
@@ -24,6 +24,9 @@ export { MIGRATION_PATH } from './wire.ts'
 
 /** The directory-guard endpoint path, exported for the client half. */
 export { DIR_GUARD_PATH } from './wire.ts'
+
+/** The full-sync endpoint path, exported for the client half. */
+export { FULL_SYNC_PATH } from './wire.ts'
 
 /** A day query key must be exactly `YYYY-MM-DD`. */
 const DAY_KEY = /^\d{4}-\d{2}-\d{2}$/u
@@ -138,6 +141,62 @@ export function createDirectoryGuardRoute(judge: (proposed: string | undefined) 
       const proposed = raw === null || raw === '' ? undefined : raw
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
       res.end(JSON.stringify(judge(proposed)))
+    },
+  }
+}
+
+/**
+ * Outcome of one manual full-sync trigger.
+ * - `started: true` — the run kicked off; the next poll will see the live counts.
+ * - `started: false, reason: 'already-running'` — a run is still in flight;
+ *   the card surfaces this as the button's disabled state and a 409 response.
+ */
+export type FullSyncTrigger =
+  | { started: true }
+  | { started: false; reason: 'already-running' }
+
+/**
+ * Build the full-sync route backing the card's manual "scan again" button.
+ * The handler is small by design: it only owns the request/response shape
+ * (GET polls the live status, POST kicks off a run). The actual scan lives
+ * on the host half and updates the shared status object, which `status()`
+ * reads. The scan is fire-and-forget on POST so the request never blocks
+ * behind a long walk; the card polls until the status leaves `running`.
+ * @param status - reads the shared status (the same view the card renders).
+ * @param trigger - kicks off a new run when the host is idle.
+ * @returns the exact route serving both methods.
+ */
+export function createFullSyncRoute(
+  status: () => FullSyncView,
+  trigger: () => FullSyncTrigger,
+): WebRoute {
+  return {
+    kind: 'exact',
+    path: FULL_SYNC_PATH,
+    handler: (req, res) => {
+      if (!isSameOriginFetch(req)) {
+        res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' })
+        res.end('forbidden')
+        return
+      }
+      if (req.method === 'GET') {
+        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+        res.end(JSON.stringify(status()))
+        return
+      }
+      if (req.method === 'POST') {
+        const result = trigger()
+        if (!result.started) {
+          res.writeHead(409, { 'content-type': 'application/json; charset=utf-8' })
+          res.end(JSON.stringify({ error: result.reason }))
+          return
+        }
+        res.writeHead(202, { 'content-type': 'application/json; charset=utf-8' })
+        res.end(JSON.stringify({ status: 'running' }))
+        return
+      }
+      res.writeHead(405, { 'content-type': 'text/plain; charset=utf-8' })
+      res.end('method not allowed')
     },
   }
 }

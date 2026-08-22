@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Context, Service } from '@deepseek-ai/cordis'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import * as plugin from '../src/index.ts'
-import { createDirectoryGuardRoute, createMigrationRoute, createStatsRoute, DIR_GUARD_PATH, isSameOriginFetch, MIGRATION_PATH, STATS_PATH } from '../src/stats-route.ts'
+import { createDirectoryGuardRoute, createFullSyncRoute, createMigrationRoute, createStatsRoute, DIR_GUARD_PATH, FULL_SYNC_PATH, isSameOriginFetch, MIGRATION_PATH, STATS_PATH } from '../src/stats-route.ts'
 import { currencyOfRegion } from '../src/wire.ts'
 import type { UsageRecord } from '../src/usage-record.ts'
 import { messageEvent } from './helpers.ts'
@@ -389,6 +389,62 @@ describe('createDirectoryGuardRoute', () => {
     const { res, captured } = fakeResponse()
     await route.handler(fakeRequest({ headers: { 'sec-fetch-site': 'cross-site' } }), res)
     expect(captured.status).toBe(403)
+  })
+})
+
+describe('createFullSyncRoute', () => {
+  it('serves the live status as JSON on GET', async () => {
+    let view = { status: 'running' as const, processed: 3, total: 10, added: 7, skipped: 0 }
+    const route = createFullSyncRoute(() => view, () => ({ started: true }))
+    const { res, captured } = fakeResponse()
+    await route.handler(fakeRequest({ method: 'GET' }), res)
+    expect(captured.status).toBe(200)
+    expect(JSON.parse(captured.body)).toEqual(view)
+  })
+
+  it('returns 202 on POST when the trigger accepts', async () => {
+    const route = createFullSyncRoute(
+      () => ({ status: 'idle' as const }),
+      () => ({ started: true }),
+    )
+    const { res, captured } = fakeResponse()
+    await route.handler(fakeRequest({ method: 'POST' }), res)
+    expect(captured.status).toBe(202)
+    expect(JSON.parse(captured.body)).toEqual({ status: 'running' })
+  })
+
+  it('returns 409 on POST when the trigger refuses (already running)', async () => {
+    const route = createFullSyncRoute(
+      () => ({ status: 'running' as const, processed: 1, total: 5, added: 0, skipped: 0 }),
+      () => ({ started: false, reason: 'already-running' as const }),
+    )
+    const { res, captured } = fakeResponse()
+    await route.handler(fakeRequest({ method: 'POST' }), res)
+    expect(captured.status).toBe(409)
+    expect(JSON.parse(captured.body)).toEqual({ error: 'already-running' })
+  })
+
+  it('rejects non-GET/POST methods with 405', async () => {
+    const route = createFullSyncRoute(
+      () => ({ status: 'idle' as const }),
+      () => ({ started: true }),
+    )
+    const { res, captured } = fakeResponse()
+    await route.handler(fakeRequest({ method: 'PUT' }), res)
+    expect(captured.status).toBe(405)
+  })
+
+  it('refuses cross-site browser fetches with 403 on both methods', async () => {
+    const route = createFullSyncRoute(
+      () => ({ status: 'idle' as const }),
+      () => ({ started: true }),
+    )
+    const get = fakeResponse()
+    await route.handler(fakeRequest({ method: 'GET', headers: { 'sec-fetch-site': 'cross-site' } }), get.res)
+    expect(get.captured.status).toBe(403)
+    const post = fakeResponse()
+    await route.handler(fakeRequest({ method: 'POST', headers: { 'sec-fetch-site': 'cross-site' } }), post.res)
+    expect(post.captured.status).toBe(403)
   })
 })
 

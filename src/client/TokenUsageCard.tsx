@@ -16,10 +16,11 @@
  * @module token-usage/client/TokenUsageCard
  */
 
-import { useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { IconChevronDownOutline14 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { CardActions, CardStore } from './card-form.ts'
+import { FULL_SYNC_PATH, type FullSyncView } from '../wire.ts'
 import css from './TokenUsageCard.module.css'
 
 /** Props the renderer binds for the token-usage settings card. */
@@ -75,6 +76,81 @@ export function TokenUsageCard(props: TokenUsageCardProps) {
       setPicking(false)
     }
   }
+
+  // Manual full-sync state, polled from the host route while a scan runs.
+  // The default `idle` matches the host's default; a card opening with a
+  // terminal `done` / `failed` keeps it on screen until the next click.
+  const [fullSync, setFullSync] = useState<FullSyncView>({ status: 'idle' })
+  const fullSyncRunning = fullSync.status === 'running'
+
+  /**
+   * Fetch the current full-sync status from the host. A transport failure
+   * keeps the previous view (a transient miss never blanks the bar).
+   */
+  const fetchFullSync = useCallback(async (): Promise<FullSyncView | null> => {
+    try {
+      const response = await fetch(FULL_SYNC_PATH, { headers: { accept: 'application/json' } })
+      if (!response.ok) return null
+      const body = (await response.json()) as FullSyncView
+      // Trust nothing that does not match the typed shape — a host running an
+      // older build may answer a different status set.
+      if (body.status === 'idle') return { status: 'idle' }
+      if (body.status === 'running' || body.status === 'done') {
+        if (typeof body.processed === 'number' && typeof body.total === 'number'
+            && typeof body.added === 'number' && typeof body.skipped === 'number') {
+          return { status: body.status, processed: body.processed, total: body.total, added: body.added, skipped: body.skipped }
+        }
+        return null
+      }
+      if (body.status === 'failed' && typeof body.error === 'string') {
+        return { status: 'failed', error: body.error }
+      }
+      return null
+    } catch (_pollFailure) {
+      return null
+    }
+  }, [])
+
+  // Poll while a scan is in flight; the route answers 200 + status, and the
+  // poll tears itself down the moment the status leaves `running`.
+  useEffect(() => {
+    if (!fullSyncRunning) return
+    let cancelled = false
+    const tick = async (): Promise<void> => {
+      const next = await fetchFullSync()
+      if (cancelled || next === null) return
+      setFullSync(next)
+    }
+    void tick()
+    const timer = setInterval(() => { void tick() }, 300)
+    return () => { cancelled = true; clearInterval(timer) }
+  }, [fullSyncRunning, fetchFullSync])
+
+  /**
+   * Kick off one full scan. The button shows the request as soon as the
+   * POST returns 202; the polling effect above then drives the bar until
+   * the host settles into `done` or `failed`. A 409 (already running) is
+   * a no-op — the polling will already see the running state.
+   */
+  const startFullSync = useCallback(async (): Promise<void> => {
+    try {
+      const response = await fetch(FULL_SYNC_PATH, { method: 'POST' })
+      if (response.status === 202) {
+        setFullSync({ status: 'running', processed: 0, total: 0, added: 0, skipped: 0 })
+        return
+      }
+      if (response.status === 409) {
+        // A scan is already running on the host; the next poll will pick it
+        // up. The button is disabled while running, so this branch only
+        // fires on a race the host already accepted.
+        const next = await fetchFullSync()
+        if (next !== null) setFullSync(next)
+      }
+    } catch (_triggerFailure) {
+      // The next open of the section re-tries; a transient POST failure
+      // does not need its own error line.
+    }
+  }, [fetchFullSync])
 
   return (
     <li className={open ? `${css.card} ${css.cardOpen}` : css.card}>
@@ -154,6 +230,57 @@ export function TokenUsageCard(props: TokenUsageCardProps) {
                 </div>
               )
               : null}
+            <div className={css.fullSync}>
+              <div className={css.fullSyncHeader}>
+                <span className={css.fullSyncTitle}>{t('card.fullSync.title')}</span>
+                <span className={css.fullSyncHint}>{t('card.fullSync.hint')}</span>
+              </div>
+              <button
+                type="button"
+                className={css.fullSyncButton}
+                disabled={fullSyncRunning}
+                onClick={() => { void startFullSync() }}
+              >
+                {t(fullSyncRunning ? 'card.fullSync.running' : 'card.fullSync.button')}
+              </button>
+              {fullSync.status === 'running'
+                ? (
+                  <div className={css.fullSyncProgress} role="status">
+                    <span className={css.fullSyncProgressLabel}>
+                      {t('card.fullSync.progress', {
+                        processed: String(fullSync.processed),
+                        total: String(fullSync.total),
+                        added: String(fullSync.added),
+                        skipped: String(fullSync.skipped),
+                      })}
+                    </span>
+                    <span className={css.fullSyncBar}>
+                      <span
+                        className={css.fullSyncFill}
+                        style={{ width: `${String(Math.round((fullSync.processed / Math.max(fullSync.total, 1)) * 100))}%` }}
+                      />
+                    </span>
+                  </div>
+                )
+                : null}
+              {fullSync.status === 'done'
+                ? (
+                  <p className={css.fullSyncResult} role="status">
+                    {t('card.fullSync.done', {
+                      added: String(fullSync.added),
+                      skipped: String(fullSync.skipped),
+                    })}
+                  </p>
+                )
+                : null}
+              {fullSync.status === 'failed'
+                ? (
+                  <p className={css.fullSyncError} role="status">
+                    {t('card.fullSync.failed', { error: fullSync.error })}
+                  </p>
+                )
+                : null}
+            </div>
             <div className={css.footer}>
               {state.failed
                 ? (

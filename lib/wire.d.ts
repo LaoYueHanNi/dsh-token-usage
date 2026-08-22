@@ -19,6 +19,14 @@ export declare const MIGRATION_PATH = "/token-usage/migration";
  * one channel that can tell the card WHY a save would not land.
  */
 export declare const DIR_GUARD_PATH = "/token-usage/dir-guard";
+/**
+ * The full-sync endpoint path: the card's manual "scan again" affordance.
+ * `POST` starts one full scan over every session log (the same scan the
+ * one-shot startup sync ran on first install — list + inspect + dedupe), and
+ * `GET` returns the live progress. The scan is fire-and-forget on the host
+ * side, so the card polls while it runs.
+ */
+export declare const FULL_SYNC_PATH = "/token-usage/full-sync";
 /** The guard's verdict for one would-be directory save. */
 export interface DirectoryGuardView {
     /** True when the Host's section validator would refuse the save right now. */
@@ -26,6 +34,31 @@ export interface DirectoryGuardView {
     /** Sessions mid-conversation (an open turn) at verdict time, for the notice's number. */
     interactingSessions: number;
 }
+/**
+ * The view of one full-sync run: what the route returns to a poll, and what
+ * the card's section reads. `idle` means no run has been triggered (or the
+ * last one settled and the card cleared it); `running` carries the live
+ * counts the card renders as a progress bar; `done` and `failed` are the
+ * terminal states the card holds on screen until the next run.
+ */
+export type FullSyncView = {
+    status: 'idle';
+} | {
+    status: 'running';
+    processed: number;
+    total: number;
+    added: number;
+    skipped: number;
+} | {
+    status: 'done';
+    processed: number;
+    total: number;
+    added: number;
+    skipped: number;
+} | {
+    status: 'failed';
+    error: string;
+};
 /** Aggregated token counts over one group of records. */
 export interface UsageTotals {
     /** Number of recorded requests (records without provider usage count here). */
