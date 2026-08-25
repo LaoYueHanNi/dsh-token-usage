@@ -82,7 +82,26 @@ export declare const zh: {
     readonly 'chart.empty': "区间内暂无数据";
     readonly 'chart.aria': "每日总 token 曲线";
     readonly 'chart.ariaHour': "单日分时 token 曲线";
+    readonly 'chart.ariaRequests': "按时间分段的 token 曲线";
     readonly 'chart.pointLabel': "{day} 总量 {tokens}";
+    readonly 'chart.bucket': "{window} · {count} 请求 · {tokens}";
+    readonly 'view.usage': "用量";
+    readonly 'view.scope.label': "统计范围";
+    readonly 'view.scope.session': "本会话";
+    readonly 'view.scope.tree': "含子会话";
+    readonly 'view.back': "← 返回 {title}";
+    readonly 'view.ttft': "平均首token";
+    readonly 'view.speed': "token速度";
+    readonly 'view.empty': "该会话暂无用量记录。";
+    readonly 'view.chart.title': "趋势";
+    readonly 'view.subagents.title': "子会话（{count}）";
+    readonly 'view.subagents.none': "无子会话";
+    readonly 'view.subagents.titleCol': "会话";
+    readonly 'view.subagents.nested': "含 {count} 个子会话";
+    readonly 'view.note': "注：token 与费用来自本插件的请求记录（安装后）；平均首token 与 token速度来自 DSH 会话投影（含安装前历史）。";
+    readonly 'chip.tokens': "含子会话 token 用量 {value}";
+    readonly 'chip.hitRate': "含子会话缓存命中率 {value}";
+    readonly 'chip.cost': "含子会话费用 {value}";
 };
 /** English dictionary (same key set). */
 export declare const en: Record<TokenUsageKey, string>;

@@ -199,38 +199,6 @@
   gap: 8px;
 }
 
-.card {
-  padding: 10px 12px;
-  background: var(--dsw-alias-bg-layer-2);
-  border: 1px solid var(--dsw-alias-border-l1);
-  border-radius: 8px;
-}
-
-.cardLabel {
-  display: block;
-  font-size: 12px;
-  color: var(--dsw-alias-label-secondary);
-}
-
-.cardValue {
-  display: block;
-  margin-top: 4px;
-  font-size: 18px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-  color: var(--dsw-alias-label-primary);
-}
-
-/* Cost figures share one accent color, mirroring the analyzer's cost color. */
-.cardValueCost {
-  display: block;
-  margin-top: 4px;
-  font-size: 18px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-  color: var(--dsw-alias-state-warn-primary);
-}
-
 /* Unpriced-model warning strip: amber, like the analyzer's missing-pricing bar. */
 .warning {
   margin: 0;
@@ -269,11 +237,6 @@
   color: var(--dsw-alias-state-warn-label);
   background: var(--dsw-alias-state-warn-tertiary);
   border-radius: 8px;
-}
-
-.costCell {
-  color: var(--dsw-alias-state-warn-primary);
-  font-weight: 600;
 }
 
 /* The pricing affordance of a priced model row: one click opens the

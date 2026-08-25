@@ -14,6 +14,9 @@
 import type { ReactNode } from 'react';
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots';
 import type { SettingsSectionOwnerProps } from '@deepseek-ai/dsh-client-ui-settings/client';
+/** Re-export so existing section tests and consumers keep importing
+ * `StatCard` from this module (the file moved to `./StatCard.tsx`). */
+export { StatCard } from './StatCard.tsx';
 export { totalTokens } from './day.ts';
 export { formatTokens, formatHitRate } from './format.ts';
 /**

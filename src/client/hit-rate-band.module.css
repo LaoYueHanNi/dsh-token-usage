@@ -1,0 +1,29 @@
+/* Shared cache-hit-rate colour buckets. One module so the header chip,
+ * the Usage-tab / settings stat cards, and the per-model tables all
+ * paint the same four-tier gradient along a warm→cool traffic-light
+ * arc (worst → best):
+ *   <60%  red     (`critical`)
+ *   60–80% amber  (orange-yellow)
+ *   80–95% lime   (yellow-green)
+ *   ≥95%  green   (`healthy`)
+ *
+ * Endpoints follow the theme aliases with a hex fallback; the middle
+ * stops are explicit hexes — DSH ships no amber/lime alias. Hue walks
+ * continuously around the wheel so each step reads as "a bit better"
+ * than the one before (unlike the earlier violet→teal jump). */
+
+.band_critical {
+  color: var(--dsw-alias-state-error-primary, #dc2626);
+}
+
+.band_amber {
+  color: #f59e0b;
+}
+
+.band_lime {
+  color: #84cc16;
+}
+
+.band_healthy {
+  color: var(--dsw-alias-state-success-primary, #16a34a);
+}

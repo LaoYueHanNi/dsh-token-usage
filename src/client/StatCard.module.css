@@ -1,0 +1,41 @@
+/* Shared stat-card primitive. Tokens only (--dsw-* alias tokens from the web
+ * theme), no literal colors. The chrome is the same flat "label-on-top,
+ * value-below" tile the settings section uses; both surfaces share this
+ * one CSS so a styling change lands in one spot. */
+
+/* One card. The container paints the border / background; the inner
+ * spans own the spacing and tab numerals. `min-width: 0` lets the card
+ * shrink inside a grid without overflowing (a fixed min-width would
+ * break the responsive collapse the section's grid relies on). */
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 8px;
+  background: var(--dsw-alias-fill-container, transparent);
+  min-width: 0;
+}
+
+/* The label: small, secondary color, ellipsized when the card narrows. */
+.cardLabel {
+  font-size: 11px;
+  color: var(--dsw-alias-label-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The value: bold, primary, tabular numerals, fixed font so cards line
+ * up across renders — a half-width digit on a previous render would
+ * otherwise jitter the column. */
+.cardValue {
+  font-size: 18px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--dsw-alias-label-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

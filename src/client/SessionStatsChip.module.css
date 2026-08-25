@@ -1,0 +1,67 @@
+/* Session-header stats chip strip (browser half). Three sub-cells share one
+ * capsule with 1px vertical rules between them — the same chrome the
+ * Session log button wears (outline variant of ui-primitives' Button .sm:
+ * 28px tall, 12px font, 1px border). Tokens and cost use default
+ * label-primary; the hit-rate cell alone carries the shared threshold
+ * color (see `hit-rate-band.module.css`). */
+
+/* Strip container chrome. Hit-rate colour lives on an inner span from
+ * `HitRateText` / `hit-rate-band.module.css`. */
+.strip {
+  display: inline-flex;
+  align-items: stretch;
+  height: 28px;
+  /* Vertical pill chrome: container paints the border once so the inner
+   * 1px rules read as seams, not as a double-ruled outer edge. */
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 14px;
+  background: transparent;
+  font-size: 12px;
+  line-height: 18px;
+  /* Prevent the flex header from squeezing the strip to zero width at
+   * narrow widths — every cell stays readable down to the spec's 560px
+   * floor, and the strip starts to shrink (the rightmost cell first) only
+   * below that. */
+  flex: none;
+  min-width: 0;
+  overflow: hidden;
+  /* Tabular numerals so the three figures stay vertically aligned across
+   * updates — a half-width digit on a previous render would otherwise
+   * jitter the cost / hit-rate cells each tick. */
+  font-variant-numeric: tabular-nums;
+}
+
+/* One cell in the strip. The first child gets the left rounded corners,
+ * the last the right, so the capsule reads as one shape instead of three
+ * square buttons lined up. The + sibling rule paints the seam. */
+.cell {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 10px;
+  color: var(--dsw-alias-label-primary);
+  white-space: nowrap;
+}
+
+.cell + .cell {
+  border-left: 1px solid var(--dsw-alias-border-l1);
+}
+
+/* The hit-rate cell reads its color from the shared band class
+ * (`hit-rate-band.module.css`) on an inner span. */
+.cellHit {
+  font-weight: 500;
+}
+
+/* Narrow viewport (≤560px, per spec): the strip keeps its full height and
+ * three cells visible. The header lays it out via flex; the spec rule is
+ * "not squeezed to invisibility" — flex-shrink 0 + the strip's own
+ * flex:none prevents collapse, and the cells tighten their padding so the
+ * strip still reads as three figures. */
+@media (max-width: 560px) {
+  .strip {
+    font-size: 11px;
+  }
+  .cell {
+    padding: 0 7px;
+  }
+}

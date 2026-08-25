@@ -81,6 +81,23 @@ async function filteredDataDir(): Promise<string> {
   return dir
 }
 
+/**
+ * A data dir with two sessions: `alpha` owns a chat row (01-11) and a
+ * reasoner row (01-12); `child` owns a chat row (01-12) — the shape of a
+ * parent session plus one subagent.
+ */
+async function sessionDataDir(): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), 'token-usage-session-'))
+  const line = (record: UsageRecord): string => `${JSON.stringify(record)}\n`
+  await writeFile(join(dir, 'usage-2026-01-11.jsonl'), line({
+    ...dayRecord(1, 'deepseek-chat'), sessionId: 'alpha', requestId: 'alpha-chat',
+  }))
+  await writeFile(join(dir, 'usage-2026-01-12.jsonl'),
+    line({ ...dayRecord(2, 'deepseek-reasoner'), sessionId: 'alpha', requestId: 'alpha-reasoner' })
+    + line({ ...dayRecord(2, 'deepseek-chat'), sessionId: 'child', requestId: 'child-chat' }))
+  return dir
+}
+
 describe('createStatsRoute', () => {
   it('serves the JSON summary on GET', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'token-usage-route-'))
@@ -292,6 +309,164 @@ describe('createStatsRoute', () => {
     expect(body.unpricedModels).toEqual([])
     expect(body.totalCost).toBeGreaterThan(0)
     expect(body.byModel[0]!.cost).toBe(body.totalCost)
+  })
+
+  it('scopes the summary to one session via repeated sessionId params', async () => {
+    const dir = await sessionDataDir()
+    const route = createStatsRoute(() => dir)
+    const { res, captured } = fakeResponse()
+    await route.handler(fakeRequest({ url: `${STATS_PATH}?sessionId=alpha` }), res)
+    const body = JSON.parse(captured.body) as {
+      total: { requests: number; inputTokens: number; outputTokens: number }
+      byModel: Array<{ model: string }>
+      recent: Array<{ sessionId: string }>
+    }
+    // alpha owns two records (chat one, reasoner one); beta's rows are excluded.
+    expect(body.total.requests).toBe(2)
+    expect(body.total.inputTokens).toBe(2 * 10)
+    expect(body.total.outputTokens).toBe(2 * 5)
+    expect(body.byModel.map(row => row.model)).toEqual(['deepseek-chat', 'deepseek-reasoner'])
+    expect(body.recent.every(record => record.sessionId === 'alpha')).toBe(true)
+  })
+
+  it('aggregates a parent session with its subagent subtree in one request', async () => {
+    const dir = await sessionDataDir()
+    const route = createStatsRoute(() => dir)
+    const { res, captured } = fakeResponse()
+    await route.handler(fakeRequest({ url: `${STATS_PATH}?sessionId=alpha&sessionId=child` }), res)
+    const body = JSON.parse(captured.body) as { total: { requests: number }; byModel: Array<{ model: string; totals: { requests: number } }> }
+    expect(body.total.requests).toBe(3)
+    const matches = body.byModel.find(row => row.model === 'deepseek-chat')
+    expect(matches?.totals.requests).toBe(2)
+  })
+
+  it('carries the per-request series on session-scoped reads', async () => {
+    const dir = await sessionDataDir()
+    const route = createStatsRoute(() => dir)
+    const { res, captured } = fakeResponse()
+    await route.handler(fakeRequest({ url: `${STATS_PATH}?sessionId=alpha` }), res)
+    const body = JSON.parse(captured.body) as {
+      scope: 'session' | 'whole'
+      sessionIds: string[]
+      requestSeries: Array<{ time: number; tokens: number }>
+    }
+    // One point per request, in time order: alpha's chat row (01-11) first,
+    // its reasoner row (01-12) second. 10 in + 5 out + 3 cache read = 18.
+    expect(body.scope).toBe('session')
+    expect(body.sessionIds).toEqual(['alpha'])
+    expect(body.requestSeries).toEqual([
+      { time: new Date(2026, 0, 11, 12).getTime(), tokens: 18 },
+      { time: new Date(2026, 0, 12, 12).getTime(), tokens: 18 },
+    ])
+  })
+
+  it('omits the request series from the whole-log settings read', async () => {
+    const dir = await sessionDataDir()
+    const route = createStatsRoute(() => dir)
+    const { res, captured } = fakeResponse()
+    await route.handler(fakeRequest(), res)
+    const body = JSON.parse(captured.body) as {
+      scope: 'session' | 'whole'
+      requestSeries?: unknown
+    }
+    expect(body.scope).toBe('whole')
+    expect('requestSeries' in body).toBe(false)
+  })
+
+  it('combines a session scope with the day-range and model filters', async () => {
+    const dir = await sessionDataDir()
+    const route = createStatsRoute(() => dir)
+    const { res, captured } = fakeResponse()
+    await route.handler(fakeRequest({
+      url: `${STATS_PATH}?sessionId=alpha&model=deepseek-reasoner&to=2026-01-11`,
+    }), res)
+    const body = JSON.parse(captured.body) as {
+      total: { requests: number }
+      byModel: Array<{ model: string }>
+      recent: Array<{ sessionId: string }>
+    }
+    // alpha's reasoner row sits on the 12th, past `to=2026-01-11`, so the
+    // scoped window holds no records at all.
+    expect(body.total.requests).toBe(0)
+    expect(body.byModel).toEqual([])
+    expect(body.recent).toEqual([])
+  })
+
+  it('answers an empty summary for a session with no records', async () => {
+    const dir = await sessionDataDir()
+    const route = createStatsRoute(() => dir)
+    const { res, captured } = fakeResponse()
+    await route.handler(fakeRequest({ url: `${STATS_PATH}?sessionId=nobody` }), res)
+    expect(captured.status).toBe(200)
+    const body = JSON.parse(captured.body) as { total: { requests: number }; unpricedModels: string[] }
+    expect(body.total.requests).toBe(0)
+    expect(body.unpricedModels).toEqual([])
+  })
+
+  it('omits pricing and the request series on fields=chip', async () => {
+    const dir = await sessionDataDir()
+    const route = createStatsRoute(() => dir)
+    const { res, captured } = fakeResponse()
+    await route.handler(fakeRequest({ url: `${STATS_PATH}?sessionId=alpha&fields=chip` }), res)
+    const body = JSON.parse(captured.body) as Record<string, unknown>
+    expect(body.scope).toBe('session')
+    expect(body.sessionIds).toEqual(['alpha'])
+    expect(body.total).toMatchObject({ requests: 2 })
+    expect('pricing' in body).toBe(false)
+    expect('requestSeries' in body).toBe(false)
+    expect('byModel' in body).toBe(false)
+    expect('byDay' in body).toBe(false)
+    expect('rateRows' in body).toBe(false)
+    expect('recent' in body).toBe(false)
+  })
+
+  it('sends a pre-bucketed request series and model/day rows on fields=session', async () => {
+    const dir = await sessionDataDir()
+    const route = createStatsRoute(() => dir)
+    const { res, captured } = fakeResponse()
+    await route.handler(fakeRequest({ url: `${STATS_PATH}?sessionId=alpha&fields=session` }), res)
+    const body = JSON.parse(captured.body) as {
+      byModel: unknown[]
+      byDay: unknown[]
+      requestSeries: Array<{ time: number; tokens: number; count: number; end: number }>
+      pricing?: unknown
+      byHour?: unknown
+      rateRows?: unknown
+    }
+    expect(body.byModel).toHaveLength(2)
+    expect(body.byDay.length).toBeGreaterThan(0)
+    expect(body.requestSeries.length).toBeGreaterThan(0)
+    expect(body.requestSeries.length).toBeLessThanOrEqual(60)
+    expect(body.requestSeries.every(point => point.count >= 1 && point.end > point.time)).toBe(true)
+    expect(body.pricing).toBeUndefined()
+    expect(body.byHour).toBeUndefined()
+    expect(body.rateRows).toBeUndefined()
+  })
+
+  it('returns per-child totals for childId groups (session vs tree)', async () => {
+    const dir = await sessionDataDir()
+    const route = createStatsRoute(() => dir)
+    const sessionScope = fakeResponse()
+    await route.handler(fakeRequest({
+      url: `${STATS_PATH}?sessionId=alpha&childId=child&fields=session`,
+    }), sessionScope.res)
+    const sessionBody = JSON.parse(sessionScope.captured.body) as {
+      total: { requests: number }
+      children: Record<string, { total: { requests: number } }>
+    }
+    expect(sessionBody.total.requests).toBe(2)
+    expect(sessionBody.children.child.total.requests).toBe(1)
+
+    const treeScope = fakeResponse()
+    await route.handler(fakeRequest({
+      url: `${STATS_PATH}?sessionId=alpha&sessionId=child&childId=child&fields=session`,
+    }), treeScope.res)
+    const treeBody = JSON.parse(treeScope.captured.body) as {
+      total: { requests: number }
+      children: Record<string, { total: { requests: number } }>
+    }
+    expect(treeBody.total.requests).toBe(3)
+    expect(treeBody.children.child.total.requests).toBe(1)
   })
 })
 

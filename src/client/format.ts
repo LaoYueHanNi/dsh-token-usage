@@ -46,9 +46,67 @@ function percent(value: number): string {
  * @returns e.g. `87.5%`, or `—` for an empty denominator.
  */
 export function formatHitRate(totals: UsageTotals): string {
+  return hitRateDisplay(totals).text
+}
+
+/**
+ * The threshold bucket the chip color picks from. Four levels (worst →
+ * best) along one warm→cool traffic-light arc:
+ *   <60%  `critical` (red)
+ *   60–80% `amber`   (orange-yellow — "needs attention")
+ *   80–95% `lime`    (yellow-green — "almost there")
+ *   ≥95%  `healthy` (green)
+ *
+ * Violet/teal were tried earlier to dodge the cost cell's warn accent,
+ * but they sit on opposite sides of the hue wheel so the middle two
+ * stops never read as a progression. Cost figures are now uncolored,
+ * so the classic red→amber→lime→green scale is free again.
+ *
+ * The empty-denominator path lands in `amber` so a brand-new session
+ * neither alarms (`critical`) nor celebrates (`healthy`).
+ */
+export type HitRateBand = 'critical' | 'amber' | 'lime' | 'healthy'
+
+/** Hit-rate thresholds (inclusive lower bound, exclusive upper). Boundary
+ * values sit in the higher tier: 0.60 is `amber`, 0.80 is `lime`, 0.95
+ * is `healthy`. The numbers are guideposts, not hard cutoffs — a 78%
+ * cache hit rate is still in `amber`, exactly because cache misses at
+ * ~1/5 of requests is worth flagging. */
+const HIT_RATE_AMBER = 0.60
+const HIT_RATE_LIME = 0.80
+const HIT_RATE_HEALTHY = 0.95
+
+/** Map a 0-1 fraction to one of the four chip color buckets. */
+export function bandOf(hitRate: number): HitRateBand {
+  if (hitRate >= HIT_RATE_HEALTHY) return 'healthy'
+  if (hitRate >= HIT_RATE_LIME) return 'lime'
+  if (hitRate >= HIT_RATE_AMBER) return 'amber'
+  return 'critical'
+}
+
+/** Cache hit rate broken out into a display shape: the text the user sees
+ * plus the color bucket the UI maps onto it. Sessions with no served input
+ * read `—` in the `amber` bucket so a fresh session never paints cold. */
+export interface HitRateDisplay {
+  text: string
+  band: HitRateBand
+}
+
+/**
+ * Compute the cache hit rate's display shape in one pass.
+ * @param totals - the aggregated totals.
+ * @returns `{ text, band }` — `text` is `—` for an empty denominator,
+ * `band` defaults to `amber` so an unused session reads as a mild
+ * "no signal yet" (neither alarming nor celebratory).
+ */
+export function hitRateDisplay(totals: UsageTotals): HitRateDisplay {
   const served = totals.inputTokens + totals.cacheReadTokens
-  if (served === 0) return '—'
-  return `${percent(totals.cacheReadTokens / served * 100)}%`
+  if (served === 0) return { text: '—', band: 'amber' }
+  const rate = totals.cacheReadTokens / served
+  return {
+    text: `${percent(rate * 100)}%`,
+    band: bandOf(rate),
+  }
 }
 
 /**
@@ -117,4 +175,28 @@ export function formatRate(rate: number, view: CurrencyView = CNY_VIEW): string 
  */
 export function formatRateWithSymbol(rate: number, view: CurrencyView = CNY_VIEW): string {
   return `${view.symbol}${formatRate(rate, view)}`
+}
+
+/**
+ * Average first-token latency in the shell's compact duration shape:
+ * one decimal under a minute (`45.2s`), `2m42s` from there on.
+ * @param ms - total first-token latency.
+ * @returns the display string.
+ */
+export function formatTtft(ms: number): string {
+  const s = ms / 1000
+  if (s < 60) return `${String(Math.round(s * 10) / 10)}s`
+  const whole = Math.round(s)
+  return `${Math.floor(whole / 60)}m${whole % 60}s`
+}
+
+/**
+ * Decode-throughput display figure in the shell's shape: whole tokens from
+ * ten up, one decimal below (the `tok/s` unit lives in the locale template).
+ * @param tokensPerSecond - tokens per second.
+ * @returns the display number.
+ */
+export function formatSpeed(tokensPerSecond: number): string {
+  const clamped = Math.max(0, tokensPerSecond)
+  return clamped >= 10 ? String(Math.round(clamped)) : String(Math.round(clamped * 10) / 10)
 }
