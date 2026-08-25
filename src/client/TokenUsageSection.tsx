@@ -12,28 +12,30 @@
  * @module token-usage/client/TokenUsageSection
  */
 
-import type { RefObject } from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SettingsSectionOwnerProps } from '@deepseek-ai/dsh-client-ui-settings/client'
 import type { ContextTier, DailySlot, ModelPricing, ModelRates, RateWindow, UsageSummary } from '../wire.ts'
 import { STATS_PATH } from '../wire.ts'
+import { useAsyncResource } from './async-resource.ts'
 import { dayKeyOf, shiftedDayKey, totalTokens } from './day.ts'
-import { currencyViewOf, formatCost, formatHitRate, formatRate, formatRateWithSymbol, formatTokens } from './format.ts'
+import { currencyViewOf, formatCost, formatRate, formatRateWithSymbol, formatTokens } from './format.ts'
 import type { CurrencyView } from './format.ts'
+import { HitRateText } from './HitRateText.tsx'
+import { StatCard } from './StatCard.tsx'
 import { TrendChart } from './TrendChart.tsx'
+import { useColorSchemeMirror } from './use-color-scheme.ts'
 import styles from './TokenUsageSection.module.css'
+
+/** Re-export so existing section tests and consumers keep importing
+ * `StatCard` from this module (the file moved to `./StatCard.tsx`). */
+export { StatCard } from './StatCard.tsx'
 
 // Re-exported for tests and sibling consumers; the implementations live in
 // the leaf modules (day / format) so the chart can share them without a cycle.
 export { totalTokens } from './day.ts'
 export { formatTokens, formatHitRate } from './format.ts'
-
-type LoadState =
-  | { status: 'loading' }
-  | { status: 'error'; message: string }
-  | { status: 'ready'; summary: UsageSummary }
 
 /** The active filter selection; '' means unconstrained. */
 interface Filters {
@@ -42,15 +44,22 @@ interface Filters {
   model: string
 }
 
-/** Fetch the summary for one query string; the caller owns the failure presentation. */
-async function fetchSummary(query: string): Promise<UsageSummary> {
-  const response = await fetch(STATS_PATH + query)
-  if (!response.ok) throw new Error(`HTTP ${String(response.status)}`)
-  const value = (await response.json()) as UsageSummary
-  if (typeof value !== 'object' || value === null || typeof value.total !== 'object') {
-    throw new Error('unexpected stats response')
-  }
-  return value
+/** Fetch the summary for one query string; the caller owns the failure
+ * presentation. The AbortSignal wires into the request so a filter change
+ * cancels the in-flight fetch instead of letting its response overwrite
+ * the next filter's data. */
+function fetchSummary(query: string, signal: AbortSignal): Promise<UsageSummary> {
+  return fetch(STATS_PATH + query, { signal })
+    .then(response => {
+      if (!response.ok) throw new Error(`HTTP ${String(response.status)}`)
+      return response.json() as Promise<UsageSummary>
+    })
+    .then(value => {
+      if (typeof value !== 'object' || value === null || typeof value.total !== 'object') {
+        throw new Error('unexpected stats response')
+      }
+      return value
+    })
 }
 
 /**
@@ -80,16 +89,6 @@ function quickRange(days: number): { from: string; to: string } {
 function isQuickActive(days: number, filters: Filters): boolean {
   const range = quickRange(days)
   return filters.from === range.from && filters.to === range.to
-}
-
-/** One card in a metric row; `accent` renders the value in the cost color. */
-function StatCard({ label, value, accent }: { label: string; value: string; accent?: boolean }): ReactNode {
-  return (
-    <div className={styles['card']}>
-      <span className={styles['cardLabel']}>{label}</span>
-      <span className={accent === true ? styles['cardValueCost'] : styles['cardValue']}>{value}</span>
-    </div>
-  )
 }
 
 /** The four base rates of one model as display text (symbol included,
@@ -317,31 +316,6 @@ function FilterBar({ filters, models, onChange, t }: {
 }
 
 /**
- * Mirror the shell's root `color-scheme` onto this section's root element.
- * The shell sets it on `document.documentElement` only, so form controls
- * inside a plugin section render with the UA default (white) in dark mode;
- * scoping the property to the section fixes selects, inputs, and the
- * dialog without touching anything outside the section.
- */
-function useColorSchemeMirror(rootRef: RefObject<HTMLElement | null>): void {
-  useEffect(() => {
-    const root = document.documentElement
-    const element = rootRef.current
-    if (element === null) return
-    const sync = (): void => {
-      const scheme = root.style.colorScheme
-      if (scheme !== '') element.style.colorScheme = scheme
-      else element.style.removeProperty('color-scheme')
-    }
-    sync()
-    // The shell rewrites the inline style on every theme switch.
-    const observer = new MutationObserver(sync)
-    observer.observe(root, { attributes: true, attributeFilter: ['style'] })
-    return () => observer.disconnect()
-  }, [rootRef])
-}
-
-/**
  * Render the Token Usage section content column. The `t` seat arrives from
  * the registration's `locale:` declaration and follows the active locale.
  * @param props - the settings shell's owner share (close is unused: the nav
@@ -351,37 +325,40 @@ function useColorSchemeMirror(rootRef: RefObject<HTMLElement | null>): void {
 export function TokenUsageSection({ t }: SettingsSectionOwnerProps & { t: TranslateNS<'token-usage'> }): ReactNode {
   const rootRef = useRef<HTMLDivElement>(null)
   useColorSchemeMirror(rootRef)
-  const [state, setState] = useState<LoadState>({ status: 'loading' })
   // Entering the page starts on today's window (the 1d quick range).
   const [filters, setFilters] = useState<Filters>(() => ({ model: '', ...quickRange(1) }))
   const [models, setModels] = useState<string[]>([])
   // The model whose pricing dialog is open (null = none). Refetched
   // summaries keep the dialog's rules in sync with the latest pricing.
   const [detailModel, setDetailModel] = useState<string | null>(null)
-  const [attempt, setAttempt] = useState(0)
-  const retry = useCallback(() => { setAttempt(previous => previous + 1) }, [])
+  const [retryToken, setRetryToken] = useState(0)
+  const retry = useCallback(() => { setRetryToken(previous => previous + 1) }, [])
 
+  const query = filterQuery(filters)
+  // A mid-edit inverted range (`query === null`) is fed to the hook as the
+  // last valid query — the ref remembers the most recent non-null string
+  // and stays stable while the user types a bad range, so the hook does
+  // neither fire a fetch nor flash its loading state. The test pins this
+  // contract: bad ranges must not produce a network round-trip.
+  const lastValidQueryRef = useRef<string>(query ?? '')
+  if (query !== null) lastValidQueryRef.current = query
+  const fetchQuery = query ?? lastValidQueryRef.current
+  const [state] = useAsyncResource<UsageSummary>(
+    signal => fetchSummary(fetchQuery, signal),
+    [fetchQuery, retryToken],
+    { silentAfterFirst: false, retryToken },
+  )
+
+  // While every model is shown, keep the option list from collapsing to
+  // the filtered selection. The side effect runs when the ready-state
+  // summary lands, not on every render.
   useEffect(() => {
-    const query = filterQuery(filters)
-    // A mid-edit inverted range keeps the current data until it settles.
-    if (query === null) return
-    let cancelled = false
-    setState({ status: 'loading' })
-    void fetchSummary(query)
-      .then((summary) => {
-        if (cancelled) return
-        setState({ status: 'ready', summary })
-        // While every model is shown, keep the option list from collapsing
-        // to the filtered selection.
-        if (filters.model === '') setModels(summary.byModel.map(row => row.model))
-      })
-      .catch((error: unknown) => {
-        if (!cancelled) {
-          setState({ status: 'error', message: error instanceof Error ? error.message : String(error) })
-        }
-      })
-    return () => { cancelled = true }
-  }, [filters, attempt])
+    if (state.status !== 'ready') return
+    if (filters.model !== '') return
+    const next = state.value.byModel.map(row => row.model)
+    if (next.length === models.length && next.every((m, i) => m === models[i])) return
+    setModels(next)
+  }, [state, filters.model, models])
 
   if (state.status === 'loading') {
     return (
@@ -403,12 +380,12 @@ export function TokenUsageSection({ t }: SettingsSectionOwnerProps & { t: Transl
     )
   }
 
-  const { total } = state.summary
-  const view = currencyViewOf(state.summary)
+  const { total } = state.value
+  const view = currencyViewOf(state.value)
   return (
     <div ref={rootRef} className={styles['section']}>
       <h2 className={styles['title']}>{t('nav.label')}</h2>
-      <p className={styles['muted']}>{t('dataDir', { path: state.summary.dataDir })}</p>
+      <p className={styles['muted']}>{t('dataDir', { path: state.value.dataDir })}</p>
       <FilterBar filters={filters} models={models} onChange={setFilters} t={t} />
       {total.requests === 0
         ? (
@@ -424,9 +401,9 @@ export function TokenUsageSection({ t }: SettingsSectionOwnerProps & { t: Transl
           <>
             <div className={styles['cards']}>
               <StatCard label={t('stat.requests')} value={total.requests.toLocaleString()} />
-              <StatCard label={t('stat.cost')} value={formatCost(state.summary.totalCost, view)} accent />
+              <StatCard label={t('stat.cost')} value={formatCost(state.value.totalCost, view)} />
               <StatCard label={t('stat.totalTokens')} value={formatTokens(totalTokens(total))} />
-              <StatCard label={t('stat.hitRate')} value={formatHitRate(total)} />
+              <StatCard label={t('stat.hitRate')} value={<HitRateText totals={total} />} />
             </div>
             <div className={styles['cards']}>
               <StatCard label={t('stat.input')} value={formatTokens(total.inputTokens)} />
@@ -434,27 +411,27 @@ export function TokenUsageSection({ t }: SettingsSectionOwnerProps & { t: Transl
               <StatCard label={t('stat.cacheRead')} value={formatTokens(total.cacheReadTokens)} />
               <StatCard label={t('stat.cacheWrite')} value={formatTokens(total.cacheWriteTokens)} />
             </div>
-            {state.summary.unpricedModels.length > 0
+            {state.value.unpricedModels.length > 0
               ? (
                 <p className={styles['warning']} role="status">
                   {t('unpriced.warning', {
-                    count: String(state.summary.unpricedModels.length),
-                    models: state.summary.unpricedModels.join(', '),
+                    count: String(state.value.unpricedModels.length),
+                    models: state.value.unpricedModels.join(', '),
                     zero: formatCost(0, view),
                   })}
                 </p>
               )
               : null}
             <TrendChart
-              rows={state.summary.byDay}
+              rows={state.value.byDay}
               t={t}
               {...filters.from !== '' ? { from: filters.from } : {}}
               {...filters.to !== '' ? { to: filters.to } : {}}
               // A single-day window (the 1d quick range or a same-day custom
               // selection) plots the day's 24 hours instead of one point.
-              {...filters.from !== '' && filters.from === filters.to ? { hours: state.summary.byHour } : {}}
+              {...filters.from !== '' && filters.from === filters.to ? { hours: state.value.byHour } : {}}
             />
-            {state.summary.byModel.length > 0
+            {state.value.byModel.length > 0
               ? (
                 <>
                   <h3 className={styles['subtitle']}>{t('byModel.title')}</h3>
@@ -474,8 +451,8 @@ export function TokenUsageSection({ t }: SettingsSectionOwnerProps & { t: Transl
                         </tr>
                       </thead>
                       <tbody>
-                        {state.summary.byModel.map(row => {
-                          const rules = state.summary.pricing[row.model]
+                        {state.value.byModel.map(row => {
+                          const rules = state.value.pricing[row.model]
                           return (
                             <tr key={row.model}>
                               <td className={styles['modelCol']}>
@@ -502,7 +479,7 @@ export function TokenUsageSection({ t }: SettingsSectionOwnerProps & { t: Transl
                                 </span>
                               </td>
                               <td>{row.totals.requests.toLocaleString()}</td>
-                              <td className={rules !== undefined ? styles['costCell'] : undefined}>
+                              <td>
                                 {rules !== undefined ? formatCost(row.cost, view) : '—'}
                               </td>
                               <td>{formatTokens(totalTokens(row.totals))}</td>
@@ -510,7 +487,7 @@ export function TokenUsageSection({ t }: SettingsSectionOwnerProps & { t: Transl
                               <td>{formatTokens(row.totals.outputTokens)}</td>
                               <td>{formatTokens(row.totals.cacheReadTokens)}</td>
                               <td>{formatTokens(row.totals.cacheWriteTokens)}</td>
-                              <td>{formatHitRate(row.totals)}</td>
+                              <td><HitRateText totals={row.totals} /></td>
                             </tr>
                           )
                         })}
@@ -520,11 +497,11 @@ export function TokenUsageSection({ t }: SettingsSectionOwnerProps & { t: Transl
                 </>
               )
               : null}
-            {detailModel !== null && state.summary.pricing[detailModel] !== undefined
+            {detailModel !== null && state.value.pricing[detailModel] !== undefined
               ? (
                 <PricingDialog
                   model={detailModel}
-                  rules={state.summary.pricing[detailModel]!}
+                  rules={state.value.pricing[detailModel]!}
                   view={view}
                   onClose={() => setDetailModel(null)}
                   t={t}

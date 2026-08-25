@@ -11,10 +11,13 @@ import type { IncomingMessage } from 'node:http'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type { MigrationProgress } from './migrate.ts'
 import { readPricingTable, readUsdExchangeRate, resolveRate } from './pricing.ts'
-import { attachCosts, buildSummary, filterSummary } from './stats.ts'
+import { attachCosts, buildSummary, filterRecordsBySessions, filterSummary, requestSeriesOf, summarizeRecords } from './stats.ts'
 import type { RateResolver } from './stats.ts'
-import { DIR_GUARD_PATH, FULL_SYNC_PATH, MIGRATION_PATH, STATS_PATH, UNPRICED_KEY } from './wire.ts'
-import type { DirectoryGuardView, DisplayCurrency, FullSyncView } from './wire.ts'
+import { readCachedRecords } from './record-cache.ts'
+import { bucketSeries, pointsOfBuckets } from './trend-bucket.ts'
+import { decodeChildGroups, decodeSessionScope, DIR_GUARD_PATH, FULL_SYNC_PATH, MIGRATION_PATH, STATS_PATH, UNPRICED_KEY } from './wire.ts'
+import type { ChildGroup, ChildUsageSummary, CostedSummary, DirectoryGuardView, DisplayCurrency, FullSyncView, PricingTable, RequestPoint, StatsFields, StatsPayload } from './wire.ts'
+import type { UsageRecord } from './usage-record.ts'
 
 /** The stats endpoint path, exported for tests and the client half. */
 export { STATS_PATH } from './wire.ts'
@@ -33,12 +36,17 @@ const DAY_KEY = /^\d{4}-\d{2}-\d{2}$/u
 
 /**
  * One filter dimension of the stats request: undefined when absent or blank,
- * the raw string otherwise.
+ * the raw string otherwise. `sessionIds` collects every occurrence of the
+ * `sessionId` query key — one fetch may scope to a session AND its subagent
+ * subtree (the page aggregates parent + children in one request).
  */
 interface RawFilter {
   from: string | undefined
   to: string | undefined
   model: string | undefined
+  sessionIds: readonly string[]
+  childGroups: readonly ChildGroup[]
+  fields: StatsFields
 }
 
 /** Read the filter query parameters off the request URL. */
@@ -48,7 +56,15 @@ function readFilters(req: IncomingMessage): RawFilter {
     const value = params.get(key)
     return value === null || value === '' ? undefined : value
   }
-  return { from: pick('from'), to: pick('to'), model: pick('model') }
+  const fields = pick('fields')
+  return {
+    from: pick('from'),
+    to: pick('to'),
+    model: pick('model'),
+    sessionIds: decodeSessionScope(params),
+    childGroups: decodeChildGroups(params),
+    fields: fields === 'chip' || fields === 'session' ? fields : 'full',
+  }
 }
 
 /** Whether every present day key is well-formed and ordered. */
@@ -201,6 +217,73 @@ export function createFullSyncRoute(
   }
 }
 
+/** Fold one child group into the slim row the usage tab's subagent table reads. */
+function childBreakdown(
+  records: readonly UsageRecord[],
+  filter: RawFilter,
+  dataDir: string,
+  resolve: RateResolver,
+  pricing: PricingTable,
+): Record<string, ChildUsageSummary> {
+  const rows: Record<string, ChildUsageSummary> = {}
+  for (const group of filter.childGroups) {
+    const scoped = filterRecordsBySessions(records, group.sessionIds)
+    const summary = attachCosts(
+      filterSummary({ dataDir, ...summarizeRecords(scoped, resolve) }, filter.from, filter.to, filter.model),
+      pricing,
+    )
+    rows[group.id] = {
+      total: summary.total,
+      totalCost: summary.totalCost,
+      unpricedModels: summary.unpricedModels,
+    }
+  }
+  return rows
+}
+
+/** Session-scoped wire shape: `full` keeps the CostedSummary; `session` /
+ * `chip` drop the unused pricing / rate / recent / hour layers, and
+ * `session` sends a pre-bucketed request series (≤ 60 points). */
+function slimSessionPayload(input: {
+  summary: CostedSummary
+  sessionIds: readonly string[]
+  series: readonly RequestPoint[]
+  currency: DisplayCurrency
+  usdExchangeRate: number
+  fields: StatsFields
+  children: Record<string, ChildUsageSummary> | undefined
+}): unknown {
+  const { summary, sessionIds, series, currency, usdExchangeRate, fields, children } = input
+  const requestSeries = fields === 'session' ? pointsOfBuckets(bucketSeries(series)) : [...series]
+  const full = {
+    ...summary,
+    scope: 'session' as const,
+    sessionIds,
+    requestSeries,
+    currency,
+    usdExchangeRate,
+    ...children !== undefined ? { children } : {},
+  }
+  if (fields === 'full') return full
+  const chip = {
+    scope: 'session' as const,
+    sessionIds,
+    total: summary.total,
+    totalCost: summary.totalCost,
+    unpricedModels: summary.unpricedModels,
+    currency,
+    usdExchangeRate,
+    ...children !== undefined ? { children } : {},
+  }
+  if (fields === 'chip') return chip
+  return {
+    ...chip,
+    byModel: summary.byModel,
+    byDay: summary.byDay,
+    requestSeries,
+  }
+}
+
 /**
  * Build the stats route over a data directory the caller may relocate live.
  * @param dir - reads the directory currently in force (per request, so a
@@ -245,14 +328,47 @@ export function createStatsRoute(dir: () => string, options: StatsRouteOptions =
             : tokens.inputTokens + (tokens.cacheReadTokens ?? 0) + (tokens.cacheWriteTokens ?? 0)
           return resolveRate(rules, record.time, context).key
         }
+        // Session-scoped reads fold filtered raw records: the rollup rows
+        // carry no session dimension. Frozen day files come from the
+        // process cache so chip polls and the usage tab do not re-parse
+        // history; today's file re-reads when its stamp changes.
+        const allRecords = filter.sessionIds.length > 0 || filter.childGroups.length > 0
+          ? await readCachedRecords(dataDir)
+          : undefined
+        const scoped = filter.sessionIds.length > 0 && allRecords !== undefined
+          ? filterRecordsBySessions(allRecords, filter.sessionIds)
+          : undefined
         const summary = attachCosts(
-          filterSummary(await buildSummary(dataDir, undefined, resolve), filter.from, filter.to, filter.model),
+          filterSummary(
+            scoped !== undefined
+              ? { dataDir, ...summarizeRecords(scoped, resolve) }
+              : await buildSummary(dataDir, undefined, resolve),
+            filter.from, filter.to, filter.model),
           pricing,
         )
-        // Display-currency metadata: amounts stay RMB on the wire; the page
-        // converts (÷ usdExchangeRate) when the region pick says USD.
+        // Display-currency metadata: amounts stay RMB on the wire; the
+        // page converts (÷ usdExchangeRate) when the region pick says USD.
         const currency = options.currency?.() ?? 'CNY'
-        const payload = { ...summary, currency, usdExchangeRate: await readUsdExchangeRate(dataDir) }
+        const usdExchangeRate = await readUsdExchangeRate(dataDir)
+        const children = allRecords !== undefined && filter.childGroups.length > 0
+          ? childBreakdown(allRecords, filter, dataDir, resolve, pricing)
+          : undefined
+        const payload = scoped !== undefined
+          ? slimSessionPayload({
+            summary,
+            sessionIds: filter.sessionIds,
+            series: requestSeriesOf(scoped, filter.from, filter.to, filter.model),
+            currency,
+            usdExchangeRate,
+            fields: filter.fields,
+            children,
+          })
+          : {
+            ...summary,
+            scope: 'whole' as const,
+            currency,
+            usdExchangeRate,
+          } satisfies StatsPayload
         res.writeHead(200, {
           'content-type': 'application/json; charset=utf-8',
           // Stats change with every request; the browser must not cache them.

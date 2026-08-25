@@ -160,6 +160,8 @@ describe('TokenUsageSection', () => {
     expect(screen.getAllByText('¥0.00').length).toBeGreaterThan(0)
     expect(screen.getByText('47')).toBeTruthy()
     expect(screen.getByText('9.1%')).toBeTruthy()
+    // Same four-bucket colour as the header chip: 9.1% is `critical`.
+    expect(document.querySelector('[class*="band_critical"]')?.textContent).toBe('9.1%')
     // Row 2 cards: the four buckets (labels also head the table columns).
     expect(screen.getAllByText('入').length).toBeGreaterThan(0)
     // '30' matches the card value and possibly a y-axis tick; at least the card is there.
@@ -176,6 +178,7 @@ describe('TokenUsageSection', () => {
     expect(within(table).getByText('deepseek-reasoner')).toBeTruthy()
     expect(within(table).getByText('200')).toBeTruthy()
     expect(within(table).getByText('28.6%')).toBeTruthy()
+    expect(within(table).getByText('28.6%').className).toMatch(/band_critical/)
     expect(within(table).getByText('100')).toBeTruthy()
     expect(within(table).getByText('60')).toBeTruthy()
     expect(within(table).getByText('40')).toBeTruthy()

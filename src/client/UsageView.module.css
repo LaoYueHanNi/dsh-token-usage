@@ -1,0 +1,260 @@
+/* Usage conversation view tab: tokens only (--dsw-* alias tokens from the
+ * web theme), no literal colors. Wide-panel layout — the view body spans
+ * the conversation pane, so the dashboard lays out in three bands: a
+ * six-card stat row, a chart + model table column pair, and a full-width
+ * subagent table. */
+
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 12px calc(var(--dsh-composer-side-clearance, 16px) + 16px);
+  max-width: 1400px;
+  margin: 0 auto;
+  height: 100%;
+  overflow-y: auto;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.headRight {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.back {
+  border: 1px solid var(--dsw-alias-border-l1);
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  border-radius: 6px;
+  padding: 3px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.back:hover {
+  color: var(--dsw-alias-label-primary);
+  border-color: var(--dsw-alias-border-l2);
+}
+
+/* Scope switch: a track with an inset selected pill. Unselected copy is
+ * tertiary so the active segment reads as the choice even before the fill
+ * lands; the fill is a 16% mix of label-primary so it lifts in both
+ * light and dark without a hard-coded grey that would break one side. */
+.segmented {
+  display: inline-flex;
+  align-items: stretch;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 8px;
+  background: var(--dsw-alias-fill-container, transparent);
+}
+
+.segBtn {
+  border: none;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary));
+  font-size: 12px;
+  font-weight: 500;
+  padding: 4px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.segBtn:hover:not(.segActive) {
+  color: var(--dsw-alias-label-secondary);
+  background: color-mix(in srgb, var(--dsw-alias-label-primary) 6%, transparent);
+}
+
+.segBtn:focus-visible {
+  outline: 2px solid var(--dsw-alias-border-l2);
+  outline-offset: 1px;
+}
+
+.segActive {
+  background: color-mix(in srgb, var(--dsw-alias-label-primary) 16%, transparent);
+  color: var(--dsw-alias-label-primary);
+  font-weight: 600;
+}
+
+.muted {
+  margin: 0;
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.error {
+  margin: 0;
+  font-size: 13px;
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.empty {
+  margin: 24px 0 0;
+  font-size: 13px;
+  color: var(--dsw-alias-label-secondary);
+  text-align: center;
+}
+
+.button {
+  align-self: flex-start;
+  border: 1px solid var(--dsw-alias-border-l1);
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  border-radius: 6px;
+  padding: 3px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.warning {
+  margin: 0;
+  font-size: 12px;
+  color: var(--dsw-alias-state-warning-primary, var(--dsw-alias-label-secondary));
+}
+
+.note {
+  margin: 0;
+  font-size: 11px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* Band 1: the six stat cards in one row on a wide pane. */
+.cards {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px;
+}
+
+/* Band 1b: the four token buckets as one strip. */
+.tokenStrip {
+  display: flex;
+  gap: 18px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary);
+  padding: 6px 2px 0;
+}
+
+.tokenStrip b {
+  color: var(--dsw-alias-label-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Band 2: chart (left, wider) + per-model table (right) on a wide pane. */
+.mid {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.chartCol,
+.modelCol,
+.subagents {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* The subagent section's title row: the back button sits immediately to
+ * the right of the heading (not spread to the row's far end) — they belong
+ * together, and the rows below are the drill-in entries. */
+.subagentsHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.subtitle {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.tableWrap {
+  overflow-x: auto;
+}
+
+.table {
+  width: 100%;
+  min-width: 480px;
+  border-collapse: collapse;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.table th,
+.table td {
+  padding: 4px 6px;
+  text-align: right;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+  white-space: nowrap;
+}
+
+.table th:first-child,
+.table td:first-child {
+  text-align: left;
+}
+
+.modelHead {
+  text-align: left;
+}
+
+.modelCell {
+  font-variant-numeric: normal;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Subagent rows are drill-in links. */
+.childLink {
+  border: none;
+  background: transparent;
+  padding: 0;
+  font-size: 12px;
+  color: var(--dsw-alias-link-primary, var(--dsw-alias-label-primary));
+  cursor: pointer;
+  text-align: left;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.childLink:hover {
+  text-decoration: underline;
+}
+
+/* The nested-subagent count beside a row title: signals that the child
+ * itself owns a subtree before the drill-in. */
+.nestedBadge {
+  margin-left: 6px;
+  font-size: 11px;
+  color: var(--dsw-alias-label-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Narrow panes fall back to stacked bands. */
+@media (max-width: 900px) {
+  .cards {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .mid {
+    grid-template-columns: 1fr;
+  }
+}

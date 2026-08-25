@@ -1,9 +1,10 @@
 import { mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { readRollup, writeRollup } from '../src/rollup.ts'
-import { RECENT_LIMIT, attachCosts, buildSummary, filterSummary, mergeSummaries, readAllRecords, summarizeRecords } from '../src/stats.ts'
+import { clearRecordCache, readCachedRecords } from '../src/record-cache.ts'
+import { RECENT_LIMIT, attachCosts, buildSummary, filterRecordsBySessions, filterSummary, mergeSummaries, readAllRecords, requestSeriesOf, summarizeRecords } from '../src/stats.ts'
 import type { RateResolver } from '../src/stats.ts'
 import type { PricingTable } from '../src/wire.ts'
 import type { UsageRecord } from '../src/usage-record.ts'
@@ -237,6 +238,61 @@ describe('filterSummary', () => {
   })
 })
 
+describe('filterRecordsBySessions', () => {
+  /** Three records: two sessions share a day; one has no usage at all. */
+  function fixture(): UsageRecord[] {
+    return [
+      { ...record(100, 'deepseek-chat', { input: 1 }), sessionId: 'alpha' },
+      { ...record(200, 'deepseek-reasoner', { input: 2 }), sessionId: 'alpha' },
+      { ...record(300, 'deepseek-chat', { input: 3 }), sessionId: 'child' },
+      { ...record(400, 'deepseek-chat'), sessionId: 'child' },
+    ]
+  }
+
+  it('keeps only the listed sessions, preserving input order', () => {
+    const kept = filterRecordsBySessions(fixture(), ['alpha'])
+    expect(kept.map(row => row.sessionId)).toEqual(['alpha', 'alpha'])
+    expect(kept.every(row => row.requestId !== 'req-300-deepseek-chat')).toBe(true)
+  })
+
+  it('aggregates a parent with its children from one id list', () => {
+    const kept = filterRecordsBySessions(fixture(), ['alpha', 'child'])
+    expect(kept).toHaveLength(4)
+  })
+
+  it('returns no records for an unknown session or an empty list', () => {
+    expect(filterRecordsBySessions(fixture(), ['nobody'])).toEqual([])
+    expect(filterRecordsBySessions(fixture(), [])).toEqual([])
+  })
+})
+
+describe('requestSeriesOf', () => {
+  /** Three records on two days, one without usage. */
+  function fixture(): UsageRecord[] {
+    return [
+      { ...record(new Date(2026, 0, 14, 10).getTime(), 'deepseek-chat', { input: 10, output: 5, cacheRead: 3 }), sessionId: 's1' },
+      { ...record(new Date(2026, 0, 15, 11).getTime(), 'deepseek-reasoner', { input: 2, output: 2, cacheWrite: 1 }), sessionId: 's1' },
+      { ...record(new Date(2026, 0, 15, 12).getTime(), 'deepseek-chat'), sessionId: 's1' },
+    ]
+  }
+
+  it('emits one point per request in time order with the summed buckets', () => {
+    const series = requestSeriesOf(fixture())
+    expect(series).toEqual([
+      { time: new Date(2026, 0, 14, 10).getTime(), tokens: 18 },
+      { time: new Date(2026, 0, 15, 11).getTime(), tokens: 5 },
+      // A request without usage counts a point with zero tokens.
+      { time: new Date(2026, 0, 15, 12).getTime(), tokens: 0 },
+    ])
+  })
+
+  it('honours the day range and model filters', () => {
+    const series = requestSeriesOf(fixture(), '2026-01-15', '2026-01-15', 'deepseek-reasoner')
+    expect(series).toEqual([{ time: new Date(2026, 0, 15, 11).getTime(), tokens: 5 }])
+    expect(requestSeriesOf(fixture(), '2026-01-16')).toEqual([])
+  })
+})
+
 describe('buildSummary rollup (cold/hot split)', () => {
   /** Fixed clock: today is 2026-01-16 local. */
   const today = (): Date => new Date(2026, 0, 16, 12)
@@ -428,5 +484,50 @@ describe('attachCosts', () => {
     expect(summary.rateRows).toEqual(before.rateRows)
     expect(summary.recent).toEqual(before.recent)
     expect(summary.dataDir).toBe(before.dataDir)
+  })
+})
+
+describe('readCachedRecords', () => {
+  afterEach(() => { clearRecordCache() })
+
+  /** Fixed clock: today is 2026-01-16 local, so the 14th/15th files are frozen. */
+  const today = (): Date => new Date(2026, 0, 16, 12)
+
+  async function writeDay(dir: string, name: string, records: readonly UsageRecord[]): Promise<void> {
+    await writeFile(join(dir, name), records.map(row => JSON.stringify(row)).join('\n') + '\n')
+  }
+
+  it('does not reread a frozen day file on the next call', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'token-usage-cache-cold-'))
+    await writeDay(dir, 'usage-2026-01-14.jsonl', [record(new Date(2026, 0, 14, 12).getTime(), 'deepseek-chat', { input: 1, output: 1 })])
+    const first = await readCachedRecords(dir, today)
+    expect(first).toHaveLength(1)
+    expect(first[0]!.usage?.inputTokens).toBe(1)
+    // Corrupt the frozen file: the next read must still come from memory.
+    await writeFile(join(dir, 'usage-2026-01-14.jsonl'), 'garbage that would parse to nothing')
+    const second = await readCachedRecords(dir, today)
+    expect(second).toEqual(first)
+  })
+
+  it('re-reads today\'s file after it grows', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'token-usage-cache-hot-'))
+    const noon = new Date(2026, 0, 16, 12).getTime()
+    await writeDay(dir, 'usage-2026-01-16.jsonl', [record(noon, 'deepseek-chat', { input: 1, output: 1 })])
+    expect(await readCachedRecords(dir, today)).toHaveLength(1)
+    await writeDay(dir, 'usage-2026-01-16.jsonl', [
+      record(noon, 'deepseek-chat', { input: 1, output: 1 }),
+      record(noon + 1, 'deepseek-chat', { input: 2, output: 2 }),
+    ])
+    const second = await readCachedRecords(dir, today)
+    expect(second).toHaveLength(2)
+    expect(second[1]!.usage?.inputTokens).toBe(2)
+  })
+
+  it('shares one in-flight load across concurrent readers of the same directory', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'token-usage-cache-fly-'))
+    await writeDay(dir, 'usage-2026-01-14.jsonl', [record(new Date(2026, 0, 14, 12).getTime(), 'deepseek-chat')])
+    const [left, right] = await Promise.all([readCachedRecords(dir, today), readCachedRecords(dir, today)])
+    expect(left).toEqual(right)
+    expect(left).toHaveLength(1)
   })
 })

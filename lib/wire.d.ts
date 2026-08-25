@@ -10,6 +10,58 @@ import type { UsageRecord } from './usage-record.ts';
 export type { UsageFields, UsageRecord } from './usage-record.ts';
 /** The stats endpoint path, served by the host half's webServer route. */
 export declare const STATS_PATH = "/token-usage/stats";
+/** How much of the stats payload a consumer asked for. `full` is the
+ * settings page's whole CostedSummary; `session` is the usage tab; `chip`
+ * is the header strip (totals only). */
+export type StatsFields = 'chip' | 'session' | 'full';
+/** Encode one repeated query key (`sessionId=a&sessionId=b`). Empty list yields ''. */
+export declare function encodeRepeatedParam(key: string, values: readonly string[]): string;
+/**
+ * Parse every occurrence of `key` off a URL or `URLSearchParams`, dropping
+ * blanks and duplicates, preserving first-seen order.
+ */
+export declare function decodeRepeatedParam(source: URL | URLSearchParams, key: string): string[];
+/**
+ * One child-row group: the row's id (first token) plus every session id
+ * folded into that row. Tree scope sends `[child, ...descendants]`; session
+ * scope sends `[child]` alone. Tokens are comma-joined on the wire.
+ */
+export interface ChildGroup {
+    id: string;
+    sessionIds: readonly string[];
+}
+/** Encode child groups as repeated `childId=<id>[,member…]` parameters. */
+export declare function encodeChildGroups(groups: readonly (readonly string[])[]): string;
+/** Parse `childId=` groups; the first comma-separated token is the row id. */
+export declare function decodeChildGroups(source: URL | URLSearchParams): ChildGroup[];
+/**
+ * Build the stats query string (including the leading `?`, or '' when
+ * unconstrained). `fields: 'full'` is omitted — that is the default the
+ * settings page already hits.
+ */
+export declare function encodeStatsQuery(options: {
+    sessionIds?: readonly string[];
+    childGroups?: readonly (readonly string[])[];
+    fields?: StatsFields;
+}): string;
+/**
+ * Encode a session-scope id list as a `sessionId=` query fragment pair:
+ * every id becomes its own `sessionId=<encoded>` parameter (RFC-style
+ * `?a=1&a=2`), so a parent-and-children fetch aggregates the whole subtree
+ * in one request. The empty list yields '' (no query string at all).
+ * @param ids - the session ids to filter by.
+ */
+export declare function encodeSessionScope(ids: readonly string[]): string;
+/**
+ * Parse the `sessionId=` parameters off a URL or a parsed `URLSearchParams`:
+ * every occurrence of the key becomes one entry, in URL order (so a parent
+ * + children fetch preserves the caller-supplied order). Empty values are
+ * dropped (defensive: a `?sessionId=` blank yields no entry) and duplicates
+ * are deduped.
+ * @param source - the URL or its parsed params.
+ * @returns the deduplicated id list.
+ */
+export declare function decodeSessionScope(source: URL | URLSearchParams): string[];
 /** The migration-progress endpoint path, polled by the browser card. */
 export declare const MIGRATION_PATH = "/token-usage/migration";
 /**
@@ -76,6 +128,26 @@ export interface UsageTotals {
 export interface UsageDayRow {
     day: string;
     totals: UsageTotals;
+}
+/** One per-request token total in time order (session-scoped reads only).
+ * The usage tab's `fields=session` response is already time-bucketed: `count`
+ * and `end` are set, and the chart plots the points without folding again.
+ * A raw (unbucketed) point has only `time` + `tokens`. */
+export interface RequestPoint {
+    /** Session-event wall time, or the bucket start when `count` is set. */
+    time: number;
+    /** Total tokens across the four buckets (0 for a request without usage). */
+    tokens: number;
+    /** Requests folded into this bucket; absent on a raw per-request point. */
+    count?: number;
+    /** Bucket end (exclusive), epoch ms; absent on a raw per-request point. */
+    end?: number;
+}
+/** Per-child row the usage tab's subagent table reads (no chart / pricing). */
+export interface ChildUsageSummary {
+    total: UsageTotals;
+    totalCost: number;
+    unpricedModels: string[];
 }
 /** One per-hour × per-model aggregation row, keyed by local `YYYY-MM-DDTHH`. */
 export interface UsageHourRow {
@@ -233,14 +305,54 @@ export interface CostedSummary extends TokenSummary {
     /** Per-model rows with their billed cost attached. */
     byModel: CostedModelRow[];
 }
-/** The full stats payload served at {@link STATS_PATH}: the cost layer plus
- * the display-currency metadata the route stamps on top. */
-export interface UsageSummary extends CostedSummary {
+/** The full stats payload served at {@link STATS_PATH}. A discriminated
+ * union over the two scope modes the route serves:
+ * - `'whole'`: the settings page's whole-log read. The `requestSeries`
+ *   field is absent (the page plots hours/days), so its `TrendChart`
+ *   falls back to the `byDay` / `byHour` rows.
+ * - `'session'`: the conversation view tab's session-scoped read. The
+ *   `sessionIds` field lists every requested id (the parent + its
+ *   subagent children when the scope is "tree"), and `requestSeries`
+ *   is the per-request series the chart plots at request granularity.
+ *
+ * Both branches share every {@link CostedSummary} field plus the
+ * display-currency metadata, so a consumer can read `total` /
+ * `totalCost` / `pricing` without narrowing first.
+ */
+export type StatsPayload = (CostedSummary & {
+    scope: 'whole';
     /** The display currency the page converts cost figures into. Amounts on
      * the wire (totalCost, byModel[].cost, pricing rates) remain RMB. */
     currency: DisplayCurrency;
     /** Effective RMB-per-USD rate (feed value, else the built-in default);
      * the divisor when `currency` is USD. */
     usdExchangeRate: number;
+}) | (CostedSummary & {
+    scope: 'session';
+    /** The session ids aggregated to produce this payload, in URL order. */
+    sessionIds: readonly string[];
+    /** Per-request token totals in time order; session-scoped reads always
+     * include this, so the trend chart can plot request granularity. */
+    requestSeries: readonly RequestPoint[];
+    /** The display currency the page converts cost figures into. */
+    currency: DisplayCurrency;
+    /** Effective RMB-per-USD rate (the divisor when `currency` is USD). */
+    usdExchangeRate: number;
+    /** Direct-child breakdown keyed by child id, when the request named `childId`. */
+    children?: Readonly<Record<string, ChildUsageSummary>>;
+});
+/**
+ * Default shape for code that doesn't need to discriminate the scope —
+ * mostly test fixtures and the `chip` and `section` summary readers.
+ * Adds `requestSeries?` as an optional field so legacy callers can read
+ * either branch without narrowing first. Uses a base cost layer plus the
+ * display metadata; for new code, narrow on `StatsPayload` instead.
+ */
+export interface UsageSummary extends CostedSummary {
+    currency: DisplayCurrency;
+    usdExchangeRate: number;
+    requestSeries?: readonly RequestPoint[];
+    children?: Readonly<Record<string, ChildUsageSummary>>;
+    sessionIds?: readonly string[];
 }
 //# sourceMappingURL=wire.d.ts.map

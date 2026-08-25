@@ -31,6 +31,7 @@ import { cleanSource, copyData, type MigrationProgress } from './migrate.ts'
 import { resolvePricingUrl, syncCloudPricing, type PricingSourceInput } from './pricing.ts'
 import { recordFromEvent } from './usage-record.ts'
 import { autoSyncIfNeeded, syncHistory } from './sync.ts'
+import { clearRecordCache, warmRecordCache } from './record-cache.ts'
 import { createDirectoryGuardRoute, createFullSyncRoute, createMigrationRoute, createStatsRoute, type FullSyncTrigger } from './stats-route.ts'
 import { currencyOfRegion, type DirectoryGuardView, type FullSyncView } from './wire.ts'
 
@@ -307,6 +308,8 @@ export function apply(ctx: Context, config: Config = {}) {
     const log = new UsageLog(nextDir)
     await log.scan()
     current = { dir: nextDir, log }
+    clearRecordCache(previous.dir)
+    void warmRecordCache(nextDir)
 
     // Phase 3: remove the source files that verifiably landed, then the
     // emptied directory. Nothing unknown is touched.
@@ -469,6 +472,7 @@ export function apply(ctx: Context, config: Config = {}) {
     const dir = resolved
     const log = new UsageLog(dir)
     current = { dir, log }
+    void warmRecordCache(dir)
 
     ctx.on('session/event', (session: Session, event: SessionEvent) => {
       if (event.type !== 'assistant/message') return
@@ -485,6 +489,7 @@ export function apply(ctx: Context, config: Config = {}) {
         if (result !== null) {
           console.log(`[token-usage] first-run sync: ${result.added} added, ${result.skipped} skipped`)
         }
+        return warmRecordCache(dir)
       })
       .catch((error: unknown) => {
         console.error('[token-usage] first-run sync failed:', error)
