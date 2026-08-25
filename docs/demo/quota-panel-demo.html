@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>供应商配额面板 Demo · dsh-token-usage</title>
+<style>
+  /*
+   * 供应商配额面板静态 Demo —— 1:1 还原 QuotaButton.module.css 的视觉规格，
+   * 色值全部取自 dsh 设计令牌（design-platform.css 亮/暗两套）。
+   * 标准：进度与数值均为「剩余」口径；绿 >60% / 黄 20–60% / 红 <20%；金额仅 ≤0 红。
+   * 宽度分档：纯金额 200px / 单进度 232px / 双进度 320px。
+   */
+  :root {
+    --menu: rgb(255, 255, 255);            /* --dsw-specific-menu (light) */
+    --border-inverted: rgba(0, 0, 0, 0);   /* 亮色下面板无边框，阴影承担层次 */
+    --border-l2: rgba(0, 0, 0, 0.1);
+    --label-primary: rgb(15, 17, 21);
+    --label-secondary: rgb(97, 102, 107);
+    --label-tertiary: rgb(129, 133, 140);
+    --track: rgba(38, 49, 72, 0.06);       /* interactive-bg-hover：进度条底槽 */
+    --seat-bg: rgb(255, 255, 255);
+    --page: rgb(244, 245, 246);
+    --ok: rgb(34, 197, 94);                /* state-success-primary */
+    --warn: rgb(245, 158, 11);             /* state-warn-primary (amber-500) */
+    --error: rgb(236, 19, 19);             /* state-error-primary (red-600) */
+    --shadow-lv3: 0 0 1px 0 rgba(0, 0, 0, 0.2), 0 0 4px 0 rgba(0, 0, 0, 0.02),
+      0 12px 32px 0 rgba(0, 0, 0, 0.08);
+  }
+  body[data-ds-dark-theme] {
+    --menu: rgb(53, 54, 56);
+    --border-inverted: rgba(255, 255, 255, 0.06);
+    --border-l2: rgba(255, 255, 255, 0.12);
+    --label-primary: rgb(249, 250, 251);
+    --label-secondary: rgb(207, 211, 214);
+    --label-tertiary: rgb(173, 178, 184);
+    --track: rgba(255, 255, 255, 0.08);
+    --seat-bg: rgb(44, 45, 47);
+    --page: rgb(31, 32, 34);
+    --error: rgb(242, 90, 90);             /* red-400（暗色错误主色） */
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 28px 32px 48px;
+    background: var(--page);
+    color: var(--label-secondary);
+    font: 12px/20px -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+    transition: background 0.2s ease;
+  }
+
+  /* ── 页头：标题 + 标准 + 主题切换 ─────────────────────────── */
+  .pageHead { max-width: 1180px; margin: 0 auto 20px; }
+  .pageTitle {
+    margin: 0 0 4px;
+    font-size: 16px;
+    line-height: 24px;
+    font-weight: 600;
+    color: var(--label-primary);
+  }
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 14px;
+    font-size: 12px;
+    color: var(--label-tertiary);
+  }
+  .legend .swatch {
+    display: inline-block;
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    margin-right: 5px;
+    vertical-align: middle;
+  }
+  .themeToggle {
+    margin-left: auto;
+    padding: 3px 12px;
+    border: 1px solid var(--border-l2);
+    border-radius: 999px;
+    background: var(--seat-bg);
+    color: var(--label-secondary);
+    font-size: 12px;
+    line-height: 20px;
+    font-family: inherit;
+    cursor: pointer;
+  }
+
+  /* ── 卡片网格：一张卡片一个场景 ──────────────────────────── */
+  .cards { display: flex; flex-wrap: wrap; gap: 28px 24px; max-width: 1180px; margin: 0 auto; }
+  .card { width: 380px; }
+  .caption { margin-bottom: 6px; font-size: 11px; line-height: 16px; color: var(--label-tertiary); }
+  .caption b { color: var(--label-secondary); font-weight: 600; }
+  /* 面板悬浮在输入栏上方：预留面板高度 */
+  .stage { position: relative; padding-top: 148px; }
+
+  /* ── 迷你输入栏（示意真实落位：按钮在模型芯片左侧） ──────── */
+  .seat {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 44px;
+    padding: 0 10px;
+    border: 1px solid var(--border-l2);
+    border-radius: 12px;
+    background: var(--seat-bg);
+  }
+  .seatHint { flex: 1; font-size: 13px; color: var(--label-tertiary); }
+  .chip {
+    flex: none;
+    padding: 2px 10px;
+    border: 1px solid var(--border-l2);
+    border-radius: 999px;
+    font-size: 12px;
+    color: var(--label-secondary);
+    white-space: nowrap;
+  }
+
+  /* ── 触发按钮（28×28 热区，无边框；14px 圆环与 ContextMeter 同几何） ── */
+  .root { position: relative; display: inline-flex; flex: none; }
+  .trigger {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: none;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--label-secondary);
+    cursor: pointer;
+  }
+  .trigger svg { display: block; }
+  .icon-warn { color: var(--warn); }
+  .icon-ok { color: var(--ok); }
+  .icon-exhausted { color: var(--error); }
+
+  /* ── 面板（宽度分档；以按钮为中心展开） ─────────────────── */
+  .panel {
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 100;
+    box-sizing: border-box;
+    width: 320px;
+    max-width: calc(100vw - 32px);
+    padding: 12px;
+    border: 1px solid var(--border-inverted);
+    border-radius: 12px;
+    background: var(--menu);
+    box-shadow: var(--shadow-lv3);
+    font-size: 12px;
+    line-height: 20px;
+    color: var(--label-secondary);
+    text-align: left;
+    cursor: default;
+  }
+  .w200 { width: 200px; }
+  .w232 { width: 232px; }
+
+  .header { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 10px; }
+  .title {
+    font-size: 13px; font-weight: 500; color: var(--label-primary);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .plan { font-weight: 400; color: var(--label-tertiary); }
+  .updated { flex: none; font-size: 11px; color: var(--label-tertiary); font-variant-numeric: tabular-nums; }
+
+  .grid { display: grid; grid-template-columns: repeat(var(--cols, 3), 1fr); gap: 14px; }
+  .cols1 { --cols: 1; }
+  .cols2 { --cols: 2; }
+  .col { min-width: 0; }
+  .label {
+    margin-bottom: 2px; font-size: 11px; line-height: 16px;
+    color: var(--label-tertiary);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .value {
+    margin-bottom: 6px; font-size: 13px; font-weight: 600; line-height: 18px;
+    color: var(--label-primary); font-variant-numeric: tabular-nums; white-space: nowrap;
+  }
+  .meta { font-weight: 400; color: var(--label-tertiary); }
+  .bar { height: 4px; border-radius: 999px; background: var(--track); overflow: hidden; }
+  .fill { height: 100%; border-radius: 999px; transition: width 0.3s ease; }
+  .ok { background: var(--ok); }
+  .warn { background: var(--warn); }
+  .exhausted { background: var(--error); }
+  .aux {
+    margin-top: 4px; font-size: 11px; line-height: 14px;
+    color: var(--label-tertiary); font-variant-numeric: tabular-nums; white-space: nowrap;
+  }
+  .dot {
+    display: inline-block; width: 5px; height: 5px; margin-right: 3px;
+    border-radius: 50%; vertical-align: middle;
+  }
+</style>
+</head>
+<body>
+
+<div class="pageHead">
+  <h1 class="pageTitle">供应商配额面板 · 状态矩阵 Demo</h1>
+  <div class="legend">
+    <span><span class="swatch" style="background:var(--ok)"></span>剩余 &gt;60% 绿</span>
+    <span><span class="swatch" style="background:var(--warn)"></span>剩余 20–60% 黄</span>
+    <span><span class="swatch" style="background:var(--error)"></span>剩余 &lt;20% 红</span>
+    <span>金额仅 ≤0 红 · 宽度分档 200 / 232 / 320px · 图标取最小统计单位（5小时＞周限＞金额）：绿/黄/红；绝对金额仅 ≤0 红</span>
+    <button class="themeToggle" type="button" onclick="document.body.toggleAttribute('data-ds-dark-theme')">切换亮 / 暗</button>
+  </div>
+</div>
+
+<div class="cards">
+
+  <!-- ① 双进度：5h 绿 + 周 黄（最小单位 5h → 图标绿）320px -->
+  <div class="card">
+    <div class="caption"><b>① 智谱 GLM · 5小时 + 每周</b> — 剩 85% 绿 / 剩 45% 黄 · 320px</div>
+    <div class="stage">
+      <div class="seat">
+        <span class="seatHint">给 DeepSeek 发送消息…</span>
+        <span class="root">
+          <button class="trigger icon-ok" type="button" aria-label="供应商配额">
+            <svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true"><circle cx="7" cy="7" r="5.5" fill="none" stroke="currentColor" stroke-width="2" opacity="0.22"/><circle cx="7" cy="7" r="5.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-dasharray="29.37 34.56" transform="rotate(-90 7 7)"/></svg>
+          </button>
+          <div class="panel" role="dialog">
+            <div class="header">
+              <span class="title">智谱 GLM Coding Plan<span class="plan"> · lite</span></span>
+              <span class="updated">更新于 14:32</span>
+            </div>
+            <div class="grid cols2">
+              <div class="col">
+                <div class="label">5 小时</div>
+                <div class="value">85%</div>
+                <div class="bar"><div class="fill ok" style="width:85%"></div></div>
+                <div class="aux"><span class="dot ok"></span>3h 12m 后重置</div>
+              </div>
+              <div class="col">
+                <div class="label">每周</div>
+                <div class="value">45%</div>
+                <div class="bar"><div class="fill warn" style="width:45%"></div></div>
+                <div class="aux"><span class="dot warn"></span>1d 4h 后重置</div>
+              </div>
+            </div>
+          </div>
+        </span>
+        <span class="chip">GLM-4.7</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ② 双进度：5h 红 + 周 绿（最小单位 5h → 图标红）320px -->
+  <div class="card">
+    <div class="caption"><b>② Kimi For Coding · 5小时 + 每周</b> — 剩 12% 红 / 剩 65% 绿 · 320px</div>
+    <div class="stage">
+      <div class="seat">
+        <span class="seatHint">给 Kimi 发送消息…</span>
+        <span class="root">
+          <button class="trigger icon-exhausted" type="button" aria-label="供应商配额">
+            <svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true"><circle cx="7" cy="7" r="5.5" fill="none" stroke="currentColor" stroke-width="2" opacity="0.22"/><circle cx="7" cy="7" r="5.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-dasharray="4.15 34.56" transform="rotate(-90 7 7)"/></svg>
+          </button>
+          <div class="panel" role="dialog">
+            <div class="header">
+              <span class="title">Kimi For Coding<span class="plan"> · 标准</span></span>
+              <span class="updated">更新于 14:32</span>
+            </div>
+            <div class="grid cols2">
+              <div class="col">
+                <div class="label">5 小时</div>
+                <div class="value">12%</div>
+                <div class="bar"><div class="fill exhausted" style="width:12%"></div></div>
+                <div class="aux"><span class="dot exhausted"></span>41m 后重置</div>
+              </div>
+              <div class="col">
+                <div class="label">每周</div>
+                <div class="value">65%</div>
+                <div class="bar"><div class="fill ok" style="width:65%"></div></div>
+                <div class="aux"><span class="dot ok"></span>2d 6h 后重置</div>
+              </div>
+            </div>
+          </div>
+        </span>
+        <span class="chip">Kimi K2</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ③ 双进度全绿（最小单位 5h → 图标绿）320px -->
+  <div class="card">
+    <div class="caption"><b>③ MiniMax · 5小时 + 每周</b> — 剩 95% / 剩 80% 全绿 · 320px</div>
+    <div class="stage">
+      <div class="seat">
+        <span class="seatHint">给 MiniMax 发送消息…</span>
+        <span class="root">
+          <button class="trigger icon-ok" type="button" aria-label="供应商配额">
+            <svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true"><circle cx="7" cy="7" r="5.5" fill="none" stroke="currentColor" stroke-width="2" opacity="0.22"/><circle cx="7" cy="7" r="5.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-dasharray="32.83 34.56" transform="rotate(-90 7 7)"/></svg>
+          </button>
+          <div class="panel" role="dialog">
+            <div class="header">
+              <span class="title">MiniMax Coding Plan<span class="plan"> · Pro</span></span>
+              <span class="updated">更新于 14:32</span>
+            </div>
+            <div class="grid cols2">
+              <div class="col">
+                <div class="label">5 小时</div>
+                <div class="value">95%</div>
+                <div class="bar"><div class="fill ok" style="width:95%"></div></div>
+                <div class="aux"><span class="dot ok"></span>4h 48m 后重置</div>
+              </div>
+              <div class="col">
+                <div class="label">每周</div>
+                <div class="value">80%</div>
+                <div class="bar"><div class="fill ok" style="width:80%"></div></div>
+                <div class="aux"><span class="dot ok"></span>5d 2h 后重置</div>
+              </div>
+            </div>
+          </div>
+        </span>
+        <span class="chip">MiniMax-M2</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ④ 仅 5 小时（老套餐单窗口）232px -->
+  <div class="card">
+    <div class="caption"><b>④ 智谱老套餐 · 仅 5 小时</b> — 剩 35% 黄 · 232px</div>
+    <div class="stage">
+      <div class="seat">
+        <span class="seatHint">给 DeepSeek 发送消息…</span>
+        <span class="root">
+          <button class="trigger icon-warn" type="button" aria-label="供应商配额">
+            <svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true"><circle cx="7" cy="7" r="5.5" fill="none" stroke="currentColor" stroke-width="2" opacity="0.22"/><circle cx="7" cy="7" r="5.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-dasharray="12.10 34.56" transform="rotate(-90 7 7)"/></svg>
+          </button>
+          <div class="panel w232" role="dialog">
+            <div class="header">
+              <span class="title">智谱 GLM Coding Plan</span>
+              <span class="updated">更新于 14:32</span>
+            </div>
+            <div class="grid cols1">
+              <div class="col">
+                <div class="label">5 小时</div>
+                <div class="value">35%</div>
+                <div class="bar"><div class="fill warn" style="width:35%"></div></div>
+                <div class="aux"><span class="dot warn"></span>2h 14m 后重置</div>
+              </div>
+            </div>
+          </div>
+        </span>
+        <span class="chip">GLM-4.7</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ⑤ 仅周限 232px，剩 8% 红 -->
+  <div class="card">
+    <div class="caption"><b>⑤ 仅周限套餐</b> — 剩 8% 红 · 232px</div>
+    <div class="stage">
+      <div class="seat">
+        <span class="seatHint">给 Kimi 发送消息…</span>
+        <span class="root">
+          <button class="trigger icon-exhausted" type="button" aria-label="供应商配额">
+            <svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true"><circle cx="7" cy="7" r="5.5" fill="none" stroke="currentColor" stroke-width="2" opacity="0.22"/><circle cx="7" cy="7" r="5.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-dasharray="2.76 34.56" transform="rotate(-90 7 7)"/></svg>
+          </button>
+          <div class="panel w232" role="dialog">
+            <div class="header">
+              <span class="title">Kimi For Coding<span class="plan"> · 周限</span></span>
+              <span class="updated">更新于 14:32</span>
+            </div>
+            <div class="grid cols1">
+              <div class="col">
+                <div class="label">每周</div>
+                <div class="value">8%</div>
+                <div class="bar"><div class="fill exhausted" style="width:8%"></div></div>
+                <div class="aux"><span class="dot exhausted"></span>9h 30m 后重置</div>
+              </div>
+            </div>
+          </div>
+        </span>
+        <span class="chip">Kimi K2</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ⑥ 余额 + 总额消费条（OpenRouter）232px，剩 68% 绿 -->
+  <div class="card">
+    <div class="caption"><b>⑥ OpenRouter · 余额 + 消费条</b> — $6.80 / $10.00，剩 68% 绿 · 232px</div>
+    <div class="stage">
+      <div class="seat">
+        <span class="seatHint">给 OpenRouter 发送消息…</span>
+        <span class="root">
+          <button class="trigger icon-ok" type="button" aria-label="供应商配额">
+            <svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true"><circle cx="7" cy="7" r="5.5" fill="none" stroke="currentColor" stroke-width="2" opacity="0.22"/><circle cx="7" cy="7" r="5.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-dasharray="23.50 34.56" transform="rotate(-90 7 7)"/></svg>
+          </button>
+          <div class="panel w232" role="dialog">
+            <div class="header">
+              <span class="title">OpenRouter</span>
+              <span class="updated">更新于 14:32</span>
+            </div>
+            <div class="grid cols1">
+              <div class="col">
+                <div class="label">余额</div>
+                <div class="value">$6.80<span class="meta"> / $10.00</span></div>
+                <div class="bar"><div class="fill ok" style="width:68%"></div></div>
+              </div>
+            </div>
+          </div>
+        </span>
+        <span class="chip">任意模型</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ⑦ 纯金额（DeepSeek 正余额）200px，无条不着色 -->
+  <div class="card">
+    <div class="caption"><b>⑦ DeepSeek · 纯金额</b> — ¥110.50，无进度条 · 200px</div>
+    <div class="stage">
+      <div class="seat">
+        <span class="seatHint">给 DeepSeek 发送消息…</span>
+        <span class="root">
+          <button class="trigger" type="button" aria-label="供应商配额">
+            <svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true"><circle cx="7" cy="7" r="5.5" fill="none" stroke="currentColor" stroke-width="2" opacity="0.22"/><circle cx="7" cy="7" r="5.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="butt" stroke-dasharray="34.56 34.56" transform="rotate(-90 7 7)"/></svg>
+          </button>
+          <div class="panel w200" role="dialog">
+            <div class="header">
+              <span class="title">DeepSeek</span>
+              <span class="updated">更新于 14:32</span>
+            </div>
+            <div class="grid cols1">
+              <div class="col">
+                <div class="label">余额</div>
+                <div class="value">¥110.50</div>
+              </div>
+            </div>
+          </div>
+        </span>
+        <span class="chip">deepseek-chat</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ⑧ 纯金额透支（≤0 红 → 图标红）200px -->
+  <div class="card">
+    <div class="caption"><b>⑧ DeepSeek · 透支</b> — ¥-0.01（≤0 红）· 200px</div>
+    <div class="stage">
+      <div class="seat">
+        <span class="seatHint">给 DeepSeek 发送消息…</span>
+        <span class="root">
+          <button class="trigger icon-exhausted" type="button" aria-label="供应商配额">
+            <svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true"><circle cx="7" cy="7" r="5.5" fill="none" stroke="currentColor" stroke-width="2" opacity="0.22"/></svg>
+          </button>
+          <div class="panel w200" role="dialog">
+            <div class="header">
+              <span class="title">DeepSeek</span>
+              <span class="updated">更新于 14:32</span>
+            </div>
+            <div class="grid cols1">
+              <div class="col">
+                <div class="label">余额</div>
+                <div class="value">¥-0.01</div>
+              </div>
+            </div>
+          </div>
+        </span>
+        <span class="chip">deepseek-chat</span>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+</body>
+</html>

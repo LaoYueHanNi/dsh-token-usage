@@ -1,0 +1,240 @@
+/*
+ * Quota button + panel styles (browser half). Every color/spacing rides a
+ * dsw design token so light/dark follow the shell; the panel mirrors the
+ * context-meter extension demo (width-tiered 200–320px, r12, menu plate,
+ * 3-stop bars).
+ */
+
+.root {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+}
+
+/* 28×28 hit target, borderless like ContextMeter; the 14px ring is the glyph. */
+.trigger {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+}
+
+.trigger svg {
+  display: block;
+}
+
+.trigger:hover,
+.trigger[aria-expanded='true'] {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+/* The severity color survives the hover/open states — the state rule above
+ * would otherwise flatten the icon back to the neutral label color; the
+ * background change still carries the state affordance. */
+.trigger.icon-ok:hover,
+.trigger.icon-ok[aria-expanded='true'] {
+  color: var(--dsw-alias-state-success-primary);
+}
+
+.trigger.icon-warn:hover,
+.trigger.icon-warn[aria-expanded='true'] {
+  color: var(--dsw-alias-state-warn-primary);
+}
+
+.trigger.icon-exhausted:hover,
+.trigger.icon-exhausted[aria-expanded='true'] {
+  color: var(--dsw-alias-state-error-primary);
+}
+
+/* The icon takes the FINEST-granularity window's severity — 5-hour over
+ * weekly over balance. Standalone classes — a compound `.trigger.warn`
+ * would not export a class map entry for the modifier. */
+.icon-ok {
+  color: var(--dsw-alias-state-success-primary);
+}
+
+.icon-warn {
+  color: var(--dsw-alias-state-warn-primary);
+}
+
+.icon-exhausted {
+  color: var(--dsw-alias-state-error-primary);
+}
+
+/* Popup above the button, the menu plate. The WIDTH is tiered by what the
+ * windows paint — the component sets an inline width (200 / 232 / 320px:
+ * amount-only / one bar / two bars); this 320px is the fallback. It
+ * centers on the button — the component measures an inline `left` against
+ * this wrapper at open time (a plain right-aligned drop would skew up-left
+ * from this seat) — nudged inside the 16px viewport margins. */
+.panel {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  z-index: 100;
+  box-sizing: border-box;
+  width: 320px;
+  max-width: calc(100vw - 32px);
+  padding: 12px;
+  border: 1px solid var(--dsw-alias-border-inverted);
+  border-radius: 12px;
+  background: var(--dsw-specific-menu);
+  box-shadow: var(--dsw-shadow-lv3);
+  font-size: 12px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-secondary);
+  text-align: left;
+  cursor: default;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--dsw-alias-label-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.plan {
+  font-weight: 400;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.updated {
+  flex: none;
+  font-size: 11px;
+  color: var(--dsw-alias-label-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Adaptive window grid: one to three columns (host decides the count). */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(var(--cols, 3), 1fr);
+  gap: 14px;
+}
+
+.col {
+  min-width: 0;
+}
+
+.label {
+  margin-bottom: 2px;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.value {
+  margin-bottom: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 18px;
+  color: var(--dsw-alias-label-primary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.meta {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* 4px rounded bar; the fill's width carries the remaining share. */
+.bar {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--dsw-alias-interactive-bg-hover);
+  overflow: hidden;
+}
+
+.fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.3s ease;
+}
+
+/* Traffic-light severity stops on the REMAINING share — green above 60%,
+ * yellow 20–60%, red below 20% — shared by the fills and the aux dots.
+ * Ratio-less amounts join only at ≤ 0 (red); the icon keeps warn/exhausted
+ * tints so a healthy trigger stays neutral. */
+.ok {
+  background: var(--dsw-alias-state-success-primary);
+}
+
+.warn {
+  background: var(--dsw-alias-state-warn-primary);
+}
+
+.exhausted {
+  background: var(--dsw-alias-state-error-primary);
+}
+
+/* Optional aux row: status dot + reset countdown. */
+.aux {
+  margin-top: 4px;
+  font-size: 11px;
+  line-height: 14px;
+  color: var(--dsw-alias-label-tertiary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.dot {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin-right: 3px;
+  border-radius: 50%;
+  vertical-align: middle;
+}
+
+/* Error body: friendly copy + retry. */
+.error {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.errorText {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-secondary);
+  overflow-wrap: anywhere;
+}
+
+.retry {
+  align-self: flex-start;
+  padding: 0;
+  border: none;
+  background: transparent;
+  font-size: 12px;
+  color: var(--dsw-alias-label-primary);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.retry:hover {
+  color: var(--dsw-alias-brand-primary);
+}

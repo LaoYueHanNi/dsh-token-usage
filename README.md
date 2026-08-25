@@ -21,6 +21,7 @@ Repo: <https://github.com/LaoYueHanNi/dsh-token-usage>
 ![Session Usage tab](usage-tab.png)
 
 - **Cost figures & model pricing**: per-request cost is computed live from per-model rates (¥ per million tokens) — a highlighted total-cost card, a cost column in the per-model table, and a warning strip for unpriced models (their cost counts as ¥0). Every priced model's name carries a small **rates button** that opens a dialog with that model's full price table: **each row is one billing condition** (default rates, context tiers like `≥ 512K`, peak windows like `09:00-12:00`, grouped under time rules' date windows), with the in/out/cache/write rates as aligned columns — mirroring exactly what the per-record resolver bills. Rates merge from two files: every startup mirrors the cloud model-price-table feed (the same source cc-switch-analyzer pulls) automatically, and `pricing.json` holds manual overrides.
+- **Provider quota**: an input-bar button (left of the model chip) shows the selected provider's remaining quota. Coding plans (Zhipu GLM / Kimi / MiniMax / OpenCode Go) get time-window progress; DeepSeek / OpenRouter get the account balance. See [Provider quota](#provider-quota).
 - **History backfill**: the first startup syncs requests that happened before installation (idempotent).
 
 ## Model pricing
@@ -97,6 +98,23 @@ The web card exposes the data directory and the region switch; the full key set 
 A saved region change re-syncs the mirror immediately; there is no automatic failover — the chosen mirror fails, the previous mirror stays until a later sync succeeds.
 
 **Region drives the display currency.** The region pick also decides how the stats page shows money: *Default / CN (Gitee)* keeps costs in RMB (`¥` + the table's own numbers); *Global (GitHub)* shows them in USD (`$` + `RMB ÷ rate`). The rate comes from the `usdExchangeRate` field at the very top of the pricing table (RMB per 1 USD; currently `7`), and falls back to a built-in `7` when the mirror does not carry it yet. Every money display follows along: the total-cost card, the per-model cost column, the unpriced warning, and the in/out/cache/write rates in the pricing dialog (whose USD view annotates the conversion rate under the table). Amounts on the wire always stay RMB — conversion happens only at render time, so switching regions never rebuilds any stats.
+
+## Provider quota
+
+The input-bar button follows the currently selected provider and opens a panel with remaining quota (the same API key as inference):
+
+| Provider | Shows |
+|---|---|
+| Zhipu GLM Coding Plan (CN / international) | 5-hour, weekly (some plans also monthly) |
+| Kimi For Coding | 5-hour, weekly |
+| MiniMax Coding Plan (CN / international) | 5-hour, weekly |
+| OpenCode Go | 5-hour, weekly, monthly |
+| DeepSeek (official) | ¥ account balance |
+| OpenRouter | $ remaining credits |
+
+Unsupported providers hide the button. A failed query can be retried from the panel. On by default; set `quota.enabled: false` to turn it off.
+
+Not supported yet: Volcengine, ZenMux, Zhipu Team plan, Claude / Codex / Gemini / Grok official subscriptions, GitHub Copilot.
 
 ## Install
 

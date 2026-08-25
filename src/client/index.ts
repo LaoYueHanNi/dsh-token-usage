@@ -30,6 +30,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 // shared `common` vocabulary into the `t` seat's key domain.
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import { CardForm, type SectionValue } from './card-form.ts'
+import { QuotaButton, type ModelSelectionSource } from './QuotaButton.tsx'
 import { SessionStatsChip } from './SessionStatsChip.tsx'
 import { TokenUsageCard } from './TokenUsageCard.tsx'
 import { TokenUsageSection } from './TokenUsageSection.tsx'
@@ -100,6 +101,38 @@ export function apply(ctx: ClientContext): void {
     order: -10,
     locale: NS,
   }, SessionStatsChip))
+
+  // The input-bar quota button: one entry of the `conversation.input.right`
+  // slot list (the tool row's right end, before the send button — the host
+  // renders slot entries left of the model chip). The button polls the
+  // host's `/token-usage/quota` route for the ACTIVE session's provider and
+  // self-gates: it renders nothing while the provider is undeterminable or
+  // has no quota adapter, so the toolbar stays clean on unsupported
+  // providers and the button reappears when a supported one takes over.
+  // `order: 10` keeps it after any future lower-order utilities in the
+  // same slot.
+  //
+  // Provider resolution follows the model CHIP: the shell's model-selection
+  // service (`ctx.modelDirectories`, from ui-model-selection — the same
+  // shared per-session directory the chip renders from) reports the host's
+  // NEXT selection live, so the button appears the moment the user picks a
+  // provider, before any request is sent. The service attaches through an
+  // OPTIONAL inject — a shell without it falls back to the host's own
+  // resolution (last request's provider, else the default selection).
+  const modelDirectory: { service: ModelSelectionSource | undefined } = { service: undefined }
+  ctx.inject(['modelDirectories'], (modelCtx) => {
+    modelCtx.effect(() => {
+      modelDirectory.service = (modelCtx as unknown as { modelDirectories?: ModelSelectionSource }).modelDirectories
+      return () => { modelDirectory.service = undefined }
+    }, 'token-usage: model directory seam')
+  })
+  ctx.slots.inject('conversation.input.right', () => ctx.slots.register({
+    name: 'conversation.input.right',
+    id: 'token-usage-quota',
+    order: 10,
+    locale: NS,
+    inject: () => ({ modelDirectory }),
+  }, QuotaButton))
 
   // The Plugins configuration tab dispatches keyed cards for the namespaces
   // the Host serves; the token-usage host half registers this key, so the

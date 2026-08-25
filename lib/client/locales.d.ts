@@ -102,6 +102,20 @@ export declare const zh: {
     readonly 'chip.tokens': "含子会话 token 用量 {value}";
     readonly 'chip.hitRate': "含子会话缓存命中率 {value}";
     readonly 'chip.cost': "含子会话费用 {value}";
+    readonly 'quota.trigger': "供应商配额";
+    readonly 'quota.panel': "供应商配额面板";
+    readonly 'quota.tier.fiveHour': "5 小时";
+    readonly 'quota.tier.weekly': "每周";
+    readonly 'quota.tier.monthly': "每月";
+    readonly 'quota.tier.balance': "余额";
+    readonly 'quota.resetIn': "{time} 后重置";
+    readonly 'quota.updatedAt': "更新于 {time}";
+    readonly 'quota.retry': "重试";
+    readonly 'quota.error.auth': "鉴权失败（{message}）；请检查该供应商的 API Key。";
+    readonly 'quota.error.noCredential': "未解析到 API Key（{ref}）；请先在供应商设置中配置密钥。";
+    readonly 'quota.error.http': "供应商接口返回错误（{message}）。";
+    readonly 'quota.error.network': "网络错误（{message}）。";
+    readonly 'quota.error.parse': "响应解析失败（{message}）。";
 };
 /** English dictionary (same key set). */
 export declare const en: Record<TokenUsageKey, string>;
