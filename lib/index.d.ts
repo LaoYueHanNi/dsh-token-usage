@@ -38,6 +38,16 @@ export interface Config {
      * deferred fallback then finds the same directory and is a no-op. Never
      * user-facing — a test-only tilt at the boot deferral. */
     startupDeferMs?: number;
+    /** The provider quota feature (the input-bar button): enabled by default,
+     * with the poll cadence the host asks the browser to follow. */
+    quota?: QuotaConfig;
+}
+/** Composition knobs of the quota feature (cordis.yml level). */
+export interface QuotaConfig {
+    /** Master switch; `false` stops serving the quota route (the button hides). */
+    enabled?: boolean;
+    /** Poll cadence the payload stamps (seconds); clamped to 15–3600. */
+    intervalSec?: number;
 }
 /** Reject stale or misspelled config keys before defaults can hide them. */
 export declare function validateConfig(config: Config): void;

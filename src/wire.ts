@@ -120,6 +120,14 @@ export function decodeSessionScope(source: URL | URLSearchParams): string[] {
   return decodeRepeatedParam(source, 'sessionId')
 }
 
+/**
+ * The quota endpoint path: the input-bar quota button polls this for the
+ * current provider's rate-limit / balance snapshot. Served by the host
+ * half's quota route; the query carries `?session=<id>` so the host can
+ * resolve the provider the ACTIVE session is using.
+ */
+export const QUOTA_PATH = '/token-usage/quota'
+
 /** The migration-progress endpoint path, polled by the browser card. */
 export const MIGRATION_PATH = '/token-usage/migration'
 
@@ -432,4 +440,99 @@ export interface UsageSummary extends CostedSummary {
   requestSeries?: readonly RequestPoint[]
   children?: Readonly<Record<string, ChildUsageSummary>>
   sessionIds?: readonly string[]
+}
+
+/** One normalized quota window tier, mirroring the tier vocabulary the
+ * cc-switch research normalized providers onto: time-boxed windows for
+ * coding-plan subscriptions, an open-ended balance tier for pay-as-you-go
+ * accounts. Display adapts by tier (progress bar vs amount). */
+export type QuotaTier = 'five_hour' | 'weekly' | 'monthly' | 'balance'
+
+/**
+ * One provider quota window as the panel renders it. Percent fields carry
+ * the two directions providers report (most coding plans report used,
+ * MiniMax reports remaining); the panel derives whichever is missing.
+ * Absolute amounts are balance semantics: `remainingValue` is what the
+ * user cares about, `maxValue` (when known) enables a spend-progress bar.
+ */
+export interface QuotaWindow {
+  tier: QuotaTier
+  /** Used share of the window, 0–100; preferred over `remainingPercent`. */
+  usedPercent?: number
+  /** Remaining share of the window, 0–100. */
+  remainingPercent?: number
+  /** When the window resets, epoch ms; absent for balances. */
+  resetAt?: number
+  /** Remaining absolute amount (a balance, or a USD-metered quota). */
+  remainingValue?: number
+  /** Total absolute amount, when the provider reports one. */
+  maxValue?: number
+  /** Currency of the absolute fields. */
+  unit?: 'usd' | 'cny'
+}
+
+/** Why a quota query failed, normalized so the panel can pick friendly copy. */
+export type QuotaErrorKind = 'auth' | 'no-credential' | 'http' | 'network' | 'parse'
+
+/** The error face of a quota response. */
+export interface QuotaError {
+  kind: QuotaErrorKind
+  /** Technical detail (status code, thrown message); the panel wraps it in
+   * kind-specific locale copy. */
+  message: string
+}
+
+/** The poll cadence the host asks the client to follow (seconds); stamped
+ * on every payload variant so the button adapts to the plugin config. */
+interface QuotaCadence {
+  intervalSec: number
+}
+
+/** A successful quota read: the normalized windows of the current
+ * provider, ready for the panel's adaptive grid. */
+export interface QuotaSnapshot extends QuotaCadence {
+  status: 'ok'
+  /** Provider route key, exactly as session events carry it. */
+  provider: string
+  /** Human-readable provider name when one is resolvable. */
+  providerName?: string
+  /** Which adapter produced the windows (diagnostics). */
+  adapterId: string
+  /** When the snapshot was fetched, epoch ms. */
+  fetchedAt: number
+  /** Plan tier label when the provider reports one (e.g. Zhipu `data.level`). */
+  planTier?: string
+  windows: QuotaWindow[]
+}
+
+/** A failed quota read: the provider matched an adapter but the query
+ * failed. The button stays visible (the provider IS supported) and the
+ * panel shows the error with a retry. */
+export interface QuotaFailure extends QuotaCadence {
+  status: 'error'
+  provider: string
+  providerName?: string
+  adapterId: string
+  fetchedAt: number
+  error: QuotaError
+}
+
+/** The full quota endpoint vocabulary. The hidden variants:
+ * - `no-provider` — no provider in use is determinable yet (no activity,
+ *   no default selection); the button hides until one appears.
+ * - `unsupported` — the provider in use has no quota adapter; the button
+ *   hides (switching providers brings it back).
+ * - `disabled` — the quota feature is off in plugin config.
+ */
+export type QuotaPayload =
+  | QuotaSnapshot
+  | QuotaFailure
+  | (QuotaCadence & { status: 'no-provider' })
+  | (QuotaCadence & { status: 'unsupported'; provider: string; providerName?: string })
+  | (QuotaCadence & { status: 'disabled' })
+
+/** The windows of a payload, empty for every non-ok variant — the helper
+ * the panel reuses for the trigger icon's color. */
+export function quotaWindowsOf(payload: QuotaPayload): readonly QuotaWindow[] {
+  return payload.status === 'ok' ? payload.windows : []
 }

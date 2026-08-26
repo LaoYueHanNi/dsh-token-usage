@@ -19,6 +19,7 @@
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
+import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
 import z from '@deepseek-ai/schemastery'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
@@ -26,6 +27,8 @@ import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-session-persistence'
 // Type-only: pulls the ctx.webServer declaration merge into the program.
 import type {} from '@deepseek-ai/dsh-host-webserver'
+// Type-only: pulls the ctx.llm declaration merge (the provider directory).
+import type {} from '@deepseek-ai/dsh-llm'
 import { UsageLog } from './usage-log.ts'
 import { cleanSource, copyData, type MigrationProgress } from './migrate.ts'
 import { resolvePricingUrl, syncCloudPricing, type PricingSourceInput } from './pricing.ts'
@@ -33,7 +36,14 @@ import { recordFromEvent } from './usage-record.ts'
 import { autoSyncIfNeeded, syncHistory } from './sync.ts'
 import { clearRecordCache, warmRecordCache } from './record-cache.ts'
 import { createDirectoryGuardRoute, createFullSyncRoute, createMigrationRoute, createStatsRoute, type FullSyncTrigger } from './stats-route.ts'
-import { currencyOfRegion, type DirectoryGuardView, type FullSyncView } from './wire.ts'
+import { currencyOfRegion, type DirectoryGuardView, type FullSyncView, type QuotaPayload } from './wire.ts'
+import { createQuotaRoute } from './quota/quota-route.ts'
+import { QuotaService } from './quota/quota-service.ts'
+import { ProviderTracker, resolveCurrentProvider } from './quota/provider-tracking.ts'
+import {
+  resolveQuotaCredentials, withCatalogBaseUrl,
+  type CredentialRecordReader, type CredentialResolver, type ProviderDirectory, type SettingsReader,
+} from './quota/credentials.ts'
 
 export interface Config {
   /** Data directory; defaults to `$DSH_HOME/token-usage` (`~/.dsh/token-usage`). */
@@ -55,13 +65,25 @@ export interface Config {
    * deferred fallback then finds the same directory and is a no-op. Never
    * user-facing — a test-only tilt at the boot deferral. */
   startupDeferMs?: number
+  /** The provider quota feature (the input-bar button): enabled by default,
+   * with the poll cadence the host asks the browser to follow. */
+  quota?: QuotaConfig
+}
+
+/** Composition knobs of the quota feature (cordis.yml level). */
+export interface QuotaConfig {
+  /** Master switch; `false` stops serving the quota route (the button hides). */
+  enabled?: boolean
+  /** Poll cadence the payload stamps (seconds); clamped to 15–3600. */
+  intervalSec?: number
 }
 
 /** Reject stale or misspelled config keys before defaults can hide them. */
 export function validateConfig(config: Config): void {
   const unknown = Object.keys(config).find(key =>
     key !== 'path' && key !== 'pricingUrl' && key !== 'pricingUrlDomestic'
-    && key !== 'pricingUrlOverseas' && key !== 'pricingRegion' && key !== 'startupDeferMs')
+    && key !== 'pricingUrlOverseas' && key !== 'pricingRegion' && key !== 'startupDeferMs'
+    && key !== 'quota')
   if (unknown !== undefined) {
     throw new Error(`TokenUsageConfig: unknown key "${unknown}"`)
   }
@@ -86,6 +108,23 @@ export function validateConfig(config: Config): void {
   if (config.startupDeferMs !== undefined
       && (!Number.isFinite(config.startupDeferMs) || config.startupDeferMs < 0)) {
     throw new Error('TokenUsageConfig: "startupDeferMs" must be a non-negative number')
+  }
+  if (config.quota !== undefined) {
+    if (typeof config.quota !== 'object' || config.quota === null) {
+      throw new Error('TokenUsageConfig: "quota" must be an object')
+    }
+    const quotaUnknown = Object.keys(config.quota).find(key => key !== 'enabled' && key !== 'intervalSec')
+    if (quotaUnknown !== undefined) {
+      throw new Error(`TokenUsageConfig: unknown quota key "${quotaUnknown}"`)
+    }
+    const { enabled, intervalSec } = config.quota
+    if (enabled !== undefined && typeof enabled !== 'boolean') {
+      throw new Error('TokenUsageConfig: quota "enabled" must be a boolean')
+    }
+    if (intervalSec !== undefined
+        && (!Number.isFinite(intervalSec) || intervalSec < 15 || intervalSec > 3600)) {
+      throw new Error('TokenUsageConfig: quota "intervalSec" must be a number within 15–3600')
+    }
   }
 }
 
@@ -450,6 +489,96 @@ export function apply(ctx: Context, config: Config = {}) {
     return { started: true }
   }
 
+  // ---- Provider quota feature (input-bar button, `/token-usage/quota`) ----
+  // Live tracking of which provider route each session uses: fed by the
+  // same session events the recorder reads, but registered at apply scope
+  // so tracking works before (and regardless of) the data directory start.
+  const quotaTracker = new ProviderTracker()
+  ctx.on('session/event', (session: Session, event: SessionEvent) => {
+    // request/context fires at dispatch — the provider is known before the
+    // first token; assistant/message re-confirms it from the provenance.
+    if (event.type === 'request/context') {
+      quotaTracker.observe(session.id, event.data.provider, event.data.model)
+      return
+    }
+    if (event.type === 'assistant/message') {
+      quotaTracker.observe(session.id, event.data.message.source.provider, event.data.message.source.model)
+    }
+  })
+
+  // The three seams the credential chain runs over. Each starts as a no-op
+  // and upgrades when its (optional) host service attaches; a missing seam
+  // shortens the chain rather than breaking it.
+  let quotaDirectory: ProviderDirectory | undefined
+  let quotaReadSettings: SettingsReader = () => undefined
+  let quotaResolveCredential: CredentialResolver | undefined
+  let quotaReadRecord: CredentialRecordReader | undefined
+  ctx.inject(['llm'], (llmCtx) => {
+    // The provider directory maps a route key to its settings location —
+    // the one authoritative source (the built-in fallback in
+    // credentials.ts covers hosts without the llm service).
+    llmCtx.effect(() => {
+      quotaDirectory = (provider) => {
+        const entry = llmCtx.llm.listConfigurableProviders().find(item => item.provider === provider)
+        return entry === undefined ? undefined : {
+          settingsNs: entry.settingsNs,
+          settingsPath: entry.settingsPath,
+          displayName: entry.displayName,
+        }
+      }
+      return () => { quotaDirectory = undefined }
+    }, 'token-usage: quota provider directory')
+  })
+  ctx.inject(['settings'], (settingsCtx) => {
+    settingsCtx.effect(() => {
+      quotaReadSettings = (ns) => settingsCtx.settings.get(settingsNamespace(ns))
+      return () => { quotaReadSettings = () => undefined }
+    }, 'token-usage: quota settings reader')
+  })
+  ctx.inject(['credentials'], (credentialsCtx) => {
+    credentialsCtx.effect(() => {
+      quotaResolveCredential = async ref =>
+        (await credentialsCtx.credentials.resolve(credentialRef(ref)))?.value
+      // The record store is newer than the installed typings; read it
+      // feature-detected (absent on older hosts — the env layer covers).
+      const recordReader = (credentialsCtx.credentials as unknown as {
+        readRecord?: (key: string) => Promise<{ key?: string } | undefined>
+      }).readRecord
+      if (typeof recordReader === 'function') {
+        quotaReadRecord = key => recordReader.call(credentialsCtx.credentials, key)
+      }
+      return () => {
+        quotaResolveCredential = undefined
+        quotaReadRecord = undefined
+      }
+    }, 'token-usage: quota credential seam')
+  })
+
+  const quotaEnabled = config.quota?.enabled !== false
+  const quotaIntervalSec = Math.min(3600, Math.max(15, Math.round(config.quota?.intervalSec ?? 60)))
+  const quotaService = new QuotaService({
+    resolveProvider: sessionId => resolveCurrentProvider({
+      tracker: quotaTracker,
+      ...(sessionId !== undefined ? { sessionId } : {}),
+      defaultProvider: () => {
+        // A brand-new, never-requesting session would use the host's
+        // default model selection; absent or unregistered → undefined.
+        const section = quotaReadSettings('agent-default-model')
+        if (typeof section !== 'object' || section === null) return undefined
+        const provider = (section as { provider?: unknown }).provider
+        return typeof provider === 'string' && provider !== '' ? provider : undefined
+      },
+    }),
+    resolveCredentials: async provider => withCatalogBaseUrl(provider, await resolveQuotaCredentials({
+      provider,
+      ...(quotaDirectory !== undefined ? { directory: quotaDirectory } : {}),
+      readSettings: quotaReadSettings,
+      ...(quotaResolveCredential !== undefined ? { resolveCredential: quotaResolveCredential } : {}),
+      ...(quotaReadRecord !== undefined ? { readRecord: quotaReadRecord } : {}),
+    })),
+    intervalSec: quotaIntervalSec,
+  })
+
   /**
    * Open (or move) the running data directory at the section-resolved
    * location. Idempotent: the first call opens the directory and registers
@@ -527,6 +656,15 @@ export function apply(ctx: Context, config: Config = {}) {
       webCtx.effect(() => webCtx.webServer.register(
         createFullSyncRoute(() => fullSyncStatus, triggerFullSync),
       ), 'token-usage: full sync route')
+      // The input-bar quota button's data channel: the current provider's
+      // quota snapshot (rate-limit windows / balance), served by the quota
+      // service. A disabled feature still answers — with the `disabled`
+      // variant the button hides behind, rather than a 404.
+      webCtx.effect(() => webCtx.webServer.register(
+        createQuotaRoute((sessionId, providerHint) => quotaEnabled
+          ? quotaService.snapshot(sessionId, providerHint)
+          : Promise.resolve({ status: 'disabled', intervalSec: quotaIntervalSec } satisfies QuotaPayload)),
+      ), 'token-usage: quota route')
     })
 
     console.log(`[token-usage] plugin loaded (data dir: ${dir})`)
