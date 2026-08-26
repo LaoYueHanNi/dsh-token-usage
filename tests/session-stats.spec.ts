@@ -7,7 +7,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
-  aggregateProjections, buildChildIndex, directSubagentIds, subagentParentOf, subtreeIds,
+  aggregateProjections, buildChildIndex, buildStatsFreshnessKey, directSubagentIds, sessionStatsFingerprint, subagentParentOf, subtreeIds,
 } from '../src/client/session-stats.ts'
 import type { SessionRows } from '../src/client/session-stats.ts'
 import { decodeChildGroups, encodeSessionScope, encodeStatsQuery } from '../src/wire.ts'
@@ -25,6 +25,24 @@ function mirror(): SessionRows {
     selfParent: { parentId: 'selfParent', origin: 'subagent' },
   }
 }
+
+describe('buildStatsFreshnessKey', () => {
+  it('changes when sessionStats steps advance even if updatedAt is flat', () => {
+    const rows = mirror()
+    const before = buildStatsFreshnessKey(['root'], {
+      activeSessionId: 'root',
+      rows,
+      liveSessionStats: { turns: 1, steps: 3, llmMs: 0, toolMs: 0, ttftMs: 0, ttftSteps: 1, decodeMs: 0, decodeTokens: 0 },
+    })
+    const after = buildStatsFreshnessKey(['root'], {
+      activeSessionId: 'root',
+      rows,
+      liveSessionStats: { turns: 1, steps: 4, llmMs: 0, toolMs: 0, ttftMs: 0, ttftSteps: 2, decodeMs: 0, decodeTokens: 50 },
+    })
+    expect(after).not.toBe(before)
+    expect(sessionStatsFingerprint(undefined)).toBe('-')
+  })
+})
 
 describe('directSubagentIds', () => {
   it('lists only subagent-origin children, not ordinary forks', () => {

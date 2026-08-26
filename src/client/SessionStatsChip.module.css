@@ -31,6 +31,13 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* Allow +Δ fly and cost scale to extend outside the capsule briefly. */
+.stripFlyOverflow {
+  overflow: visible;
+  position: relative;
+  z-index: 2;
+}
+
 /* One cell in the strip. The first child gets the left rounded corners,
  * the last the right, so the capsule reads as one shape instead of three
  * square buttons lined up. The + sibling rule paints the seam. */
@@ -50,6 +57,53 @@
  * (`hit-rate-band.module.css`) on an inner span. */
 .cellHit {
   font-weight: 500;
+}
+
+/* Cost cell: anchor pop/fly overlays; width matches sibling cells. */
+.costCell {
+  position: relative;
+  overflow: visible;
+  z-index: 1;
+}
+
+.costInner {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transform-origin: 50% 50%;
+  position: relative;
+  z-index: 2;
+}
+
+.deltaLayer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: visible;
+  z-index: 3;
+}
+
+.deltaFly {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  transform: translate(-50%, -100%);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--dsw-alias-state-warn-primary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  pointer-events: none;
+  text-shadow: 0 0 8px color-mix(in srgb, var(--dsw-alias-state-warn-primary) 35%, transparent);
+}
+
+/* Defense in depth for reduced motion: the inflate hook refuses to spawn
+ * flies and WAAPI ignores `animation: none`, so hiding the class is the
+ * only CSS-level guard that actually holds. */
+@media (prefers-reduced-motion: reduce) {
+  .deltaFly {
+    display: none;
+  }
 }
 
 /* Narrow viewport (≤560px, per spec): the strip keeps its full height and

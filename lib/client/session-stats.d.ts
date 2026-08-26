@@ -15,6 +15,7 @@ import type { SessionStatsProjection } from '@deepseek-ai/dsh-session-stats/clie
 export interface SessionRowLike {
     parentId?: string | undefined;
     origin?: 'subagent' | undefined;
+    updatedAt?: number | undefined;
     projectionValues?: Readonly<Partial<{
         sessionStats?: SessionStatsProjection;
     }>> | undefined;
@@ -86,4 +87,19 @@ export interface StatsAggregate {
  * when no projection was present.
  */
 export declare function aggregateProjections(values: Iterable<SessionStatsProjection | undefined>): StatsAggregate | undefined;
+/**
+ * Compact fingerprint of one session's retained stats projection — bumps on
+ * every finished request step (same signal that drives TTFT / throughput).
+ */
+export declare function sessionStatsFingerprint(stats: SessionStatsProjection | undefined): string;
+/**
+ * Build a debounce key from mirror `updatedAt` plus `sessionStats` churn.
+ * The active session reads live projection values from `useProjection`; every
+ * other scoped id reads the mirror copy.
+ */
+export declare function buildStatsFreshnessKey(ids: readonly string[], options: {
+    activeSessionId: string;
+    rows: SessionRows;
+    liveSessionStats?: SessionStatsProjection | undefined;
+}): string;
 //# sourceMappingURL=session-stats.d.ts.map
