@@ -134,6 +134,7 @@ function quotaBase(input: QuotaMatchInput | QuotaQueryContext): string {
 export const zhipuAdapter: QuotaAdapter = {
   id: 'zhipu-coding-plan',
   label: 'Zhipu GLM Coding Plan',
+  routes: [ROUTE_CODING_CN, ROUTE_ZAI],
   matches(input) {
     if (input.provider === ROUTE_CODING_CN || input.provider === ROUTE_ZAI) return true
     const host = hostOf(input.baseUrl)

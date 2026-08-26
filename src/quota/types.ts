@@ -52,8 +52,15 @@ export interface QuotaQueryResult {
 export interface QuotaAdapter {
   /** Stable id surfaced in diagnostics (`zhipu-coding-plan`, …). */
   id: string
-  /** Human-readable family label for logs and diagnostics. */
+  /** Human-readable family label — diagnostics, and the qualifier the
+   * service appends to a host-matched custom route's display name. */
   label: string
+  /** Route keys this adapter owns by catalog identity (the pi-ai settings
+   * dict keys). A route that matched without being listed here is a
+   * host-matched custom name — the service qualifies its display name
+   * with {@link QuotaAdapter.label} so an alias cannot claim another
+   * family's windows. Absent means the adapter claims every match. */
+  routes?: readonly string[]
   /**
    * Whether this adapter handles the route. The base-URL host is the
    * stronger signal: a user-declared pi-ai route can carry any name while

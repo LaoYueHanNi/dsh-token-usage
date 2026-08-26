@@ -177,4 +177,40 @@ describe('QuotaService', () => {
     await service.snapshot()
     expect(fetchFn).toHaveBeenCalledTimes(2)
   })
+
+  it('qualifies a host-matched custom route with the adapter family label', async () => {
+    // A user-declared route named "OpenAI" whose base URL points at the
+    // OpenCode Go endpoint: the adapter owns the QUOTA, so the alias gains
+    // the family label instead of claiming the windows as OpenAI's.
+    const { service } = serviceOf({
+      provider: 'my-openai',
+      credentials: { apiKey: 'sk-test', baseUrl: 'https://opencode.ai/zen/go/v1', displayName: 'OpenAI' },
+      fetchFn: fetchOf({ usage: { rolling: { status: 'ok', percent: 12.5 }, weekly: { percent: 40 } } }),
+    })
+    const payload = await service.snapshot()
+    expect(payload).toMatchObject({
+      status: 'ok',
+      provider: 'my-openai',
+      providerName: 'OpenAI · OpenCode Go',
+      adapterId: 'opencode-go',
+      windows: [{ tier: 'five_hour', usedPercent: 12.5 }, { tier: 'weekly', usedPercent: 40 }],
+    })
+  })
+
+  it('falls back to the route key as the alias when no display name resolves', async () => {
+    const { service } = serviceOf({
+      provider: 'my-gw',
+      credentials: { apiKey: 'sk-test', baseUrl: 'https://opencode.ai/zen/go/v1' },
+      fetchFn: fetchOf({ usage: { rolling: { percent: 5 } } }),
+    })
+    expect(await service.snapshot()).toMatchObject({ providerName: 'my-gw · OpenCode Go' })
+  })
+
+  it('keeps the plain display name for a catalog route the adapter owns', async () => {
+    const { service } = serviceOf({
+      provider: 'zai-coding-cn',
+      credentials: { apiKey: 'sk-test', displayName: '智谱 Coding Plan' },
+    })
+    expect(await service.snapshot()).toMatchObject({ providerName: '智谱 Coding Plan' })
+  })
 })

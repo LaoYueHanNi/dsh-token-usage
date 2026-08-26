@@ -1,9 +1,9 @@
 /**
  * Browser-side display formatting of the quota panel: the derived
  * remaining share, the three-stop severity band, the trigger-ring fill
- * share, the reset countdown, and the money / percent figures. Pure
- * functions, shared by the button (the trigger icon reads the
- * finest-granularity window) and the panel's window columns.
+ * share, the trigger tooltip figure, the reset countdown, and the money /
+ * percent figures. Pure functions, shared by the button (the trigger icon
+ * reads the finest-granularity window) and the panel's window columns.
  *
  * @module token-usage/client/quota-format
  */
@@ -102,6 +102,23 @@ export function quotaIconFillShare(window: QuotaWindow | undefined): number {
   if (remaining !== undefined) return remaining / 100
   if (window.remainingValue !== undefined && window.remainingValue > 0) return 1
   return 0
+}
+
+/**
+ * The trigger tooltip's figure for one window: the remaining share as a
+ * percent when a ratio exists (any direction, or the balance fraction),
+ * else the remaining amount (a ratio-less balance, the DeepSeek shape);
+ * undefined when the window carries neither (nothing to show beyond the
+ * plain label).
+ */
+export function quotaTriggerFigure(window: QuotaWindow | undefined): string | undefined {
+  if (window === undefined) return undefined
+  const remaining = quotaRemainingPercent(window)
+  if (remaining !== undefined) return formatQuotaPercent(remaining)
+  if (window.remainingValue !== undefined) {
+    return formatQuotaMoney(window.remainingValue, window.unit ?? 'cny')
+  }
+  return undefined
 }
 
 /**

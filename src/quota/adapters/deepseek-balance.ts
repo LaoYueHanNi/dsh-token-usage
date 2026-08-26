@@ -39,6 +39,7 @@ function balanceRootOf(baseUrl: string | undefined): string {
 export const deepseekBalanceAdapter: QuotaAdapter = {
   id: 'deepseek-balance',
   label: 'DeepSeek Balance',
+  routes: [ROUTE_OFFICIAL],
   matches(input) {
     if (input.provider === ROUTE_OFFICIAL) return true
     const host = hostOf(input.baseUrl)

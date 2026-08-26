@@ -78,6 +78,7 @@ function windowOf(tier: QuotaWindow['tier'], raw: unknown): QuotaWindow | undefi
 export const opencodeGoAdapter: QuotaAdapter = {
   id: 'opencode-go',
   label: 'OpenCode Go',
+  routes: [ROUTE_OPENCODE_GO],
   matches(input) {
     if (input.provider === ROUTE_OPENCODE_GO) return true
     return isOpenCodeGoUrl(input.baseUrl)

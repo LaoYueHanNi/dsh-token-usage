@@ -69,6 +69,7 @@ function isPlaceholderLane(entry: Record<string, unknown>, percentField: string,
 export const minimaxAdapter: QuotaAdapter = {
   id: 'minimax-coding-plan',
   label: 'MiniMax Coding Plan',
+  routes: [ROUTE_INTERNATIONAL, ROUTE_DOMESTIC],
   matches(input) {
     if (ROUTES.has(input.provider)) return true
     const host = hostOf(input.baseUrl)

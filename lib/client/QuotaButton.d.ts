@@ -19,6 +19,9 @@
  * providers makes it appear again. A supported provider whose query fails
  * KEEPS the button and shows the error with a retry inside the panel.
  *
+ * The hover tooltip reads provider name + the finest window's exact
+ * remaining figure (percent, or the amount when no ratio exists).
+ *
  * The interaction copies ContextMeter verbatim (click toggles, document
  * pointerdown outside closes, Escape closes); mutual exclusion with the
  * ContextMeter panel falls out of both components' outside-close

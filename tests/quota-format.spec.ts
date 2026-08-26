@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest'
 import {
   formatQuotaClock, formatQuotaMoney, formatQuotaPercent, formatResetCountdown,
   quotaRemainingPercent, quotaSeverityOf, quotaUsedPercent, finestQuotaWindow,
-  quotaIconFillShare,
+  quotaIconFillShare, quotaTriggerFigure,
 } from '../src/client/quota-format.ts'
 
 const NOW = 1_780_000_000_000
@@ -78,7 +78,25 @@ describe('quotaIconFillShare', () => {
     expect(quotaIconFillShare({ tier: 'balance', remainingValue: 0, unit: 'cny' })).toBe(0)
     expect(quotaIconFillShare({ tier: 'balance', remainingValue: -0.01, unit: 'cny' })).toBe(0)
     expect(quotaIconFillShare(undefined)).toBe(0)
+})
+
+describe('quotaTriggerFigure', () => {
+  it('reads the remaining share whenever a ratio exists', () => {
+    expect(quotaTriggerFigure({ tier: 'five_hour', usedPercent: 62.5 })).toBe('37.5%')
+    expect(quotaTriggerFigure({ tier: 'weekly', remainingPercent: 30 })).toBe('30%')
+    expect(quotaTriggerFigure({ tier: 'balance', remainingValue: 6.8, maxValue: 10, unit: 'usd' })).toBe('68%')
   })
+
+  it('falls back to the amount when no ratio is computable', () => {
+    expect(quotaTriggerFigure({ tier: 'balance', remainingValue: 110.5, unit: 'cny' })).toBe('¥110.50')
+    expect(quotaTriggerFigure({ tier: 'balance', remainingValue: 6.8, unit: 'usd' })).toBe('$6.80')
+  })
+
+  it('returns undefined for a missing or figure-less window', () => {
+    expect(quotaTriggerFigure(undefined)).toBeUndefined()
+    expect(quotaTriggerFigure({ tier: 'five_hour' })).toBeUndefined()
+  })
+})
 })
 
 describe('formatResetCountdown', () => {

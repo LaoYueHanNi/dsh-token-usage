@@ -19,6 +19,9 @@
  * providers makes it appear again. A supported provider whose query fails
  * KEEPS the button and shows the error with a retry inside the panel.
  *
+ * The hover tooltip reads provider name + the finest window's exact
+ * remaining figure (percent, or the amount when no ratio exists).
+ *
  * The interaction copies ContextMeter verbatim (click toggles, document
  * pointerdown outside closes, Escape closes); mutual exclusion with the
  * ContextMeter panel falls out of both components' outside-close
@@ -41,7 +44,7 @@ import { QUOTA_PATH } from '../wire.ts'
 import { useAsyncResource } from './async-resource.ts'
 import {
   finestQuotaWindow, formatQuotaClock, formatQuotaMoney, formatQuotaPercent, formatResetCountdown,
-  quotaIconFillShare, quotaRemainingPercent, quotaSeverityOf, quotaUsedPercent,
+  quotaIconFillShare, quotaRemainingPercent, quotaSeverityOf, quotaTriggerFigure, quotaUsedPercent,
 } from './quota-format.ts'
 import type { QuotaSeverity } from './quota-format.ts'
 import { useColorSchemeMirror } from './use-color-scheme.ts'
@@ -242,9 +245,18 @@ export function QuotaButton({ sessionId, t, modelDirectory }: QuotaButtonProps):
   }
   const triggerClassName = triggerClass.join(' ').trim()
 
+  // The hover tooltip carries the exact figure the ring approximates:
+  // provider name + the finest window's remaining share (its amount when
+  // no ratio exists); errors and window-less payloads keep the plain
+  // label.
+  const figure = quotaTriggerFigure(finest)
+  const triggerTip = figure === undefined
+    ? t('quota.trigger')
+    : t('quota.triggerSummary', { name: payload.providerName ?? payload.provider, figure })
+
   return (
     <span ref={rootRef} className={styles.root}>
-      <Tooltip label={t('quota.trigger')} side="top" delayMs={200} disabled={open}>
+        <Tooltip label={triggerTip} side="top" delayMs={200} disabled={open}>
         <button
           type="button"
           className={triggerClassName}
@@ -310,12 +322,30 @@ export function QuotaButton({ sessionId, t, modelDirectory }: QuotaButtonProps):
  * paint a dot. */
 const RING_R = 5.5
 const RING_C = 2 * Math.PI * RING_R
+/** Round caps paint half a stroke width beyond each dash end; their
+ * combined reach is what the dash compensation subtracts, so the painted
+ * arc (dash + caps) equals the nominal share and the caps cannot seal the
+ * 12-o'clock gap. */
+const RING_CAP_REACH = 2
 
 /** The trigger glyph: a ContextMeter-family donut whose fill arc is the
  * remaining share of the finest window. Color comes from the button's
  * severity class (`currentColor`); this only draws the arc. */
 function QuotaGlyph({ share }: { share: number }): ReactNode {
   const clamped = Math.min(1, Math.max(0, share))
+  // Cap compensation: round caps extend the painted arc by RING_CAP_REACH,
+  // which sealed any gap under ~5.8% of the ring (a 1% gap rendered
+  // pixel-identical to a full one). Shortening the dash keeps the gap open
+  // at the ring's rims — any nonzero usage stays visible — while the
+  // centerline gap stays linear in the remaining share. A full share keeps
+  // the entire circumference (compensated caps would only touch at one
+  // point, leaving a rim notch that reads as ~98%); an arc no longer than
+  // the cap reach skips the compensation (a dash ≤ 0 paints nothing and
+  // would drop the nub).
+  const nominal = clamped * RING_C
+  const dashLen = clamped >= 1 ? RING_C
+    : nominal <= RING_CAP_REACH ? nominal
+    : nominal - RING_CAP_REACH
   return (
     <svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true">
       <circle cx="7" cy="7" r={RING_R} fill="none" stroke="currentColor" strokeWidth="2" opacity="0.22" />
@@ -329,7 +359,7 @@ function QuotaGlyph({ share }: { share: number }): ReactNode {
             stroke="currentColor"
             strokeWidth="2"
             strokeLinecap={clamped < 1 ? 'round' : 'butt'}
-            strokeDasharray={`${(clamped * RING_C).toFixed(3)} ${RING_C.toFixed(3)}`}
+            strokeDasharray={`${dashLen.toFixed(3)} ${RING_C.toFixed(3)}`}
             transform="rotate(-90 7 7)"
           />
         )

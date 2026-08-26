@@ -22,6 +22,7 @@ const QUOTA_URL = 'https://openrouter.ai/api/v1/credits'
 export const openrouterAdapter: QuotaAdapter = {
   id: 'openrouter-credits',
   label: 'OpenRouter Credits',
+  routes: [ROUTE_OPENROUTER],
   matches(input) {
     if (input.provider === ROUTE_OPENROUTER) return true
     const host = hostOf(input.baseUrl)

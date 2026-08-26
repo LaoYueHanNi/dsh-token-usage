@@ -260,10 +260,12 @@ describe('QuotaButton', () => {
     const trigger = await screen.findByLabelText('供应商配额')
     expect(trigger.className).toMatch(/icon-ok/)
     expect(trigger.className).not.toMatch(/exhausted/)
-    // Remaining-share ring: used 5% → 95% left, two circles (track + fill).
+    // Remaining-share ring, dash-compensated for the round caps: used 5% →
+    // 95% left, two circles (track + fill), dash shortened by the caps'
+    // total reach (2 units) so the painted arc equals the nominal share.
     expect(trigger.querySelectorAll('circle')).toHaveLength(2)
     expect(trigger.querySelectorAll('circle')[1]?.getAttribute('stroke-dasharray'))
-      .toBe(`${(0.95 * ringC).toFixed(3)} ${ringC.toFixed(3)}`)
+      .toBe(`${(0.95 * ringC - 2).toFixed(3)} ${ringC.toFixed(3)}`)
     healthy.unmount()
 
     // A ratio-less amount (the DeepSeek shape) never tints the healthy
@@ -280,6 +282,41 @@ describe('QuotaButton', () => {
     expect(funded.querySelectorAll('circle')).toHaveLength(2)
     expect(funded.querySelectorAll('circle')[1]?.getAttribute('stroke-dasharray'))
       .toBe(`${ringC.toFixed(3)} ${ringC.toFixed(3)}`)
+  })
+
+  it('dash-compensates the ring for the round caps; full and tiny shares keep their special paths', async () => {
+    const ringC = 2 * Math.PI * 5.5
+    const fillOf = (): Promise<Element | null> =>
+      screen.findByLabelText('供应商配额')
+        .then(trigger => trigger.querySelectorAll('circle')[1] ?? null)
+
+    // Near-full: compensated (nominal − cap reach) with round caps, so the
+    // 12-o'clock gap survives the cap extension and any nonzero usage stays
+    // visible.
+    stubFetch({ ...OK_PAYLOAD, windows: [{ tier: 'five_hour', usedPercent: 1, resetAt: Date.now() + 60_000 }] })
+    const nearFull = render(<QuotaButton {...propsOf()} />)
+    const nearFill = await fillOf()
+    expect(nearFill?.getAttribute('stroke-dasharray')).toBe(`${(0.99 * ringC - 2).toFixed(3)} ${ringC.toFixed(3)}`)
+    expect(nearFill?.getAttribute('stroke-linecap')).toBe('round')
+    nearFull.unmount()
+
+    // Tiny share (arc no longer than the cap reach): uncompensated — a
+    // dash ≤ 0 would paint nothing and drop the nub.
+    stubFetch({ ...OK_PAYLOAD, windows: [{ tier: 'five_hour', usedPercent: 97, resetAt: Date.now() + 60_000 }] })
+    const tiny = render(<QuotaButton {...propsOf()} />)
+    const tinyFill = await fillOf()
+    expect(tinyFill?.getAttribute('stroke-dasharray')).toBe(`${(0.03 * ringC).toFixed(3)} ${ringC.toFixed(3)}`)
+    expect(tinyFill?.getAttribute('stroke-linecap')).toBe('round')
+    tiny.unmount()
+
+    // Exactly full: the entire circumference with a butt cap — compensated
+    // caps would only touch at one point, leaving a rim notch that reads
+    // as ~98%.
+    stubFetch({ ...OK_PAYLOAD, windows: [{ tier: 'five_hour', usedPercent: 0, resetAt: Date.now() + 60_000 }] })
+    render(<QuotaButton {...propsOf()} />)
+    const fullFill = await fillOf()
+    expect(fullFill?.getAttribute('stroke-dasharray')).toBe(`${ringC.toFixed(3)} ${ringC.toFixed(3)}`)
+    expect(fullFill?.getAttribute('stroke-linecap')).toBe('butt')
   })
 
   it('closes on outside pointerdown and on Escape', async () => {

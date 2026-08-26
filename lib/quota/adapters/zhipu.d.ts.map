@@ -1,1 +1,1 @@
-{"version":3,"file":"zhipu.d.ts","sourceRoot":"","sources":["../../../src/quota/adapters/zhipu.ts"],"names":[],"mappings":"AAAA;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;GAiCG;AAKH,OAAO,KAAK,EAAE,YAAY,EAAwD,MAAM,aAAa,CAAA;AA8FrG,kEAAkE;AAClE,eAAO,MAAM,YAAY,EAAE,YAoG1B,CAAA"}
+{"version":3,"file":"zhipu.d.ts","sourceRoot":"","sources":["../../../src/quota/adapters/zhipu.ts"],"names":[],"mappings":"AAAA;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;GAiCG;AAKH,OAAO,KAAK,EAAE,YAAY,EAAwD,MAAM,aAAa,CAAA;AA8FrG,kEAAkE;AAClE,eAAO,MAAM,YAAY,EAAE,YAqG1B,CAAA"}

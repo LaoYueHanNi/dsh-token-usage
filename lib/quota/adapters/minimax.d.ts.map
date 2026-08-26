@@ -1,1 +1,1 @@
-{"version":3,"file":"minimax.d.ts","sourceRoot":"","sources":["../../../src/quota/adapters/minimax.ts"],"names":[],"mappings":"AAAA;;;;;;;;;;;;;;;;;;;GAmBG;AAKH,OAAO,KAAK,EAAE,YAAY,EAAuC,MAAM,aAAa,CAAA;AA2CpF,yEAAyE;AACzE,eAAO,MAAM,cAAc,EAAE,YA0E5B,CAAA"}
+{"version":3,"file":"minimax.d.ts","sourceRoot":"","sources":["../../../src/quota/adapters/minimax.ts"],"names":[],"mappings":"AAAA;;;;;;;;;;;;;;;;;;;GAmBG;AAKH,OAAO,KAAK,EAAE,YAAY,EAAuC,MAAM,aAAa,CAAA;AA2CpF,yEAAyE;AACzE,eAAO,MAAM,cAAc,EAAE,YA2E5B,CAAA"}

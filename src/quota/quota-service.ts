@@ -72,6 +72,22 @@ function toQuotaFailure(
   }
 }
 
+/**
+ * The display name for a resolved adapter: the route's own name when the
+ * route key is one of the adapter's catalog routes; a host-matched custom
+ * route keeps its user-chosen alias but qualified by the adapter's family
+ * label — the quota belongs to the family, and an alias like "OpenAI"
+ * must not claim OpenCode Go windows as its own.
+ */
+function displayNameOf(
+  provider: string,
+  credentials: ResolvedQuotaCredentials,
+  adapter: QuotaAdapter,
+): string | undefined {
+  if (adapter.routes === undefined || adapter.routes.includes(provider)) return credentials.displayName
+  return `${credentials.displayName ?? provider} · ${adapter.label}`
+}
+
 /** The quota orchestration service. */
 export class QuotaService {
   readonly #deps: QuotaServiceDeps
@@ -118,11 +134,12 @@ export class QuotaService {
         intervalSec: this.intervalSec,
       }
     }
+    const providerName = displayNameOf(provider, credentials, adapter)
     if (credentials.apiKey === undefined) {
       return {
         status: 'error',
         provider,
-        ...(credentials.displayName !== undefined ? { providerName: credentials.displayName } : {}),
+        ...(providerName !== undefined ? { providerName } : {}),
         adapterId: adapter.id,
         fetchedAt: this.#now(),
         intervalSec: this.intervalSec,
@@ -138,7 +155,7 @@ export class QuotaService {
     const running = this.#inflight.get(provider)
     if (running !== undefined) return running
 
-    const query = this.#query(provider, credentials, adapter)
+    const query = this.#query(provider, providerName, credentials, adapter)
     this.#inflight.set(provider, query)
     try {
       return await query
@@ -150,6 +167,7 @@ export class QuotaService {
   /** The fresh-or-cached ok result, or a live error, of one provider query. */
   async #query(
     provider: string,
+    providerName: string | undefined,
     credentials: ResolvedQuotaCredentials,
     adapter: QuotaAdapter,
   ): Promise<QuotaSnapshot | QuotaFailure> {
@@ -164,7 +182,7 @@ export class QuotaService {
       const payload: QuotaSnapshot = {
         status: 'ok',
         provider,
-        ...(credentials.displayName !== undefined ? { providerName: credentials.displayName } : {}),
+        ...(providerName !== undefined ? { providerName } : {}),
         adapterId: adapter.id,
         fetchedAt: this.#now(),
         intervalSec: this.intervalSec,
@@ -177,7 +195,7 @@ export class QuotaService {
       // Errors do not cache: the panel's retry must actually re-query.
       this.#cache.delete(provider)
       return toQuotaFailure(
-        provider, credentials.displayName, adapter, error, this.intervalSec, this.#now(),
+        provider, providerName, adapter, error, this.intervalSec, this.#now(),
       )
     }
   }

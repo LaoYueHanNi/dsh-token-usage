@@ -103,6 +103,7 @@ export declare const zh: {
     readonly 'chip.hitRate': "含子会话缓存命中率 {value}";
     readonly 'chip.cost': "含子会话费用 {value}";
     readonly 'quota.trigger': "供应商配额";
+    readonly 'quota.triggerSummary': "{name} · {figure}";
     readonly 'quota.panel': "供应商配额面板";
     readonly 'quota.tier.fiveHour': "5 小时";
     readonly 'quota.tier.weekly': "每周";

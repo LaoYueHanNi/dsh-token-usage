@@ -56,6 +56,7 @@ function windowOf(tier: QuotaWindow['tier'], raw: unknown): QuotaWindow | undefi
 export const kimiAdapter: QuotaAdapter = {
   id: 'kimi-coding-plan',
   label: 'Kimi For Coding',
+  routes: [ROUTE_KIMI_CODING],
   matches: input => input.provider === ROUTE_KIMI_CODING || isKimiHost(input.baseUrl),
   async query(ctx): Promise<QuotaQueryResult> {
     const body = await fetchJson(ctx, QUOTA_URL, { authorization: `Bearer ${ctx.apiKey}` })
