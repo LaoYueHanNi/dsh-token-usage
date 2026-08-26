@@ -2,7 +2,7 @@
 
 [![awesome · DSH plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
 
-![Token Usage stats page](token-usage.png)
+![Token Usage stats page](docs/images/token-usage.png)
 
 [简体中文](./README.zh.md) | English
 
@@ -18,7 +18,7 @@ Repo: <https://github.com/LaoYueHanNi/dsh-token-usage>
 - **Web stats page**: filters (date range + model + `1d`/`7d`/`30d` shortcuts), summary cards, daily trend chart (hover a day for its total), per-model table.
 - **Session usage view tab**: the conversation pane gains a **Usage** view tab (beside Chat / Trajectory) showing the active session's token & cost dashboard — six stat cards (requests, cost, cache hit rate, average time-to-first-token, generation throughput, total tokens), a 4-bucket token strip, an hourly trend chart, and a per-model table. A **Session / With subagents** scope switch aggregates the whole subagent subtree in one request, and the subagent table lists each child (requests, total tokens, cost, hit rate, TTFT, throughput) with drill-in navigation back to the parent. Token/cost figures come from the plugin's own billing chain (post-install records); TTFT and throughput come from DSH's `sessionStats` session projection (covers pre-install history). Sessions without records degrade to a placeholder, never an error.
 
-![Session Usage tab](usage-tab.png)
+![Session Usage tab](docs/images/usage-tab.png)
 
 - **Cost figures & model pricing**: per-request cost is computed live from per-model rates (¥ per million tokens) — a highlighted total-cost card, a cost column in the per-model table, and a warning strip for unpriced models (their cost counts as ¥0). Every priced model's name carries a small **rates button** that opens a dialog with that model's full price table: **each row is one billing condition** (default rates, context tiers like `≥ 512K`, peak windows like `09:00-12:00`, grouped under time rules' date windows), with the in/out/cache/write rates as aligned columns — mirroring exactly what the per-record resolver bills. Rates merge from two files: every startup mirrors the cloud model-price-table feed (the same source cc-switch-analyzer pulls) automatically, and `pricing.json` holds manual overrides.
 - **Provider quota**: an input-bar button (left of the model chip) shows the selected provider's remaining quota. Coding plans (Zhipu GLM / Kimi / MiniMax / OpenCode Go) get time-window progress; DeepSeek / OpenRouter get the account balance. See [Provider quota](#provider-quota).
@@ -26,7 +26,7 @@ Repo: <https://github.com/LaoYueHanNi/dsh-token-usage>
 
 ## Model pricing
 
-![Model pricing dialog](model-price.png)
+![Model pricing dialog](docs/images/model-price.png)
 
 **Every record is priced individually**: each one resolves through the analyzer's rule chain at its own timestamp — the covering time rule first (its context tiers, its peak slots), else the model root's tiers → peak slots → base rates. Tier matching approximates the context size by the request's input-side tokens (input + cacheRead + cacheWrite). A price update re-prices the whole history instantly, with no data rebuild. Rates come from two files merged on read — `pricing.json` entries always win (a manual entry replaces that model's cloud rules wholesale):
 
@@ -102,6 +102,10 @@ A saved region change re-syncs the mirror immediately; there is no automatic fai
 ## Provider quota
 
 The input-bar button follows the currently selected provider and opens a panel with remaining quota (the same API key as inference):
+
+<img src="docs/images/zhipu-plan-usage.png" width="520" alt="Zhipu GLM quota panel">
+
+<img src="docs/images/opencode-go-plan-usage.png" width="520" alt="OpenCode Go quota panel">
 
 | Provider | Shows |
 |---|---|

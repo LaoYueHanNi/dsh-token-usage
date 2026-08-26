@@ -2,7 +2,7 @@
 
 [![awesome · DSH plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
 
-![Token 用量统计页](token-usage_zh.png)
+![Token 用量统计页](docs/images/token-usage_zh.png)
 
 简体中文 | [English](./README.md)
 
@@ -18,7 +18,7 @@
 - **Web 统计页**：过滤条（日期区间 + 模型下拉 + `1d`/`7d`/`30d` 快捷区间）、汇总卡片、按日趋势图（悬停查看当日总量）、按模型明细表。
 - **会话用量页签**：对话面板新增「用量」视图页签（与聊天 / 轨迹并列），展示当前会话的 token 与费用 dashboard —— 六张数值卡（请求数、费用、缓存命中率、首 token 平均延迟、出字速度、总 token）+ 四项 token 明细条 + 按小时趋势图 + 按模型表；支持「本会话 / 含子会话」范围切换（子会话子树聚合到一次请求），子会话表逐行展示（请求数、总 token、费用、命中率、首 token、速度），点击行钻取到该子会话并可逐级返回。token 与费用走插件自己的计费链（安装后记录），首 token 与出字速度读 DSH 的 `sessionStats` 会话投影（含安装前历史）；会话无记录时优雅降级为占位文案。
 
-![会话用量页签](usage-tab_zh.png)
+![会话用量页签](docs/images/usage-tab_zh.png)
 
 - **费用统计与模型定价**：按模型单价（¥/百万 token）实时计算费用 —— 汇总卡醒目展示总费用，按模型表每行带费用列，未定价模型高亮提示（费用按 ¥0 计）。定价模型的名字旁有**「定价」小按钮**，点击弹窗展示该模型的完整价格表：**每行一个计费条件**（默认价、上下文档位 `≥ 512K`、峰谷时段 `09:00-12:00`、限时规则的日期窗口分组），条件对应的入/出/缓/写四价各自成列，与逐条计费的解析规则一一对应。定价由云端镜像与手工文件合并而来：启动时自动从 model-price-table（cc-switch-analyzer 同源）拉取镜像，`pricing.json` 手工覆盖/补充。
 - **供应商配额**：输入栏模型选择器左侧有配额按钮，跟随当前选中的供应商展示套餐余量。智谱 GLM / Kimi / MiniMax / OpenCode Go 显示时间窗口进度，DeepSeek / OpenRouter 显示账户余额。详见「[供应商配额](#供应商配额)」。
@@ -26,7 +26,7 @@
 
 ## 模型定价
 
-![模型定价弹窗](model-price_zh.png)
+![模型定价弹窗](docs/images/model-price_zh.png)
 
 **逐条请求精确计费**：每条记录按自身时间戳走 cc-switch-analyzer 同款规则链——时间区间规则（`timeRules`）优先，命中后用规则内上下文档位（`contextTiers`）与峰谷价（`dailySlots`）；未命中走模型根的档位 → 峰谷 → 基础价。档位匹配以上下文 token 量近似（本请求 input + cacheRead + cacheWrite）。定价表更新价格后，全部历史按新价即时重算，无需重建数据。定价来自两个文件，读取时合并，`pricing.json` 的条目永远优先（整模型覆盖，含禁用其云端规则）：
 
@@ -105,6 +105,10 @@ Web 卡片提供数据目录与地区切换两项；全部配置项（均为可�
 ## 供应商配额
 
 输入栏按钮跟随当前选中的供应商，点开即可查看套餐余量（与推理共用同一把 API Key）：
+
+<img src="docs/images/zhipu-plan-usage_zh.png" width="520" alt="智谱 GLM 配额面板">
+
+<img src="docs/images/opencode-go-plan-usage_zh.png" width="520" alt="OpenCode Go 配额面板">
 
 | 供应商 | 展示 |
 |---|---|
