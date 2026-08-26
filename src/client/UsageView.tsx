@@ -33,7 +33,7 @@ import { useAsyncResource, useDebouncedValue } from './async-resource.ts'
 import { totalTokens } from './day.ts'
 import { currencyViewOf, formatCost, formatSpeed, formatTokens, formatTtft } from './format.ts'
 import { HitRateText } from './HitRateText.tsx'
-import { aggregateProjections, buildChildIndex, directSubagentIds, subagentParentOf, subtreeIds } from './session-stats.ts'
+import { aggregateProjections, buildChildIndex, directSubagentIds, subagentParentOf, subtreeIds, buildStatsFreshnessKey } from './session-stats.ts'
 import { StatCard } from './StatCard.tsx'
 import { TrendChart } from './TrendChart.tsx'
 import { useColorSchemeMirror } from './use-color-scheme.ts'
@@ -113,13 +113,13 @@ export function UsageView({ useSessions, useProjection, sessionId, t }: UsageVie
     [children, scope, byId, childIndex],
   )
   const backParent = subagentParentOf(byId, focusId)
-  // Debounce on a stable string: membership + per-session updatedAt so a
-  // finished request refreshes figures, while unrelated byId identity
-  // churn does not. The first paint already has a key (no null sentinel)
-  // so mount does not double-fetch.
-  const freshnessKey = [...new Set([...scopeIds, ...children])]
-    .map(id => `${id}:${String(byId[id as SessionId]?.updatedAt ?? 0)}`)
-    .join(',')
+  // Live sessionStats updates every request step; mirror updatedAt alone
+  // does not — fold both into the debounce key (same cadence as TTFT).
+  const liveStats = useProjection('sessionStats')
+  const freshnessKey = buildStatsFreshnessKey(
+    [...new Set([...scopeIds, ...children])],
+    { activeSessionId: sessionId, rows: byId, liveSessionStats: liveStats },
+  )
   const requestKey = `${scopeIds.join('\n')}\n\t${childGroups.map(group => group.join(',')).join(';')}\n\t${freshnessKey}`
   const debouncedKey = useDebouncedValue(requestKey, REFRESH_DEBOUNCE_MS)
   const [summaryState] = useAsyncResource<UsageSummary>(
@@ -133,11 +133,6 @@ export function UsageView({ useSessions, useProjection, sessionId, t }: UsageVie
     { silentAfterFirst: true, retryToken },
   )
 
-  // TTFT / throughput come from the framework's retained projections: the
-  // live session via useProjection, every other session from the mirror.
-  // Pass values directly to aggregateProjections (rather than synthesising
-  // a Rows-like map) so the producer stays typed at `SessionId`.
-  const liveStats = useProjection('sessionStats')
   const stats = useMemo(() => {
     const values: Array<SessionStatsProjection | undefined> = scopeIds.map((id) => {
       if (id === sessionId) return liveStats

@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>费用膨胀动画 Demo · SessionStatsChip · dsh-token-usage</title>
+<style>
+  :root {
+    --border-l1: rgba(0, 0, 0, 0.06);
+    --border-l2: rgba(0, 0, 0, 0.1);
+    --label-primary: rgb(15, 17, 21);
+    --label-secondary: rgb(97, 102, 107);
+    --label-tertiary: rgb(129, 133, 140);
+    --seat-bg: rgb(255, 255, 255);
+    --page: rgb(244, 245, 246);
+    --card-bg: rgb(255, 255, 255);
+    --ok: rgb(22, 163, 74);
+    --lime: #84cc16;
+    --warn: #f59e0b;
+    --error: rgb(220, 38, 38);
+    --shadow: 0 0 1px rgba(0,0,0,.12), 0 8px 24px rgba(0,0,0,.06);
+  }
+  body[data-ds-dark-theme] {
+    --border-l1: rgba(255, 255, 255, 0.08);
+    --border-l2: rgba(255, 255, 255, 0.12);
+    --label-primary: rgb(249, 250, 251);
+    --label-secondary: rgb(207, 211, 214);
+    --label-tertiary: rgb(173, 178, 184);
+    --seat-bg: rgb(44, 45, 47);
+    --page: rgb(31, 32, 34);
+    --card-bg: rgb(44, 45, 47);
+    --ok: rgb(74, 222, 128);
+    --error: rgb(242, 90, 90);
+    --shadow: 0 0 1px rgba(0,0,0,.4), 0 12px 32px rgba(0,0,0,.35);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 28px 32px 56px;
+    background: var(--page); color: var(--label-secondary);
+    font: 12px/20px -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+  }
+
+  .pageHead { max-width: 720px; margin: 0 auto 22px; }
+  .pageTitle { margin: 0 0 6px; font-size: 16px; font-weight: 600; color: var(--label-primary); }
+  .lede { margin: 0 0 14px; max-width: 72ch; color: var(--label-tertiary); line-height: 1.55; }
+  .lede code { font-family: ui-monospace, Consolas, monospace; font-size: 11px; }
+
+  .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
+  .themeToggle, .btn, .seg button {
+    padding: 3px 12px; border: 1px solid var(--border-l2); border-radius: 999px;
+    background: var(--seat-bg); color: var(--label-secondary); font: inherit; cursor: pointer;
+  }
+  .themeToggle { margin-left: auto; }
+  .btn.primary { background: color-mix(in srgb, var(--label-primary) 12%, transparent); color: var(--label-primary); font-weight: 500; }
+  .seg { display: inline-flex; border: 1px solid var(--border-l1); border-radius: 999px; overflow: hidden; background: var(--seat-bg); }
+  .seg button { border: 0; background: transparent; padding: 4px 12px; }
+  .seg button + button { border-left: 1px solid var(--border-l1); }
+  .seg button[aria-pressed="true"] { background: color-mix(in srgb, var(--label-primary) 14%, transparent); color: var(--label-primary); font-weight: 500; }
+
+  .intensityMeter { display: inline-flex; align-items: center; gap: 8px; color: var(--label-tertiary); }
+  .intensityMeter .bar { width: 88px; height: 6px; border-radius: 999px; background: var(--border-l1); overflow: hidden; }
+  .intensityMeter .fill { height: 100%; width: 0%; background: linear-gradient(90deg, var(--lime), var(--warn), var(--error)); transition: width 0.25s ease; }
+  .intensityMeter strong { color: var(--label-primary); font-variant-numeric: tabular-nums; }
+
+  .formula {
+    max-width: 720px; margin: 0 auto 16px; padding: 12px 14px;
+    border: 1px solid var(--border-l1); border-radius: 10px; background: var(--card-bg);
+    color: var(--label-tertiary); line-height: 1.55;
+  }
+  .formula b { color: var(--label-secondary); font-weight: 600; }
+
+  .card {
+    max-width: 720px; margin: 0 auto;
+    border: 1px solid var(--border-l1); border-radius: 12px; background: var(--card-bg); box-shadow: var(--shadow);
+    padding: 16px; display: flex; flex-direction: column; gap: 12px;
+  }
+  .cardHead h2 { margin: 0 0 4px; font-size: 14px; font-weight: 600; color: var(--label-primary); }
+  .cardHead p { margin: 0; color: var(--label-tertiary); line-height: 1.5; }
+
+  .headerSeat {
+    display: flex; align-items: center; gap: 10px;
+    min-height: 44px; padding: 14px 12px 10px;
+    border: 1px solid var(--border-l2); border-radius: 10px; background: var(--seat-bg);
+    overflow: visible;
+  }
+  .headerSeat .title { flex: 1; color: var(--label-primary); font-size: 13px; font-weight: 500; }
+  .headerSeat .logBtn {
+    height: 28px; padding: 0 10px; border: 1px solid var(--border-l2); border-radius: 14px;
+    color: var(--label-secondary); line-height: 26px;
+  }
+
+  .chipWrap {
+    position: relative;
+    flex: none;
+    display: inline-flex;
+  }
+
+  .strip {
+    display: inline-flex; align-items: stretch; height: 28px;
+    border: 1px solid var(--border-l2); border-radius: 14px;
+    font-size: 12px; line-height: 18px; font-variant-numeric: tabular-nums;
+    position: relative; overflow: visible;
+  }
+  .cell { display: inline-flex; align-items: center; padding: 0 10px; color: var(--label-primary); white-space: nowrap; position: relative; }
+  .cell + .cell { border-left: 1px solid var(--border-l1); }
+  .cellHit { font-weight: 500; }
+  .band_lime { color: var(--lime); }
+  .band_amber { color: var(--warn); }
+  .band_healthy { color: var(--ok); }
+  .band_critical { color: var(--error); }
+
+  .costCell {
+    overflow: visible;
+    min-width: 4.6em;
+    justify-content: center;
+    z-index: 1;
+  }
+
+  .costInner {
+    display: inline-flex; align-items: center; justify-content: center;
+    transform-origin: 50% 50%;
+    transform: scale(1);
+    will-change: transform, color;
+  }
+
+  .costInner.is-inflating {
+    position: relative;
+    z-index: 2;
+    animation: costPop var(--inflate-ms, 520ms) cubic-bezier(0.22, 1.4, 0.36, 1) both;
+    color: color-mix(in srgb, var(--warn) var(--warn-mix, 0%), var(--label-primary));
+  }
+  @keyframes costPop {
+    0%   { transform: scale(1); }
+    35%  { transform: scale(var(--pop-scale, 1.22)); }
+    70%  { transform: scale(calc(1 + (var(--pop-scale, 1.22) - 1) * 0.28)); }
+    100% { transform: scale(1); }
+  }
+
+  .deltaLayer {
+    position: absolute; left: 0; right: 0; top: 0; bottom: 0;
+    pointer-events: none; overflow: visible;
+    z-index: 3;
+  }
+  .deltaFly {
+    position: absolute; left: 50%; top: 0;
+    transform: translate(-50%, -100%);
+    font-size: 11px; font-weight: 600; color: var(--warn);
+    font-variant-numeric: tabular-nums; white-space: nowrap;
+    pointer-events: none; opacity: 0;
+    z-index: 4;
+    text-shadow: 0 0 8px color-mix(in srgb, var(--warn) 35%, transparent);
+  }
+  .deltaFly.is-flying {
+    animation: deltaRise var(--inflate-ms, 700ms) cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  }
+  @keyframes deltaRise {
+    0%   { opacity: 0; transform: translate(-50%, -20%); }
+    12%  { opacity: 1; }
+    100% {
+      opacity: 0;
+      transform: translate(calc(-50% + var(--fly-x, 0px)), calc(-100% - var(--fly-y, 20px)));
+    }
+  }
+
+  .meta { font-size: 11px; color: var(--label-tertiary); line-height: 1.45; }
+  .meta em { font-style: normal; color: var(--label-secondary); }
+
+  @media (prefers-reduced-motion: reduce) {
+    .costInner.is-inflating,
+    .deltaFly.is-flying { animation: none !important; }
+  }
+</style>
+</head>
+<body>
+  <header class="pageHead">
+    <h1 class="pageTitle">SessionStatsChip · 费用弹出 + 膨胀</h1>
+    <p class="lede">
+      <strong>Chip 本体与胶囊边框不动、不闪</strong>。每次请求只动费用格：
+      <code>costPop</code> 金额膨胀回弹 + <code>deltaRise</code> 弹出 <strong>+¥Δ</strong>。
+    </p>
+    <div class="toolbar">
+      <div class="seg" role="group" aria-label="单次场景">
+        <button type="button" data-scene="mild" aria-pressed="false">轻量</button>
+        <button type="button" data-scene="miss" aria-pressed="true">高 miss</button>
+        <button type="button" data-scene="output" aria-pressed="false">大 output</button>
+        <button type="button" data-scene="both" aria-pressed="false">双高</button>
+      </div>
+      <div class="intensityMeter">
+        本步 I
+        <span class="bar"><span class="fill" id="intensityFill"></span></span>
+        <strong id="intensityText">0.00</strong>
+      </div>
+      <button type="button" class="btn primary" id="playOnce">单步</button>
+      <button type="button" class="themeToggle" id="themeToggle">切换暗色</button>
+    </div>
+  </header>
+
+  <aside class="formula">
+    <b>单步</b> <code>I = clamp01(0.55·norm(missRate) + 0.45·norm(output))</code>。
+    miss <em id="missPct">—</em>，费用 <em id="runningCost">¥0.23</em>。
+  </aside>
+
+  <main class="card" data-chip-card>
+    <div class="cardHead">
+      <h2>费用格双动画</h2>
+      <p><code>costPop</code> 膨胀弹簧 + <code>deltaRise</code> 差额上飘。胶囊外圈不参与动画。</p>
+    </div>
+    <div class="headerSeat">
+      <span class="title">会话头 · utilities</span>
+      <div class="chipWrap" data-chip-wrap>
+        <div class="strip" data-strip>
+          <span class="cell" data-tokens>196K</span>
+          <span class="cell cellHit"><span class="band_lime" data-hit>75.9%</span></span>
+          <span class="cell costCell">
+            <span class="costInner" data-cost>¥0.23</span>
+            <span class="deltaLayer" data-delta-layer aria-hidden="true"></span>
+          </span>
+        </div>
+      </div>
+      <span class="logBtn">Session log</span>
+    </div>
+    <p class="meta">
+      <em>pop-scale</em> = 1.08 + I×0.24（上限 1.32）；
+      <em>fly-y</em> = 22 + I×16 px；
+      <em>时长</em> = 1000 + I×800 ms
+    </p>
+  </main>
+
+<script>
+(() => {
+  const MISS_RATE_CAP = 0.55
+  const OUT_CAP = 32_000
+  const BASE_COST = 0.23
+
+  const SCENES = {
+    mild: { from: BASE_COST, to: 0.31, tokens: '210K', hitRate: 0.782, output: 2_400 },
+    miss: { from: BASE_COST, to: 1.86, tokens: '482K', hitRate: 0.413, output: 4_100 },
+    output: { from: BASE_COST, to: 1.24, tokens: '268K', hitRate: 0.720, output: 48_000 },
+    both: { from: BASE_COST, to: 3.42, tokens: '710K', hitRate: 0.286, output: 52_000 },
+  }
+
+  let sceneKey = 'miss'
+  let runningCost = BASE_COST
+
+  const $ = (sel, root = document) => root.querySelector(sel)
+  const $$ = (sel, root = document) => [...root.querySelectorAll(sel)]
+
+  function clamp01(n) { return Math.max(0, Math.min(1, n)) }
+  function formatYen(n) { return '¥' + n.toFixed(2) }
+  function formatHit(r) { return `${(r * 100).toFixed(1)}%` }
+  function hitBandOf(r) {
+    if (r >= 0.95) return 'band_healthy'
+    if (r >= 0.80) return 'band_lime'
+    if (r >= 0.60) return 'band_amber'
+    return 'band_critical'
+  }
+  function computeIntensity(step) {
+    const miss = clamp01((1 - step.hitRate) / MISS_RATE_CAP)
+    const out = clamp01(step.output / OUT_CAP)
+    return clamp01(0.55 * miss + 0.45 * out)
+  }
+  function lerp(a, b, t) { return a + (b - a) * t }
+  function msCss(ms) { return `${ms}ms` }
+
+  // Mirrors src/client/cost-inflate.ts animVars(I) — no momentum term.
+  function animVars(I) {
+    return {
+      inflateMs: Math.round(lerp(1000, 1800, I)),
+      popScale: lerp(1.08, 1.32, I).toFixed(3),
+      warnMix: `${Math.round(lerp(0, 55, I))}%`,
+      flyY: `${lerp(22, 38, I).toFixed(1)}px`,
+      flyX: `${((Math.random() - 0.5) * 10).toFixed(1)}px`,
+    }
+  }
+
+  function restartCostPop(cost) {
+    cost.classList.remove('is-inflating')
+    void cost.offsetWidth
+    cost.classList.add('is-inflating')
+  }
+
+  function playCostInflate(delta, I) {
+    const v = animVars(I)
+    const card = $('[data-chip-card]')
+    const cost = $('[data-cost]', card)
+    const deltaLayer = $('[data-delta-layer]', card)
+
+    card.style.setProperty('--inflate-ms', msCss(v.inflateMs))
+    cost.style.setProperty('--inflate-ms', msCss(v.inflateMs))
+    cost.style.setProperty('--pop-scale', v.popScale)
+    cost.style.setProperty('--warn-mix', v.warnMix)
+    restartCostPop(cost)
+
+    const fly = document.createElement('span')
+    fly.className = 'deltaFly'
+    fly.textContent = `+${formatYen(delta).slice(1)}`
+    fly.style.setProperty('--inflate-ms', msCss(v.inflateMs))
+    fly.style.setProperty('--fly-y', v.flyY)
+    fly.style.setProperty('--fly-x', v.flyX)
+    deltaLayer.appendChild(fly)
+    void fly.offsetWidth
+    fly.classList.add('is-flying')
+
+    const ms = v.inflateMs
+    window.setTimeout(() => {
+      cost.classList.remove('is-inflating')
+      fly.remove()
+    }, ms + 40)
+  }
+
+  function paintAll(step) {
+    const scene = step ?? SCENES[sceneKey]
+    const I = computeIntensity(step ?? scene)
+    $('#intensityFill').style.width = `${(I * 100).toFixed(0)}%`
+    $('#intensityText').textContent = I.toFixed(2)
+    $('#missPct').textContent = `${((1 - scene.hitRate) * 100).toFixed(1)}%`
+    $('#runningCost').textContent = formatYen(runningCost)
+
+    const card = $('[data-chip-card]')
+    $('[data-tokens]', card).textContent = scene.tokens
+    const hit = $('[data-hit]', card)
+    hit.textContent = formatHit(scene.hitRate)
+    hit.className = hitBandOf(scene.hitRate)
+    $('[data-cost]', card).textContent = formatYen(runningCost)
+  }
+
+  function fireStep(step) {
+    const I = computeIntensity(step)
+    runningCost += step.deltaCost
+    paintAll(step)
+    playCostInflate(step.deltaCost, I)
+  }
+
+  function resetAll(full = true) {
+    if (full) runningCost = BASE_COST
+    const deltaLayer = $('[data-delta-layer]')
+    if (deltaLayer) deltaLayer.innerHTML = ''
+    $('[data-cost]')?.classList.remove('is-inflating')
+    if (full) paintAll(null)
+  }
+
+  function playSingleScene() {
+    resetAll(false)
+    const s = SCENES[sceneKey]
+    runningCost = s.from
+    fireStep({ deltaCost: s.to - s.from, tokens: s.tokens, hitRate: s.hitRate, output: s.output })
+  }
+
+  $$('.seg [data-scene]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      sceneKey = btn.dataset.scene
+      btn.closest('.seg').querySelectorAll('[data-scene]').forEach(b => {
+        b.setAttribute('aria-pressed', b === btn ? 'true' : 'false')
+      })
+      resetAll(true)
+    })
+  })
+  $('#playOnce').addEventListener('click', playSingleScene)
+  $('#themeToggle').addEventListener('click', () => {
+    const dark = document.body.toggleAttribute('data-ds-dark-theme')
+    $('#themeToggle').textContent = dark ? '切换亮色' : '切换暗色'
+  })
+
+  paintAll(null)
+})()
+</script>
+</body>
+</html>

@@ -5,10 +5,15 @@
  * button. Data comes from `/token-usage/stats?fields=chip` scoped to the
  * active session and its subagent subtree (the Usage tab's "with
  * subagents" range), so a parent that spawned children shows the same
- * folded numbers the header is meant to summarise. Numbers refresh on a
- * 3 s poll (conversation-scale, not request-scale): a new request only
- * nudges one of three figures by a single call's worth, and the host
- * cache makes each poll a memory hit unless today's file grew.
+ * folded numbers the header is meant to summarise. Numbers refresh at
+ * REQUEST granularity (same cadence as the Usage tab): `sessionStats`
+ * projection churn (plus mirror `updatedAt` when present) is debounced
+ * into one fetch, so idle sessions do not poll and a finished request
+ * updates the header within ~250 ms. When cost
+ * rises on a new request, the cost cell plays `costPop` (scale bounce) and
+ * `deltaRise` (+Δ fly); reduced-motion users get silent figure updates
+ * instead. A failed FIRST fetch retries itself on a 3 s cadence — the old
+ * poll's safety net — so an idle-but-used session still gets its chip.
  *
  * Visibility contract: a session with no recorded requests renders nothing
  * (an empty header strip is worse than no strip; the chip never blanks to
@@ -23,24 +28,34 @@ import { useEffect, useMemo, useRef } from 'react'
 import type { ReactNode } from 'react'
 import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 // Type-only: merges SessionStandardProps / GlobalStandardProps (`sessionId`,
-// `useSessions`) into the header-utilities runtime kit this file binds.
+// `useSessions`, `useProjection`) into the header-utilities runtime kit.
 import type {} from '@deepseek-ai/dsh-client-runtime/client'
+// Type-only: merges the sessionStats key into SessionProjectionMap.
+import type {} from '@deepseek-ai/dsh-session-stats/client'
 // Type-only: pulls the `conversation.session.header.utilities` SlotMap key.
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { UsageSummary } from '../wire.ts'
 import { encodeStatsQuery, STATS_PATH } from '../wire.ts'
-import { useAsyncResource } from './async-resource.ts'
+import { useAsyncResource, useDebouncedValue } from './async-resource.ts'
 import { totalTokens } from './day.ts'
 import { currencyViewOf, formatCost, formatTokens, hitRateDisplay } from './format.ts'
 import { HitRateText } from './HitRateText.tsx'
-import { buildChildIndex, subtreeIds } from './session-stats.ts'
+import { buildChildIndex, buildStatsFreshnessKey, subtreeIds } from './session-stats.ts'
 import { useColorSchemeMirror } from './use-color-scheme.ts'
+import { CostDeltaFlyLabel } from './CostDeltaFlyLabel.tsx'
+import { useCostInflate } from './use-cost-inflate.ts'
 import styles from './SessionStatsChip.module.css'
 
-/** The polling cadence for one session's summary (ms). Long enough that a
- * busy session does not turn the header into a fetcher; short enough that a
- * user reading the numbers sees a fresh value before they look away. */
-const POLL_INTERVAL_MS = 3_000
+/** Refresh debounce: bursts of session-mirror updates (one request's events)
+ * collapse into a single fetch, matching the Usage tab's request-scale
+ * cadence instead of a steady poll. */
+const REFRESH_DEBOUNCE_MS = 250
+
+/** Self-heal cadence after a failed first fetch. With the poll gone, this
+ * retry is the only thing that recovers an idle session's chip: refresh
+ * failures after the first land keep the prior figures (silent mode) and
+ * self-heal on the next request churn, so they never reach the error state. */
+export const FETCH_FAILURE_RETRY_MS = 3_000
 
 /** Props the chip binds for the conversation-session header utilities slot:
  * the framework's session kit (`sessionId` + the global `useSessions`
@@ -58,8 +73,9 @@ export type SessionStatsChipProps =
  * @param props - framework session id, the session-list mirror, and the locale seat.
  * @returns the chip strip, or null when the data is empty/unavailable.
  */
-export function SessionStatsChip({ sessionId, useSessions, t }: SessionStatsChipProps): ReactNode | null {
+export function SessionStatsChip({ sessionId, useSessions, useProjection, t }: SessionStatsChipProps): ReactNode | null {
   const rootRef = useRef<HTMLDivElement>(null)
+  const costRef = useRef<HTMLSpanElement>(null)
   useColorSchemeMirror(rootRef)
   const byId = useSessions(state => state.byId)
   const childIndex = useMemo(() => buildChildIndex(byId), [byId])
@@ -70,26 +86,50 @@ export function SessionStatsChip({ sessionId, useSessions, t }: SessionStatsChip
     () => (sessionId === '' ? [] : subtreeIds(byId, sessionId, childIndex)),
     [byId, sessionId, childIndex],
   )
-  const scopeKey = scopeIds.join('\n')
-  // The hook drives every fetch; the surrounding interval just bumps the
-  // retry counter on a steady tick. `silentAfterFirst: true` keeps the
-  // prior chip on screen during a transient failure. `scopeKey` (not just
-  // sessionId) retriggers when a child is spawned, so the next poll does
-  // not have to wait 3 s to pick up the new id.
+  const liveStats = useProjection('sessionStats')
+  // Debounce on scope membership + sessionStats churn (and updatedAt when
+  // present). sessionStats bumps every finished request; updatedAt alone
+  // does not — same fix as the Usage tab's token/cost refresh.
+  const freshnessKey = buildStatsFreshnessKey(scopeIds, {
+    activeSessionId: sessionId,
+    rows: byId,
+    liveSessionStats: liveStats,
+  })
+  const requestKey = `${scopeIds.join('\n')}\n\t${freshnessKey}`
+  const debouncedKey = useDebouncedValue(requestKey, REFRESH_DEBOUNCE_MS)
+  const scopeResetKey = scopeIds.join('\n')
+  const {
+    flies,
+    flyOverflow,
+    onSummary,
+  } = useCostInflate(scopeResetKey, costRef)
   const [resource, retry] = useAsyncResource<UsageSummary | null>(
-    signal => fetchSessionSummary(scopeIds, signal),
-    [scopeKey],
+    signal => {
+      const [idsPart] = debouncedKey.split('\n\t')
+      const sessionIds = (idsPart ?? '').split('\n').filter(id => id !== '')
+      return fetchSessionSummary(sessionIds, signal)
+    },
+    [debouncedKey],
     { silentAfterFirst: true, retryToken: 0 },
   )
-  useEffect(() => {
-    if (sessionId === '') return
-    const timer = setInterval(retry, POLL_INTERVAL_MS)
-    return () => { clearInterval(timer) }
-  }, [sessionId, retry])
 
   // The spec's empty rule: a session with no fetched summary, with zero
   // requests, or still on the first attempt renders nothing.
   const summary = resource.status === 'ready' ? resource.value : null
+
+  useEffect(() => {
+    if (summary !== null) onSummary(summary)
+  }, [summary, onSummary])
+
+  // A failed first fetch renders nothing and, unlike the old poll, no later
+  // tick re-triggers it — schedule the resource hook's retry until data
+  // lands. Keyed on the resource object: each fresh error reschedules.
+  useEffect(() => {
+    if (resource.status !== 'error') return
+    const timer = window.setTimeout(retry, FETCH_FAILURE_RETRY_MS)
+    return () => { window.clearTimeout(timer) }
+  }, [resource, retry])
+
   if (summary === null || summary.total.requests === 0) return null
 
   const view = currencyViewOf(summary)
@@ -99,7 +139,12 @@ export function SessionStatsChip({ sessionId, useSessions, t }: SessionStatsChip
   const costText = formatCost(summary.totalCost, view)
 
   return (
-    <div ref={rootRef} className={styles['strip']} role="group" aria-label={t('view.usage')}>
+    <div
+      ref={rootRef}
+      className={`${styles['strip']}${flyOverflow ? ` ${styles['stripFlyOverflow']}` : ''}`}
+      role="group"
+      aria-label={t('view.usage')}
+    >
       <span
         className={styles['cell']}
         aria-label={t('chip.tokens', { value: tokensText })}
@@ -119,10 +164,17 @@ export function SessionStatsChip({ sessionId, useSessions, t }: SessionStatsChip
         <HitRateText totals={total} />
       </span>
       <span
-        className={styles['cell']}
+        className={`${styles['cell']} ${styles['costCell']}`}
         aria-label={t('chip.cost', { value: costText })}
       >
-        {costText}
+        <span ref={costRef} className={styles['costInner']}>
+          {costText}
+        </span>
+        <span className={styles['deltaLayer']} aria-hidden="true">
+          {flies.map(fly => (
+            <CostDeltaFlyLabel key={fly.id} text={fly.text} vars={fly.vars} />
+          ))}
+        </span>
       </span>
     </div>
   )

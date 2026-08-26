@@ -2,25 +2,26 @@
 /**
  * Session-header stats chip rendering tests: the spec's two visible rules
  * (data present → three cells in order; data absent → nothing renders) and
- * the live-update plumbing (the poll resets when the active session id
- * changes, a transport failure leaves the previous render in place). The
- * hit-rate bucket classes are pinned because they drive the color
+ * the live-update plumbing (request-scale refresh via session-mirror
+ * `updatedAt`, a transport failure leaves the previous render in place, a
+ * failed FIRST fetch retries itself, reduced-motion stays silent).
+ * The hit-rate bucket classes are pinned because they drive the color
  * thresholds. A fake `fetch` answers the per-session summary the host's
  * `/token-usage/stats?sessionId=<id>` route would serve.
  *
- * Fake timers are intentionally NOT enabled — they break jsdom's Response body
- * parsing (streams schedule on real timers). The polling tests instead
- * substitute the global `setInterval`/`clearInterval` so a tick can be
- * triggered deterministically without freezing the microtask queue.
+ * Real timers only — fake timers break jsdom's Response body parsing
+ * (streams schedule on real timers). Debounce waits use `waitFor` with a
+ * timeout past the 250 ms refresh window.
  */
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SessionListState } from '@deepseek-ai/dsh-client-runtime/client'
-import { SessionStatsChip, type SessionStatsChipProps } from '../src/client/SessionStatsChip.tsx'
+import type { SessionStatsProjection } from '@deepseek-ai/dsh-session-stats/client'
+import { SessionStatsChip, FETCH_FAILURE_RETRY_MS, type SessionStatsChipProps } from '../src/client/SessionStatsChip.tsx'
 import { zh } from '../src/client/locales.ts'
 import type { UsageSummary } from '../src/wire.ts'
-import { useSessionsFromState } from './test-kit.ts'
+import { makeUseProjection, useSessionsFromState } from './test-kit.ts'
 
 /** zh-bound translate stub, template-replace semantics to match the real chain. */
 const t = ((key: string, params?: Record<string, unknown>): string => {
@@ -70,16 +71,32 @@ const CRITICAL_SUMMARY: UsageSummary = {
   total: { requests: 10, inputTokens: 500_000, outputTokens: 50_000, cacheReadTokens: 10_000, cacheWriteTokens: 100_000 },
 }
 
+/** A later summary used to assert request-driven refreshes repaint figures. */
+const UPDATED_SUMMARY: UsageSummary = {
+  ...READY_SUMMARY,
+  total: {
+    requests: 11, inputTokens: 200_000, outputTokens: 100_000, cacheReadTokens: 400_000, cacheWriteTokens: 950_000,
+  },
+  totalCost: 20,
+}
+
+/** Live sessionStats for the active session (bumps each request step). */
+const LIVE_STATS: SessionStatsProjection = {
+  turns: 1, steps: 5, llmMs: 1_000, toolMs: 0, ttftMs: 100, ttftSteps: 2, decodeMs: 500, decodeTokens: 200,
+}
+
 /** Build the props the slot renderer binds for the chip. An empty `byId`
  * (the default) means "no known children", so the fetch stays on the one
  * session id — the no-subagent case the original chip always hit. */
 function propsOf(
   sessionId: string,
   byId: SessionListState['byId'] = {},
+  liveStats: SessionStatsProjection | undefined = LIVE_STATS,
 ): SessionStatsChipProps {
   return {
     sessionId,
     t,
+    useProjection: makeUseProjection(liveStats),
     useSessions: useSessionsFromState({
       ids: Object.keys(byId),
       byId,
@@ -90,6 +107,26 @@ function propsOf(
       currentAddress: undefined,
     } as SessionListState),
   } as SessionStatsChipProps
+}
+
+/** Solo session row used when a test needs to bump `updatedAt`. */
+const SOLO_BY_ID: SessionListState['byId'] = {
+  'session-a': { id: 'session-a', displayTitle: 'Solo', parentId: undefined, blank: false, running: false, updatedAt: 1 },
+}
+
+/** matchMedia fake answering only the reduce query as matched (jsdom has
+ * no matchMedia of its own; the chip's other paths never call it). */
+function stubReducedMotion(): void {
+  vi.stubGlobal('matchMedia', (query: string) => ({
+    matches: query.includes('prefers-reduced-motion'),
+    media: query,
+    onchange: null,
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    dispatchEvent: vi.fn(() => false),
+  }))
 }
 
 /** A root with one direct subagent (and a nested grandchild in NESTED_BY_ID). */
@@ -125,21 +162,8 @@ function stubFetchSequence(payloads: ReadonlyArray<UsageSummary | Error>): Retur
   return fetchMock
 }
 
-beforeEach(() => {
-  // Replace the global setInterval/clearInterval so a poll tick can be
-  // advanced by hand. We must NOT replace setTimeout, clearTimeout,
-  // setImmediate, or the timer that drives @response body streaming — the
-  // mocked fetch's Response body parsing depends on those still firing on
-  // real wall time.
-  // NOTE: tests in this file can be flaky if vi.useFakeTimers interferes
-  // with the React act/microtask queue; callers that only test the no-poll
-  // paths can override per-test with vi.useRealTimers().
-  vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
-})
-
 afterEach(() => {
   cleanup()
-  vi.useRealTimers()
   vi.unstubAllGlobals()
 })
 
@@ -194,23 +218,96 @@ describe('SessionStatsChip', () => {
     expect(criticalCell?.textContent).toMatch(/%$/)
   })
 
-  it('does not blank the strip when a poll tick fails (keeps the previous summary)', async () => {
+  it('does not blank the strip when a request-driven refresh fails (keeps the previous summary)', async () => {
     // First call lands with READY_SUMMARY, second call rejects. The chip
     // must keep the first render — a transient miss never blanks the bar.
     const fetchMock = stubFetchSequence([READY_SUMMARY, new Error('network down')])
-    const { container } = render(<SessionStatsChip {...propsOf('s1')} />)
-    // Yield once to let the first fetch + setState complete, then check.
+    const { rerender, container } = render(<SessionStatsChip {...propsOf('session-a', SOLO_BY_ID)} />)
     await waitFor(() => {
       expect(container.firstChild).not.toBeNull()
     })
-    // The first render must already show the right label.
     expect(screen.getByLabelText('含子会话 token 用量 1.5M')).not.toBeNull()
-    // Advance the polling timer so the second fetch fires; the chip must
-    // stay rendered (a transient miss never blanks the bar).
-    await vi.advanceTimersByTimeAsync(3_000)
+    // A finished request bumps updatedAt → debounced refetch; the failure
+    // must leave the previous figures on screen.
+    rerender(<SessionStatsChip {...propsOf('session-a', {
+      'session-a': { ...SOLO_BY_ID['session-a']!, updatedAt: 2 },
+    })} />)
     await waitFor(() => { expect(fetchMock).toHaveBeenCalledTimes(2) })
-    // The first render survives: the same aria-label still resolves.
     expect(screen.getByLabelText('含子会话 token 用量 1.5M')).not.toBeNull()
+  })
+
+  it('refetches when the scoped session updatedAt advances (request granularity)', async () => {
+    const fetchMock = stubFetchSequence([READY_SUMMARY, UPDATED_SUMMARY])
+    const { rerender, container } = render(<SessionStatsChip {...propsOf('session-a', SOLO_BY_ID)} />)
+    await screen.findByLabelText('含子会话 token 用量 1.5M')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    rerender(<SessionStatsChip {...propsOf('session-a', {
+      'session-a': { ...SOLO_BY_ID['session-a']!, updatedAt: 2 },
+    })} />)
+    await waitFor(() => { expect(fetchMock).toHaveBeenCalledTimes(2) })
+    // 1.65M rounds under formatTokens to 1.6M; cost proves the new payload.
+    expect(await screen.findByLabelText('含子会话 token 用量 1.6M')).not.toBeNull()
+    expect(screen.getByLabelText('含子会话费用 ¥20.00')).not.toBeNull()
+    await waitFor(() => {
+      expect(container.querySelector('[class*="deltaFly"]')?.textContent).toBe('+¥7.66')
+    }, { timeout: 200 })
+    // jsdom ships no Web Animations API: the fly label mounts (so the text
+    // is assertable) but hides itself instead of sitting statically for the
+    // whole inflate window — the no-WAAPI graceful degradation.
+    const fly = container.querySelector<HTMLElement>('[class*="deltaFly"]')
+    expect(fly?.style.visibility).toBe('hidden')
+  })
+
+  it('keeps reduced-motion updates silent: no fly label, figures still repaint', async () => {
+    stubReducedMotion()
+    const fetchMock = stubFetchSequence([READY_SUMMARY, UPDATED_SUMMARY])
+    const { rerender, container } = render(<SessionStatsChip {...propsOf('session-a', SOLO_BY_ID)} />)
+    await screen.findByLabelText('含子会话 token 用量 1.5M')
+    rerender(<SessionStatsChip {...propsOf('session-a', {
+      'session-a': { ...SOLO_BY_ID['session-a']!, updatedAt: 2 },
+    })} />)
+    await waitFor(() => { expect(fetchMock).toHaveBeenCalledTimes(2) })
+    expect(await screen.findByLabelText('含子会话费用 ¥20.00')).not.toBeNull()
+    // No pop, no fly: the strip never even opens its overflow.
+    expect(container.querySelector('[class*="deltaFly"]')).toBeNull()
+  })
+
+  it('recovers by itself when the first fetch fails (no poll to lean on)', async () => {
+    const fetchMock = stubFetchSequence([new Error('startup hiccup'), READY_SUMMARY])
+    const { container } = render(<SessionStatsChip {...propsOf('session-a', SOLO_BY_ID)} />)
+    await waitFor(() => { expect(fetchMock).toHaveBeenCalledTimes(1) })
+    // Failed first load renders nothing while the retry is pending.
+    expect(container.firstChild).toBeNull()
+    // The chip retries itself on the failure cadence; the retry lands and
+    // the strip appears without any mirror churn in between.
+    await waitFor(
+      () => { expect(fetchMock).toHaveBeenCalledTimes(2) },
+      { timeout: FETCH_FAILURE_RETRY_MS + 2_000 },
+    )
+    expect(await screen.findByLabelText('含子会话 token 用量 1.5M')).not.toBeNull()
+  }, 10_000)
+
+  it('refetches when live sessionStats advances without updatedAt churn', async () => {
+    const fetchMock = stubFetchSequence([READY_SUMMARY, UPDATED_SUMMARY])
+    const { rerender } = render(<SessionStatsChip {...propsOf('session-a', SOLO_BY_ID)} />)
+    await screen.findByLabelText('含子会话 token 用量 1.5M')
+    rerender(<SessionStatsChip {...propsOf('session-a', SOLO_BY_ID, {
+      ...LIVE_STATS,
+      steps: LIVE_STATS.steps + 1,
+      decodeTokens: LIVE_STATS.decodeTokens + 100,
+    })} />)
+    await waitFor(() => { expect(fetchMock).toHaveBeenCalledTimes(2) })
+    expect(await screen.findByLabelText('含子会话 token 用量 1.6M')).not.toBeNull()
+  })
+
+  it('does not refetch while the session mirror is idle', async () => {
+    const fetchMock = stubFetch(READY_SUMMARY)
+    render(<SessionStatsChip {...propsOf('session-a', SOLO_BY_ID)} />)
+    await screen.findByLabelText(/含子会话 token 用量/)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    // Well past the 250 ms debounce: no mirror churn → no extra fetch.
+    await new Promise(resolve => setTimeout(resolve, 400))
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
   it('scopes each fetch to the active session id', async () => {
@@ -252,29 +349,21 @@ describe('SessionStatsChip', () => {
     })
   })
 
-  it('cancels the previous poll when the session id changes', async () => {
+  it('refetches for the new session id and does not keep polling the old one', async () => {
     const fetchMock = stubFetch(READY_SUMMARY)
     const { rerender } = render(<SessionStatsChip {...propsOf('session-a')} />)
     await screen.findByLabelText(/含子会话 token 用量/)
-    // Snapshot the initial fetch count for session-a before the rerender.
     const sessionACallsBeforeRerender = fetchMock.mock.calls
       .filter(call => String(call[0]).includes('sessionId=session-a')).length
     expect(sessionACallsBeforeRerender).toBeGreaterThan(0)
-    // Switch the session id: the previous poll must clear, the new one must
-    // start fresh (its first fetch carries the new id).
     rerender(<SessionStatsChip {...propsOf('session-b')} />)
     await waitFor(() => {
       const lastCall = fetchMock.mock.calls.at(-1)?.[0] as string | undefined
       expect(lastCall).toBe('/token-usage/stats?sessionId=session-b&fields=chip')
     })
-    // Advance time past the old poll's tick — the old session-a interval
-    // must have been cleared (no new session-a fetch), the new session-b
-    // interval must have fired (one new session-b fetch).
-    const beforeAdvance = fetchMock.mock.calls.length
-    await vi.advanceTimersByTimeAsync(3_000)
-    await waitFor(() => {
-      expect(fetchMock.mock.calls.length).toBeGreaterThan(beforeAdvance)
-    })
+    const afterSwitch = fetchMock.mock.calls.length
+    await new Promise(resolve => setTimeout(resolve, 400))
+    expect(fetchMock.mock.calls.length).toBe(afterSwitch)
     const sessionACallsAfter = fetchMock.mock.calls
       .filter(call => String(call[0]).includes('sessionId=session-a')).length
     expect(sessionACallsAfter).toBe(sessionACallsBeforeRerender)
