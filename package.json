@@ -1,6 +1,6 @@
 {
   "name": "@laoyuehanni/dsh-token-usage",
-  "version": "0.3.9",
+  "version": "0.3.10",
   "description": "dsh local plugin: persist per-request model token usage (live hook + first-run history backfill + web settings stats page)",
   "keywords": [
     "dsh",
@@ -67,7 +67,7 @@
   "engines": {
     "node": ">=22.19"
   },
-  "dependencies": {
+  "peerDependencies": {
     "@deepseek-ai/dsh-credentials": "^0.1.1-rc.2",
     "@deepseek-ai/dsh-settings": "^0.1.1-rc.2",
     "@deepseek-ai/schemastery": "^3.18.1"
