@@ -1,17 +1,48 @@
 {
-  "name": "dsh-token-usage",
+  "name": "@laoyuehanni/dsh-token-usage",
   "version": "0.3.7",
-  "private": true,
-  "type": "module",
   "description": "dsh local plugin: persist per-request model token usage (live hook + first-run history backfill + web settings stats page)",
+  "keywords": [
+    "dsh",
+    "deepseek",
+    "cordis",
+    "plugin",
+    "token-usage",
+    "tokens",
+    "statistics"
+  ],
+  "homepage": "https://github.com/LaoYueHanNi/dsh-token-usage#readme",
+  "bugs": {
+    "url": "https://github.com/LaoYueHanNi/dsh-token-usage/issues"
+  },
+  "license": "MIT",
+  "author": "LaoYueHanNi",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/LaoYueHanNi/dsh-token-usage.git"
+  },
+  "type": "module",
   "main": "lib/index.js",
+  "types": "lib/index.d.ts",
   "exports": {
-    ".": "./lib/index.js",
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
     "./client": {
       "types": "./lib/client/index.d.ts",
       "default": "./lib/client.js"
     },
     "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "README.md",
+    "README.zh.md"
+  ],
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/"
   },
   "dsh": {
     "bundle": {
@@ -30,7 +61,8 @@
     "build": "tsc -p tsconfig.json",
     "build:client": "tsdown",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "prepublishOnly": "npm run typecheck && npm run test && npm run build && npm run build:client"
   },
   "engines": {
     "node": ">=22.19"
