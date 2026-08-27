@@ -16,12 +16,15 @@ const built = existsSync(bundlePath)
 describe.skipIf(!built)('client bundle', () => {
   it('registers a factory that yields the cordis entry surface', () => {
     const require = createRequire(join(repoRoot, 'smoke.cjs'))
+    const pkgName = (require(join(repoRoot, 'package.json')) as { name: string }).name
     const captured: { id?: unknown; factory?: unknown } = {}
     ;(globalThis as Record<string, unknown>)['window'] = {
       __ModuleLoader__: { load: (payload: { id: unknown; factory: unknown }) => { captured.id = payload.id; captured.factory = payload.factory } },
     }
     require(bundlePath)
-    expect(captured.id).toBe('dsh-token-usage')
+    // The web shell rejects a bundle whose registration id differs from the
+    // loader entry's package name, so the bundle must register as package.json's name.
+    expect(captured.id).toBe(pkgName)
     expect(typeof captured.factory).toBe('function')
 
     const exports = (captured.factory as (injectedRequire: (spec: string) => unknown) => unknown)(

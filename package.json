@@ -1,6 +1,6 @@
 {
   "name": "@laoyuehanni/dsh-token-usage",
-  "version": "0.3.8",
+  "version": "0.3.9",
   "description": "dsh local plugin: persist per-request model token usage (live hook + first-run history backfill + web settings stats page)",
   "keywords": [
     "dsh",

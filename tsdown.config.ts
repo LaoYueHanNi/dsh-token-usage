@@ -8,12 +8,18 @@
  */
 
 import { readFile } from 'node:fs/promises'
+import { createRequire } from 'node:module'
 import { basename, dirname, resolve } from 'node:path'
 import { transform } from 'lightningcss'
 import type { UserConfig } from 'tsdown'
 
-/** Plugin id stamped into the loader handoff and the injected style tags. */
-const PLUGIN_ID = 'dsh-token-usage'
+/**
+ * Plugin id stamped into the loader handoff and the injected style tags.
+ * Derived from package.json so the bundle's registration id always equals
+ * the installed package name — the web shell rejects a bundle whose
+ * __ModuleLoader__.load id differs from the loader entry's package.
+ */
+const PLUGIN_ID: string = createRequire(import.meta.url)('./package.json').name
 
 /**
  * The browser platform modules the web shell shares into its frozen module
