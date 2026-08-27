@@ -4,4 +4,4 @@
 # manual profile editing is needed). The row references the package by name.
 - insert:
     - id: token-usage
-      name: 'dsh-token-usage'
+      name: '@laoyuehanni/dsh-token-usage'
