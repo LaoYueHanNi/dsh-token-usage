@@ -126,13 +126,13 @@ Web 卡片提供数据目录与地区切换两项；全部配置项（均为可�
 
 ## 安装
 
-### 从 GitHub 安装（推荐）
+### 从 npm 安装
 
 ```sh
-dsh plugin --profile web add github:LaoYueHanNi/dsh-token-usage
+dsh plugin --profile web add @laoyuehanni/dsh-token-usage
 ```
 
-> 包声明了 `dsh.bundle`，`add` 会自动把插件挂进 profile 的层栈，无需手动改配置。构建产物 `lib/` 随仓库提交（没有 `prepare` 脚本），git 安装开箱即用，无需任何构建白名单配置。首次启动自动补齐一次历史记录，之后纯实时记录。
+> 包声明了 `dsh.bundle`，`add` 会自动把插件挂进 profile 的层栈，无需手动改配置。构建产物 `lib/` 随 npm 包分发，安装开箱即用，无需任何构建步骤。首次启动自动补齐一次历史记录，之后纯实时记录。
 
 ### 从本地目录安装（开发调试用）
 
@@ -145,13 +145,13 @@ dsh plugin --profile web add link:D:/plugins/dsh-token-usage
 ## 更新
 
 ```sh
-dsh plugin --profile web update dsh-token-usage
+dsh plugin --profile web update @laoyuehanni/dsh-token-usage
 ```
 
 ## 移除
 
 ```sh
-dsh plugin --profile web remove dsh-token-usage
+dsh plugin --profile web remove @laoyuehanni/dsh-token-usage
 ```
 
 插件会从 profile 移除并停止加载。数据文件（`$DSH_HOME/token-usage/`）会保留，需要时手动删除。
@@ -165,7 +165,7 @@ npm install
 npm run build && npm run build:client
 ```
 
-> **刻意不设 `prepare` 脚本。** 编译产物 `lib/` 已提交进仓库。pnpm ≥ 10 默认拒绝执行 git-hosted 依赖的构建脚本，除非加入白名单（报错 `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`），因此若保留 `prepare`，每个用户用 `github:` 安装都会失败。改为随仓库分发预构建产物后，`dsh plugin add github:LaoYueHanNi/dsh-token-usage` 才能零配置开箱即用。**改动 `src/` 下的任何文件后，务必重新构建并提交更新后的 `lib/`**，否则别人安装到的是旧产物：
+> **刻意不设 `prepare` 脚本。** 编译产物 `lib/` 已提交进仓库并随 npm 包分发。pnpm ≥ 10 默认拒绝执行依赖的构建脚本，除非加入白名单，因此若保留 `prepare`，pnpm 用户的安装会跳过或失败。改为分发预构建产物后，`dsh plugin add @laoyuehanni/dsh-token-usage` 才能零配置开箱即用。**改动 `src/` 下的任何文件后，务必重新构建并提交更新后的 `lib/`**（并发布新版本），否则别人安装到的是旧产物：
 
 ```sh
 npm run build && npm run build:client

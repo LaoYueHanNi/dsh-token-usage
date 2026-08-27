@@ -122,13 +122,13 @@ Not supported yet: Volcengine, ZenMux, Zhipu Team plan, Claude / Codex / Gemini 
 
 ## Install
 
-### From GitHub (recommended)
+### From npm
 
 ```sh
-dsh plugin --profile web add github:LaoYueHanNi/dsh-token-usage
+dsh plugin --profile web add @laoyuehanni/dsh-token-usage
 ```
 
-> The package declares `dsh.bundle`, so `add` wires the plugin into the profile's layer stack automatically — no config editing needed. The built `lib/` ships in the repo (there is no `prepare` script), so git installs work out of the box without any build allowlist. The first startup runs one history backfill, afterwards it records in real time.
+> The package declares `dsh.bundle`, so `add` wires the plugin into the profile's layer stack automatically — no config editing needed. The compiled `lib/` ships in the npm tarball, so installs work out of the box without any build step. The first startup runs one history backfill, afterwards it records in real time.
 
 ### From a local directory (development)
 
@@ -141,13 +141,13 @@ dsh plugin --profile web add link:D:/plugins/dsh-token-usage
 ## Update
 
 ```sh
-dsh plugin --profile web update dsh-token-usage
+dsh plugin --profile web update @laoyuehanni/dsh-token-usage
 ```
 
 ## Remove
 
 ```sh
-dsh plugin --profile web remove dsh-token-usage
+dsh plugin --profile web remove @laoyuehanni/dsh-token-usage
 ```
 
 The plugin is removed from the profile and stops loading. Data files under `$DSH_HOME/token-usage/` are kept — delete them manually if you no longer need them.
@@ -161,7 +161,7 @@ npm install
 npm run build && npm run build:client
 ```
 
-> **No `prepare` script — by design.** The compiled `lib/` output is committed to the repo. pnpm ≥ 10 refuses to run build scripts of git-hosted dependencies unless they are allowlisted (`ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`), so a `prepare` script would break the zero-config `github:` install for every user. Shipping prebuilt output instead keeps `dsh plugin add github:LaoYueHanNi/dsh-token-usage` working out of the box. **After changing anything under `src/`, always rebuild and commit the updated `lib/`**, or installs will get stale output:
+> **No `prepare` script — by design.** The compiled `lib/` output is committed to the repo and ships in the npm tarball. pnpm ≥ 10 refuses to run dependency build scripts unless they are allowlisted, so a `prepare` script would surface as a skipped or failed install step for pnpm users. Shipping prebuilt output instead keeps `dsh plugin add @laoyuehanni/dsh-token-usage` working out of the box. **After changing anything under `src/`, always rebuild and commit the updated `lib/`** (and release a new version), or installs will get stale output:
 
 ```sh
 npm run build && npm run build:client
