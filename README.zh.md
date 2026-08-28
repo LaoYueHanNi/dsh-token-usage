@@ -12,6 +12,16 @@
 
 仓库：<https://github.com/LaoYueHanNi/dsh-token-usage>
 
+> [!IMPORTANT]
+> **从 0.3.7 及更早的 GitHub 直装升级？** 0.3.8 起插件发布到 npm，包名变更为 `@laoyuehanni/dsh-token-usage`（原裸名在 npm 上已被第三方占用）。旧的 `github:` 安装**无法通过 `update` 升级**——包名已变，原地 update 会导致插件加载失败。从 0.3.8 开始使用，需先移除旧包名，再重新安装：
+>
+> ```sh
+> dsh plugin --profile web remove dsh-token-usage
+> dsh plugin --profile web add @laoyuehanni/dsh-token-usage
+> ```
+>
+> 迁移不影响数据：`$DSH_HOME/token-usage/` 下的历史记录完整保留。
+
 ## 功能
 
 - **实时记录**：每次成功的模型请求追加一行到按天分片的 JSONL 文件（请求 id、模型、输入 / 输出 / 缓存读 / 缓存写 token、时间、会话 id）。

@@ -12,6 +12,16 @@ A dsh usage plugin that displays model token usage right in the Web UI. After in
 
 Repo: <https://github.com/LaoYueHanNi/dsh-token-usage>
 
+> [!IMPORTANT]
+> **Upgrading from a GitHub install of 0.3.7 or earlier?** Since 0.3.8 the plugin is distributed on npm as `@laoyuehanni/dsh-token-usage` (the unscoped name was already taken on the registry). A legacy `github:` install **cannot be upgraded with `update`** — the package was renamed, and an in-place update leaves the plugin failing to load. From 0.3.8 on, remove the old package name first, then install again:
+>
+> ```sh
+> dsh plugin --profile web remove dsh-token-usage
+> dsh plugin --profile web add @laoyuehanni/dsh-token-usage
+> ```
+>
+> Usage data under `$DSH_HOME/token-usage/` is untouched by the migration — recorded history carries over.
+
 ## Features
 
 - **Live hook**: every successful model request is appended to per-day JSONL files (request id, model, input / output / cache-read / cache-write tokens, time, session id).
