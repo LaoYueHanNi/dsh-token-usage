@@ -144,9 +144,9 @@ describe('plugin integration', () => {
     const next = new Context()
     await next.plugin(MockSessions)
     await next.plugin(persistenceService(sessions))
-    // No settings service: the deferred boot must fire immediately so the
+    // No settings service: the settings-less cap must fire immediately so the
     // assertions below observe the composition-entry directory without delay.
-    await next.plugin(plugin, { startupDeferMs: 0 })
+    await next.plugin(plugin, { startupDeferMs: 0, startupCapMs: 0 })
     ctx = next
     return { dir: join(home, 'token-usage') }
   }
@@ -388,6 +388,42 @@ describe('live data-directory relocation', () => {
     host.emit('session/event', { id: 's1' }, messageEvent({ messageId: 'm1' }))
     await pollLogFile(dirB)
     expect(existsSync(join(home, 'token-usage'))).toBe(false)
+  })
+
+  it('waits for a late settings provider instead of opening the default directory', async () => {
+    const dirB = join(home, 'B')
+    const next = new Context()
+    await next.plugin(MockSessions)
+    await next.plugin(persistenceService(sessions))
+    // The plugin mounts with no explicit path and no settings service: the
+    // first start must come from the settings attach, not a short fallback.
+    await next.plugin(plugin)
+    // The settings provider mounts well after the plugin — the way the 0.1.2
+    // base bundle's rows ahead of the settings-file provider push the attach
+    // past any sub-second window.
+    await new Promise(resolve => setTimeout(resolve, 100))
+    await next.plugin(BareSettingsProvider, { 'token-usage': { path: dirB } })
+    host = next
+
+    host.emit('session/event', { id: 's1' }, messageEvent({ messageId: 'm1' }))
+    await pollLogFile(dirB)
+    // The default directory was never opened, so there is nothing to churn
+    // and nothing to relocate: the boot is silent.
+    expect(existsSync(join(home, 'token-usage'))).toBe(false)
+  })
+
+  it('starts the default directory via the settings-less cap when no settings service mounts', async () => {
+    const next = new Context()
+    await next.plugin(MockSessions)
+    await next.plugin(persistenceService(sessions))
+    await next.plugin(plugin, { startupCapMs: 20 })
+    host = next
+
+    // The cap fires, opens the default directory, and the plugin keeps
+    // working exactly as it did before settings existed.
+    await waitForState(join(home, 'token-usage'))
+    host.emit('session/event', { id: 's1' }, messageEvent({ messageId: 'm1' }))
+    await pollLogFile(join(home, 'token-usage'))
   })
 
   it('refuses the directory save itself while conversations run, then moves once they end', async () => {

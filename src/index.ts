@@ -60,11 +60,17 @@ export interface Config {
    * gitee) or `overseas` (github). Set once per install — no IP sniffing. */
   pricingRegion?: 'domestic' | 'overseas'
   /** How long the first start waits for a settings service to repoint the
-   * section source before falling back to the composition entry. A settings
-   * service attached within the window starts on the stored directory; the
-   * deferred fallback then finds the same directory and is a no-op. Never
-   * user-facing — a test-only tilt at the boot deferral. */
+   * section source before falling back to the composition entry. Only armed
+   * when the composition entry pins an explicit `path`; otherwise the first
+   * start comes from the settings attach itself. Never user-facing — a
+   * test-only tilt at the boot deferral. */
   startupDeferMs?: number
+  /** How long the first start waits for a settings service before starting
+   * the default directory when the composition entry pins no explicit
+   * `path`. The cap only ever fires on hosts that mount no settings service
+   * at all, so it must outlast any real boot. Never user-facing — a
+   * test-only tilt at the settings-less cap. */
+  startupCapMs?: number
   /** The provider quota feature (the input-bar button): enabled by default,
    * with the poll cadence the host asks the browser to follow. */
   quota?: QuotaConfig
@@ -83,6 +89,7 @@ export function validateConfig(config: Config): void {
   const unknown = Object.keys(config).find(key =>
     key !== 'path' && key !== 'pricingUrl' && key !== 'pricingUrlDomestic'
     && key !== 'pricingUrlOverseas' && key !== 'pricingRegion' && key !== 'startupDeferMs'
+    && key !== 'startupCapMs'
     && key !== 'quota')
   if (unknown !== undefined) {
     throw new Error(`TokenUsageConfig: unknown key "${unknown}"`)
@@ -108,6 +115,10 @@ export function validateConfig(config: Config): void {
   if (config.startupDeferMs !== undefined
       && (!Number.isFinite(config.startupDeferMs) || config.startupDeferMs < 0)) {
     throw new Error('TokenUsageConfig: "startupDeferMs" must be a non-negative number')
+  }
+  if (config.startupCapMs !== undefined
+      && (!Number.isFinite(config.startupCapMs) || config.startupCapMs < 0)) {
+    throw new Error('TokenUsageConfig: "startupCapMs" must be a non-negative number')
   }
   if (config.quota !== undefined) {
     if (typeof config.quota !== 'object' || config.quota === null) {
@@ -675,7 +686,7 @@ export function apply(ctx: Context, config: Config = {}) {
   // pricing mirror. The first start intentionally defers (see the deferred
   // startup below): the settings inject's onChange fires after setSource and
   // opens the plugin on the settings-resolved directory; with no settings
-  // service the fallback timer opens the composition entry instead.
+  // service the long cap opens the default directory instead.
   installSettingsSection(ctx, TOKEN_USAGE_NS, sectionSchema, sectionOf(config), {
     validate: (value) => validateSectionChange(value, {
       runningDir: current?.dir,
@@ -684,21 +695,34 @@ export function apply(ctx: Context, config: Config = {}) {
     setSource: (source) => { sectionSource = source },
     onChange: () => { start(); requestSync() },
   })
-  // The bootstrap defers the first start briefly. The dsh Loader mounts every
-  // profile entry CONCURRENTLY, so this plugin's apply() runs in no guaranteed
-  // order relative to the base bundle's settings-file provider: probing the
-  // settings service synchronously cannot tell "not attached yet" from "never
-  // attached", and starting on the composition entry first would open the
-  // DEFAULT directory and then relocate default → stored on every boot. So the
-  // first start waits a short window for the settings inject (whose onChange
-  // fires after setSource, on the settings-resolved directory), then falls
-  // back to the composition entry — the idempotent start makes the deferred
-  // call a no-op when the inject already won the window. No settings service
-  // mounted: the inject stays dormant and the fallback is the one start.
+  // The bootstrap defers the first start. The dsh Loader mounts every profile
+  // entry CONCURRENTLY, so this plugin's apply() runs in no guaranteed order
+  // relative to the base bundle's settings-file provider: probing the settings
+  // service synchronously cannot tell "not attached yet" from "never
+  // attached", and starting before the attach on an entry without an explicit
+  // `path` opens the DEFAULT directory — the boot's own pricing sync and state
+  // writes then land there and relocate away the moment settings attach,
+  // churning every boot on hosts whose settings provider mounts late (the
+  // 0.1.2 base bundle rows ahead of it push the attach past any sub-second
+  // window). So the short-deferred fallback only fires for an explicit
+  // composition `path` — an explicit placement is intent, and a differing
+  // stored path later relocates as a genuine edit; an entry without one waits
+  // for the settings inject (whose onChange start()s on the resolved
+  // directory) and only the long cap below starts the default directory when
+  // no settings service ever mounts. The idempotent start makes every
+  // overlapping call a no-op.
+  const startFromSource = (): void => { start(); requestSync() }
   const startupDeferMs = config.startupDeferMs ?? 500
-  const startup = setTimeout(() => {
-    start()
-    requestSync()
-  }, startupDeferMs)
-  ctx.effect(() => () => clearTimeout(startup), 'token-usage: deferred startup')
+  const startup = config.path === undefined
+    ? undefined
+    : setTimeout(startFromSource, startupDeferMs)
+  const startupCapMs = config.startupCapMs ?? 30_000
+  const settingsless = setTimeout(() => {
+    if (current !== undefined) return
+    startFromSource()
+  }, startupCapMs)
+  ctx.effect(() => () => {
+    if (startup !== undefined) clearTimeout(startup)
+    clearTimeout(settingsless)
+  }, 'token-usage: deferred startup')
 }

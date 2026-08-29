@@ -33,11 +33,17 @@ export interface Config {
      * gitee) or `overseas` (github). Set once per install — no IP sniffing. */
     pricingRegion?: 'domestic' | 'overseas';
     /** How long the first start waits for a settings service to repoint the
-     * section source before falling back to the composition entry. A settings
-     * service attached within the window starts on the stored directory; the
-     * deferred fallback then finds the same directory and is a no-op. Never
-     * user-facing — a test-only tilt at the boot deferral. */
+     * section source before falling back to the composition entry. Only armed
+     * when the composition entry pins an explicit `path`; otherwise the first
+     * start comes from the settings attach itself. Never user-facing — a
+     * test-only tilt at the boot deferral. */
     startupDeferMs?: number;
+    /** How long the first start waits for a settings service before starting
+     * the default directory when the composition entry pins no explicit
+     * `path`. The cap only ever fires on hosts that mount no settings service
+     * at all, so it must outlast any real boot. Never user-facing — a
+     * test-only tilt at the settings-less cap. */
+    startupCapMs?: number;
     /** The provider quota feature (the input-bar button): enabled by default,
      * with the poll cadence the host asks the browser to follow. */
     quota?: QuotaConfig;

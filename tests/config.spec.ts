@@ -52,6 +52,12 @@ describe('validateConfig', () => {
     expect(() => validateConfig({ startupDeferMs: -1 } as unknown as Config)).toThrow(/non-negative/)
   })
 
+  it('accepts a non-negative settings-less startup cap and rejects a negative one', () => {
+    expect(() => validateConfig({ startupCapMs: 0 })).not.toThrow()
+    expect(() => validateConfig({ startupCapMs: 30_000 })).not.toThrow()
+    expect(() => validateConfig({ startupCapMs: -1 } as unknown as Config)).toThrow(/non-negative/)
+  })
+
   it('rejects a blank path', () => {
     expect(() => validateConfig({ path: '' })).toThrow(/non-empty string/)
   })
