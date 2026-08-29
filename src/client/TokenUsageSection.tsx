@@ -160,14 +160,17 @@ function ModelPriceTable({ rules, view, t }: {
   view: CurrencyView
   t: TranslateNS<'token-usage'>
 }): ReactNode {
-  // Groups follow resolveRate's chain: the model root, then each time rule
-  // with its own tiers/slots as an isolated price world.
+  // Groups follow resolveRate's chain: the model root (the current era)
+  // first, then each time rule as an isolated price world, newest era
+  // first (descending rule end), regardless of the feed's listing order.
   const groups = [
     {
       title: rules.timeRules.length > 0 ? t('pricing.regular') : null,
       rows: nodePriceRows({ rates: rules.base, tiers: rules.contextTiers, slots: rules.dailySlots }, t),
     },
-    ...rules.timeRules.map(rule => ({
+    ...[...rules.timeRules]
+      .sort((a, b) => b.endTime - a.endTime)
+      .map(rule => ({
       // A zero start (the “since forever” rules some feeds carry) drops
       // the bogus 1970 date and reads as “through <end>”.
       title: `${rule.label !== undefined ? `${rule.label} ` : ''}${rule.startTime > 0 ? `${dayKeyOf(new Date(rule.startTime * 1000))} ~ ` : '~ '}${dayKeyOf(new Date(rule.endTime * 1000))}`,

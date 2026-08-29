@@ -188,6 +188,9 @@ export interface DailySlot {
     /** Optional display label. */
     label?: string;
     windows: RateWindow[];
+    /** ISO weekdays (1=Monday … 7=Sunday) the slot applies to, as validated at
+     * coercion; absent or empty = every day. */
+    daysOfWeek?: number[];
     rates: ModelPricing;
 }
 /** A context tier: the rates that apply once the context reaches the threshold. */

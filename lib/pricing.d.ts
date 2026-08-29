@@ -9,10 +9,11 @@
  * and reads as empty, so a broken table never blocks the stats route.
  *
  * Every record is priced individually through the analyzer's rule chain —
- * time-rule container first, then context tier, then peak slot — and the
- * aggregation keeps rows per (day, model, rate identity), so re-pricing
- * under an updated table needs no rollup rebuild. The context size for tier
- * matching is approximated by the request's input-side tokens (input +
+ * time-rule container first, then context tier, then peak slot (a slot may be
+ * restricted to ISO weekdays via `daysOfWeek`, matched on the request's local
+ * day) — and the aggregation keeps rows per (day, model, rate identity), so
+ * re-pricing under an updated table needs no rollup rebuild. The context size
+ * for tier matching is approximated by the request's input-side tokens (input +
  * cacheRead + cacheWrite): the log does not carry the raw context size.
  *
  * @module token-usage/pricing
@@ -90,6 +91,8 @@ interface CloudSlot {
         startMinute: number;
         endMinute: number;
     }>;
+    /** ISO weekdays 1..7 the slot applies to; absent = every day. */
+    daysOfWeek?: number[];
     inputCostPerMillion: number;
     outputCostPerMillion: number;
     cacheReadCostPerMillion?: number;

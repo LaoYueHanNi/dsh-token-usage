@@ -38,7 +38,7 @@ Repo: <https://github.com/LaoYueHanNi/dsh-token-usage>
 
 ![Model pricing dialog](docs/images/model-price.png)
 
-**Every record is priced individually**: each one resolves through the analyzer's rule chain at its own timestamp — the covering time rule first (its context tiers, its peak slots), else the model root's tiers → peak slots → base rates. Tier matching approximates the context size by the request's input-side tokens (input + cacheRead + cacheWrite). A price update re-prices the whole history instantly, with no data rebuild. Rates come from two files merged on read — `pricing.json` entries always win (a manual entry replaces that model's cloud rules wholesale):
+**Every record is priced individually**: each one resolves through the analyzer's rule chain at its own timestamp — the covering time rule first (its context tiers, its peak slots), else the model root's tiers → peak slots → base rates. A peak slot may restrict itself to ISO weekdays via `daysOfWeek` (`1`=Monday … `7`=Sunday; omitted = every day), matched on the request's local day — e.g. DeepSeek V4 models bill weekend peak windows at the off-peak rates. Tier matching approximates the context size by the request's input-side tokens (input + cacheRead + cacheWrite). A price update re-prices the whole history instantly, with no data rebuild. Rates come from two files merged on read — `pricing.json` entries always win (a manual entry replaces that model's cloud rules wholesale):
 
 | File | Source | Notes |
 |---|---|---|

@@ -9,10 +9,11 @@
  * and reads as empty, so a broken table never blocks the stats route.
  *
  * Every record is priced individually through the analyzer's rule chain —
- * time-rule container first, then context tier, then peak slot — and the
- * aggregation keeps rows per (day, model, rate identity), so re-pricing
- * under an updated table needs no rollup rebuild. The context size for tier
- * matching is approximated by the request's input-side tokens (input +
+ * time-rule container first, then context tier, then peak slot (a slot may be
+ * restricted to ISO weekdays via `daysOfWeek`, matched on the request's local
+ * day) — and the aggregation keeps rows per (day, model, rate identity), so
+ * re-pricing under an updated table needs no rollup rebuild. The context size
+ * for tier matching is approximated by the request's input-side tokens (input +
  * cacheRead + cacheWrite): the log does not carry the raw context size.
  *
  * @module token-usage/pricing
@@ -127,6 +128,8 @@ interface CloudTimeRule extends CloudRates {
 interface CloudSlot {
   label?: string
   windows: Array<{ startMinute: number; endMinute: number }>
+  /** ISO weekdays 1..7 the slot applies to; absent = every day. */
+  daysOfWeek?: number[]
   inputCostPerMillion: number
   outputCostPerMillion: number
   cacheReadCostPerMillion?: number
@@ -166,7 +169,9 @@ function coerceRates(value: unknown): CloudRates | null {
     outputCostPerMillion: node.outputCostPerMillion,
     ...(isRate(node.cacheReadCostPerMillion) ? { cacheReadCostPerMillion: node.cacheReadCostPerMillion } : {}),
     ...(isRate(node.cacheCreationCostPerMillion) ? { cacheCreationCostPerMillion: node.cacheCreationCostPerMillion } : {}),
-    ...(Array.isArray(node.dailySlots) ? { dailySlots: node.dailySlots.filter(isCloudSlot) } : {}),
+    ...(Array.isArray(node.dailySlots)
+      ? { dailySlots: (node.dailySlots as unknown[]).map(coerceSlot).filter((slot): slot is CloudSlot => slot !== null) }
+      : {}),
   }
 }
 
@@ -176,10 +181,6 @@ function coerceTier(value: unknown): CloudTier | null {
   if (!isRate(tier.threshold)) return null
   const rates = coerceRates(value)
   return rates === null ? null : { ...rates, threshold: tier.threshold }
-}
-
-function isCloudSlot(value: unknown): value is CloudSlot {
-  return coerceSlot(value) !== null
 }
 
 function coerceSlot(value: unknown): CloudSlot | null {
@@ -195,12 +196,18 @@ function coerceSlot(value: unknown): CloudSlot | null {
   if (windows.length === 0) return null
   const rates = coerceRates(value)
   if (rates === null) return null
+  // ISO weekdays 1..7 only; anything else degrades to "every day" (omit),
+  // never to a slot that matches nothing.
+  const days = Array.isArray(slot.daysOfWeek)
+    ? [...new Set(slot.daysOfWeek.filter((day): day is number => typeof day === 'number' && Number.isInteger(day) && day >= 1 && day <= 7))]
+    : []
   return {
     windows,
     inputCostPerMillion: rates.inputCostPerMillion,
     outputCostPerMillion: rates.outputCostPerMillion,
     ...(rates.cacheReadCostPerMillion !== undefined ? { cacheReadCostPerMillion: rates.cacheReadCostPerMillion } : {}),
     ...(rates.cacheCreationCostPerMillion !== undefined ? { cacheCreationCostPerMillion: rates.cacheCreationCostPerMillion } : {}),
+    ...(days.length > 0 ? { daysOfWeek: days } : {}),
     ...(typeof slot.label === 'string' ? { label: slot.label } : {}),
   }
 }
@@ -285,7 +292,12 @@ function toPricing(rates: CloudRates): ModelPricing {
 }
 
 function toSlots(slots: CloudSlot[] | undefined): DailySlot[] {
-  return slots?.map(slot => ({ windows: slot.windows, rates: toPricing(slot) })) ?? []
+  return slots?.map(slot => ({
+    windows: slot.windows,
+    ...(slot.daysOfWeek !== undefined ? { daysOfWeek: slot.daysOfWeek } : {}),
+    rates: toPricing(slot),
+    ...(slot.label !== undefined ? { label: slot.label } : {}),
+  })) ?? []
 }
 
 function toTiers(tiers: CloudTier[] | undefined): ContextTier[] {
@@ -356,11 +368,24 @@ function localMinuteOfDay(epochSeconds: number, tzOffsetHours: number): number {
   return Math.floor(secondOfDay / 60)
 }
 
-/** The first peak slot whose windows contain the timestamp's local minute; -1 when off-peak. */
+/** The ISO weekday (1=Monday … 7=Sunday) of a Unix-seconds timestamp under a
+ * tz offset in hours: 1970-01-01 was a Thursday, so local day 0 maps to 4. */
+function localWeekday(epochSeconds: number, tzOffsetHours: number): number {
+  const localDay = Math.floor((epochSeconds + tzOffsetHours * 3600) / 86400)
+  return (((localDay + 3) % 7) + 7) % 7 + 1
+}
+
+/** The first peak slot that applies to the timestamp — its windows contain the
+ * local minute and its `daysOfWeek` (absent = every day) includes the local
+ * weekday; -1 when off-peak. Slots skipped on the weekday check do not stop
+ * the search, so a weekend inside a weekday-only window still bills off-peak. */
 function matchingSlot(slots: DailySlot[] | undefined, epochSeconds: number, tzOffsetHours: number): number {
   if (slots === undefined || slots.length === 0) return -1
   const minute = localMinuteOfDay(epochSeconds, tzOffsetHours)
+  const weekday = localWeekday(epochSeconds, tzOffsetHours)
   for (let index = 0; index < slots.length; index++) {
+    const days = slots[index]!.daysOfWeek
+    if (days !== undefined && days.length > 0 && !days.includes(weekday)) continue
     for (const window of slots[index]!.windows) {
       if (window.startMinute <= minute && minute < window.endMinute) return index
     }

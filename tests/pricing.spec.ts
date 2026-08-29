@@ -179,6 +179,91 @@ describe('resolveRate (the analyzer rule chain)', () => {
   })
 })
 
+describe('dailySlots.daysOfWeek (weekday-only peak)', () => {
+  /** UTC+0 test tz unless stated otherwise. */
+  const TZ = 0
+
+  // DeepSeek V4 shape (feed v72): peak slots are weekdays-only since
+  // 2026-08-23 (weekends all-day off-peak); the former every-day peak era
+  // (08-17..08-22) is a time rule carrying its own unrestricted slot.
+  const ERA_END = 1_787_414_399 // 2026-08-22 23:59:59 UTC+8
+  const weekdayPeak: ModelRates = {
+    base: { inputPerMillion: 1.5, outputPerMillion: 4.5, cacheReadPerMillion: 0.05 },
+    contextTiers: [],
+    dailySlots: [{
+      windows: [{ startMinute: 540, endMinute: 720 }, { startMinute: 840, endMinute: 1080 }],
+      daysOfWeek: [1, 2, 3, 4, 5],
+      rates: { inputPerMillion: 3.0, outputPerMillion: 9.0, cacheReadPerMillion: 0.1 },
+    }],
+    timeRules: [{
+      label: '每日峰谷期',
+      startTime: 1_786_896_000, // 2026-08-17 00:00 UTC+8
+      endTime: ERA_END,
+      rates: { inputPerMillion: 1.5, outputPerMillion: 4.5, cacheReadPerMillion: 0.05 },
+      dailySlots: [{
+        windows: [{ startMinute: 540, endMinute: 720 }, { startMinute: 840, endMinute: 1080 }],
+        rates: { inputPerMillion: 3.0, outputPerMillion: 9.0, cacheReadPerMillion: 0.1 },
+      }],
+    }],
+  }
+
+  it('bills a weekend inside the peak windows at the base (off-peak) rates', () => {
+    // 2026-08-29 is a Saturday; 10:00 UTC sits inside the 540..720 window.
+    const resolved = resolveRate(weekdayPeak, Date.UTC(2026, 7, 29, 10, 0, 0), 1000, TZ)
+    expect(resolved.prices.inputPerMillion).toBe(1.5)
+    expect(resolved.key).toEqual({ ruleStart: 0, ruleEnd: 0, tier: 0, slot: -1 })
+  })
+
+  it('bills a weekday inside the peak windows at the slot rates', () => {
+    // 2026-08-31 is a Monday, same minute of day as the weekend case.
+    const resolved = resolveRate(weekdayPeak, Date.UTC(2026, 7, 31, 10, 0, 0), 1000, TZ)
+    expect(resolved.prices.inputPerMillion).toBe(3.0)
+    expect(resolved.key).toEqual({ ruleStart: 0, ruleEnd: 0, tier: 0, slot: 0 })
+  })
+
+  it('keeps the historical era peak every day, weekends included', () => {
+    // 2026-08-22 is a Saturday but sits in the every-day-peak era rule; the
+    // era slot carries no daysOfWeek, so the weekday check must not apply.
+    const resolved = resolveRate(weekdayPeak, Date.UTC(2026, 7, 22, 10, 0, 0), 1000, TZ)
+    expect(resolved.prices.inputPerMillion).toBe(3.0)
+    expect(resolved.key).toEqual({ ruleStart: 1_786_896_000, ruleEnd: ERA_END, tier: 0, slot: 0 })
+  })
+
+  it('matches the weekday on the local clock, not the UTC day', () => {
+    // 2026-08-30 20:00 UTC is Monday 2026-08-31 10:00 at UTC+14 — inside the
+    // peak window on the local (Monday) calendar, though the UTC day is Sunday.
+    const resolved = resolveRate(weekdayPeak, Date.UTC(2026, 7, 30, 20, 0, 0), 1000, 14)
+    expect(resolved.prices.inputPerMillion).toBe(3.0)
+    expect(resolved.key.slot).toBe(0)
+  })
+
+  it('ratesForKey re-prices a weekend row at the base rates under the new table', () => {
+    expect(ratesForKey(weekdayPeak, { ruleStart: 0, ruleEnd: 0, tier: 0, slot: -1 }).inputPerMillion).toBe(1.5)
+  })
+
+  it('coercion keeps valid ISO weekdays and degrades garbage to every-day', () => {
+    const table = cloudToTable(coerceCloudPricing({
+      version: 72,
+      updatedAt: 0,
+      currency: 'RMB',
+      models: [{
+        modelId: 'deepseek-v4',
+        inputCostPerMillion: 1.5,
+        outputCostPerMillion: 4.5,
+        dailySlots: [
+          { windows: [{ startMinute: 540, endMinute: 720 }], daysOfWeek: [1, '2', 0, 7.5, 8, 5, 1], inputCostPerMillion: 3, outputCostPerMillion: 9 },
+          { windows: [{ startMinute: 540, endMinute: 720 }], daysOfWeek: ['x', 0], inputCostPerMillion: 3, outputCostPerMillion: 9 },
+          { windows: [{ startMinute: 540, endMinute: 720 }], inputCostPerMillion: 3, outputCostPerMillion: 9 },
+        ],
+      }],
+    })!)
+    const slots = table['deepseek-v4']!.dailySlots
+    expect(slots[0]!.daysOfWeek).toEqual([1, 5])
+    expect(slots[1]!.daysOfWeek).toBeUndefined()
+    expect(slots[2]!.daysOfWeek).toBeUndefined()
+  })
+})
+
 describe('readPricingTable', () => {
   it('yields an empty table when pricing.json is absent', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'token-usage-pricing-'))
@@ -240,7 +325,7 @@ describe('readPricingTable', () => {
         modelId: 'deepseek-v4-flash',
         inputCostPerMillion: 1.5, outputCostPerMillion: 4.5, cacheReadCostPerMillion: 0.05,
         contextTiers: [{ threshold: 512000, inputCostPerMillion: 3, outputCostPerMillion: 9, cacheReadCostPerMillion: 0.1 }],
-        dailySlots: [{ windows: [{ startMinute: 540, endMinute: 720 }, { startMinute: 840, endMinute: 1080 }], inputCostPerMillion: 3, outputCostPerMillion: 9, cacheReadCostPerMillion: 0.1 }],
+        dailySlots: [{ label: '工作日高峰时段', windows: [{ startMinute: 540, endMinute: 720 }, { startMinute: 840, endMinute: 1080 }], daysOfWeek: [1, 2, 3, 4, 5], inputCostPerMillion: 3, outputCostPerMillion: 9, cacheReadCostPerMillion: 0.1 }],
         timeRules: [{ label: '原价', startTime: 0, endTime: 1786895999, inputCostPerMillion: 1, outputCostPerMillion: 2, cacheReadPerMillion: 0.02, cacheReadCostPerMillion: 0.02 }],
       }],
     }))
@@ -249,7 +334,11 @@ describe('readPricingTable', () => {
     expect(hasRateRules(rules)).toBe(true)
     expect(rules.timeRules[0]!.rates.inputPerMillion).toBe(1)
     expect(rules.contextTiers[0]!.threshold).toBe(512000)
+    // The slot's label and weekday restriction survive the flatten — the
+    // pricing dialog renders both.
     expect(rules.dailySlots[0]!.windows).toHaveLength(2)
+    expect(rules.dailySlots[0]!.label).toBe('工作日高峰时段')
+    expect(rules.dailySlots[0]!.daysOfWeek).toEqual([1, 2, 3, 4, 5])
   })
 })
 

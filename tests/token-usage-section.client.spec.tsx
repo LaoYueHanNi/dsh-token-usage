@@ -429,10 +429,11 @@ describe('TokenUsageSection filtering', () => {
         pricing: {
           'glm-5.2': {
             base: { inputPerMillion: 2, outputPerMillion: 8 },
-            contextTiers: [{ threshold: 512000, rates: { inputPerMillion: 6, outputPerMillion: 24 } }],
+            contextTiers: [{ threshold: 512000, rates: { inputPerMillion: 6, outputPerMillion: 24 }, dailySlots: [{ windows: [{ startMinute: 600, endMinute: 660 }], daysOfWeek: [6, 7], rates: { inputPerMillion: 6.5, outputPerMillion: 26 } }] }],
             dailySlots: [{
               label: '峰时',
               windows: [{ startMinute: 540, endMinute: 720 }, { startMinute: 840, endMinute: 1080 }],
+              daysOfWeek: [1, 2, 3, 4, 5],
               rates: { inputPerMillion: 4, outputPerMillion: 16 },
             }],
             timeRules: [{
@@ -444,6 +445,7 @@ describe('TokenUsageSection filtering', () => {
               dailySlots: [{
                 label: '峰时',
                 windows: [{ startMinute: 600, endMinute: 660 }],
+                daysOfWeek: [1, 3],
                 rates: { inputPerMillion: 1.5, outputPerMillion: 3 },
               }],
             }],
@@ -477,7 +479,9 @@ describe('TokenUsageSection filtering', () => {
     // The regular group (outside the rule window) opens the table…
     expect(within(glmTable).getByText('常规（规则期外）')).toBeTruthy()
     // …default rates (cache falls back to the input rate), then the context
-    // tier, then the root peak slot with both of its windows.
+    // tier, then the root peak slot with both of its windows. Slots carrying
+    // `daysOfWeek` render by label + windows only — the weekday restriction
+    // stays out of the condition text.
     expect(within(glmTable).getAllByText('默认')[0]!.closest('tr')!.textContent).toBe('默认¥2¥8¥2¥2')
     expect(within(glmTable).getByText('上下文 ≥512K').closest('tr')!.textContent).toBe('上下文 ≥512K¥6¥24¥6¥6')
     expect(within(glmTable).getByText('峰时 09:00-12:00、14:00-18:00').closest('tr')!.textContent)
@@ -488,6 +492,8 @@ describe('TokenUsageSection filtering', () => {
     expect(within(glmTable).getAllByText('默认')).toHaveLength(2)
     expect(within(glmTable).getAllByText('默认')[1]!.closest('tr')!.textContent).toBe('默认¥1¥2¥1¥1')
     expect(within(glmTable).getByText('上下文 ≥128K').closest('tr')!.textContent).toBe('上下文 ≥128K¥3¥6¥3¥3')
+    expect(within(glmTable).getByText('上下文 ≥512K · 峰时 10:00-11:00').closest('tr')!.textContent)
+      .toBe('上下文 ≥512K · 峰时 10:00-11:00¥6.50¥26¥6.50¥6.50')
     expect(within(glmTable).getByText('峰时 10:00-11:00').closest('tr')!.textContent).toBe('峰时 10:00-11:00¥1.50¥3¥1.50¥1.50')
 
     // The close button dismisses the dialog.
@@ -524,6 +530,37 @@ describe('TokenUsageSection filtering', () => {
     const dialog = await screen.findByRole('dialog')
     // “~ <end>”, not “1970-01-01 ~ <end>”.
     expect(within(dialog).getByText('原价 ~ 2026-08-16')).toBeTruthy()
+  })
+
+  it('orders the rule groups newest era first, regardless of feed order', async () => {
+    stubFetch(async () => ({
+      ok: true,
+      json: async () => ({
+        ...SUMMARY,
+        pricing: {
+          'deepseek-reasoner': {
+            base: { inputPerMillion: 2, outputPerMillion: 8 },
+            contextTiers: [],
+            dailySlots: [],
+            // 12:00 UTC bounds: the same local date on every runner. The feed
+            // lists the oldest era first, as the real feed does.
+            timeRules: [
+              { label: '原价', startTime: 0, endTime: Date.UTC(2026, 3, 25, 12) / 1000, rates: { inputPerMillion: 4, outputPerMillion: 16 } },
+              { label: '长期降价', startTime: Date.UTC(2026, 3, 25, 12) / 1000, endTime: Date.UTC(2026, 7, 16, 12) / 1000, rates: { inputPerMillion: 2, outputPerMillion: 8 } },
+            ],
+          },
+        },
+      }),
+    }))
+    render(<TokenUsageSection close={() => {}} t={t} />)
+    await screen.findAllByText('总 token')
+    fireEvent.click(screen.getByRole('button', { name: '查看 deepseek-reasoner 定价' }))
+    const dialog = await screen.findByRole('dialog')
+    const table = within(dialog).getByRole('table')
+    // Group headers top-to-bottom: the model root (current era) first, then
+    // the rule eras newest first (larger end higher).
+    const groups = [...table.querySelectorAll('td[colspan="5"]')].map(cell => cell.textContent)
+    expect(groups).toEqual(['常规（规则期外）', '长期降价 2026-04-25 ~ 2026-08-16', '原价 ~ 2026-04-25'])
   })
 
   it('renders the daily token chart from the day rows', async () => {
