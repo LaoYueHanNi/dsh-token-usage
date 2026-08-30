@@ -28,6 +28,52 @@ export function shiftedDayKey(deltaDays: number, now: () => Date = () => new Dat
   return dayKeyOf(date)
 }
 
+/** A month the calendar panel shows (month is 0-based like Date). */
+export interface MonthView {
+  year: number
+  month: number
+}
+
+/** The month view holding one day key. */
+export function monthViewOf(dayKey: string): MonthView {
+  return { year: Number(dayKey.slice(0, 4)), month: Number(dayKey.slice(5, 7)) - 1 }
+}
+
+/** The month view shifted by whole months (year overflow normalized). */
+export function shiftMonth(view: MonthView, deltaMonths: number): MonthView {
+  const total = view.year * 12 + view.month + deltaMonths
+  return { year: Math.floor(total / 12), month: ((total % 12) + 12) % 12 }
+}
+
+/** One cell of a month grid: a day key plus whether it belongs to the shown month. */
+export interface MonthCell {
+  day: string
+  inMonth: boolean
+}
+
+/**
+ * The month grid of one month view: Monday-first whole weeks covering the
+ * month, so every column aligns under its weekday header. Days of the
+ * neighbouring months carry `inMonth: false` — the caller renders them as
+ * blank placeholders, keeping the shown month's date texts unique (for
+ * tests and screen readers).
+ */
+export function monthGrid(view: MonthView): MonthCell[] {
+  // Local-time constructors only: string parsing would drag UTC offsets in.
+  const leading = (new Date(view.year, view.month, 1).getDay() + 6) % 7
+  const daysInMonth = new Date(view.year, view.month + 1, 0).getDate()
+  const total = Math.ceil((leading + daysInMonth) / 7) * 7
+  const cells: MonthCell[] = []
+  for (let index = 0; index < total; index++) {
+    const cursor = new Date(view.year, view.month, 1 - leading + index)
+    cells.push({
+      day: dayKeyOf(cursor),
+      inMonth: cursor.getFullYear() === view.year && cursor.getMonth() === view.month,
+    })
+  }
+  return cells
+}
+
 /** One plotted day of the trend chart. */
 export interface DayPoint {
   day: string

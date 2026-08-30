@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 /**
  * Token-usage settings page component tests: renders the loading, error, and
- * ready states over a stubbed fetch, exercises the filter bar (day range,
- * model select, quick range buttons), pins the per-model table column order,
+ * ready states over a stubbed fetch, exercises the filter bar (the range
+ * date picker popover, model select, quick range buttons), pins the per-model
+ * table column order,
  * pins the token-abbreviation and cache-hit-rate formatting, and covers the
  * per-model pricing dialog (open/close, full rule-chain rows).
  */
@@ -326,32 +327,33 @@ describe('TokenUsageSection filtering', () => {
     expect(root?.style.colorScheme).toBe('')
   })
 
-  it('renders the filter bar: quick range select, two date inputs, model select', async () => {
+  it('renders the filter bar: quick range menu, date range trigger, model menu', async () => {
     stubFetch(async () => ({ ok: true, json: async () => SUMMARY }))
     render(<TokenUsageSection close={() => {}} t={t} />)
     await screen.findAllByText('总 token')
-    const quick = screen.getByLabelText('快捷区间') as HTMLSelectElement
-    expect(quick.value).toBe('1')
-    for (const label of ['1d', '7d', '30d', '自定义']) {
-      expect(within(quick).getByText(label)).toBeTruthy()
+    const quick = screen.getByRole('button', { name: '快捷区间' })
+    expect(quick.textContent).toBe('1d')
+    fireEvent.click(quick)
+    for (const label of ['1d', '7d', '30d', '全部日期', '自定义']) {
+      expect(screen.getByRole('option', { name: label })).toBeTruthy()
     }
-    expect(screen.getByLabelText('开始日期')).toBeTruthy()
-    expect(screen.getByLabelText('结束日期')).toBeTruthy()
-    const select = screen.getByLabelText('模型')
-    expect(within(select).getByText('全部模型')).toBeTruthy()
-    expect(within(select).getByText('deepseek-reasoner')).toBeTruthy()
+    expect(screen.getByRole('button', { name: '日期范围' })).toBeTruthy()
+    const model = screen.getByRole('button', { name: '模型' })
+    expect(model.textContent).toBe('全部模型')
+    fireEvent.click(model)
+    expect(screen.getByRole('option', { name: '全部模型' })).toBeTruthy()
+    expect(screen.getByRole('option', { name: 'deepseek-reasoner' })).toBeTruthy()
   })
 
-  it('defaults to the 1d window: inputs and quick select reflect today', async () => {
+  it('defaults to the 1d window: triggers reflect today', async () => {
     const fetch = stubFetch(async () => ({ ok: true, json: async () => SUMMARY }))
     render(<TokenUsageSection close={() => {}} t={t} />)
     await screen.findAllByText('总 token')
     const url = new URL(String(fetch.mock.calls[0]![0]), 'http://localhost')
     expect(url.searchParams.get('from')).toBe(dayKey(0))
     expect(url.searchParams.get('to')).toBe(dayKey(0))
-    expect(screen.getByLabelText('开始日期').getAttribute('value')).toBe(dayKey(0))
-    expect(screen.getByLabelText('结束日期').getAttribute('value')).toBe(dayKey(0))
-    expect((screen.getByLabelText('快捷区间') as HTMLSelectElement).value).toBe('1')
+    expect(screen.getByRole('button', { name: '日期范围' }).textContent).toBe(`${dayKey(0)} 至 ${dayKey(0)}`)
+    expect(screen.getByRole('button', { name: '快捷区间' }).textContent).toBe('1d')
   })
 
   it('fetches the 7d window (today minus 6 through today) when 7d is chosen', async () => {
@@ -360,52 +362,72 @@ describe('TokenUsageSection filtering', () => {
     await screen.findAllByText('总 token')
     expect(fetch).toHaveBeenCalledTimes(1)
 
-    fireEvent.change(screen.getByLabelText('快捷区间'), { target: { value: '7' } })
+    fireEvent.click(screen.getByRole('button', { name: '快捷区间' }))
+    fireEvent.click(screen.getByRole('option', { name: '7d' }))
     await waitForCall(fetch, 2)
     const url = new URL(String(fetch.mock.calls[1]![0]), 'http://localhost')
     expect(url.searchParams.get('from')).toBe(dayKey(-6))
     expect(url.searchParams.get('to')).toBe(dayKey(0))
-    // Back in the ready state, the select reflects the active window.
+    // Back in the ready state, the trigger reflects the active window.
     await screen.findAllByText('总 token')
-    expect((screen.getByLabelText('快捷区间') as HTMLSelectElement).value).toBe('7')
+    expect(screen.getByRole('button', { name: '快捷区间' }).textContent).toBe('7d')
+  })
+
+  it('fetches unconstrained when ALL is chosen from the quick menu', async () => {
+    const fetch = stubFetch(async () => ({ ok: true, json: async () => SUMMARY }))
+    render(<TokenUsageSection close={() => {}} t={t} />)
+    await screen.findAllByText('总 token')
+    fireEvent.click(screen.getByRole('button', { name: '快捷区间' }))
+    fireEvent.click(screen.getByRole('option', { name: '全部日期' }))
+    await waitForCall(fetch, 2)
+    const url = new URL(String(fetch.mock.calls[1]![0]), 'http://localhost')
+    expect(url.searchParams.get('from')).toBeNull()
+    expect(url.searchParams.get('to')).toBeNull()
+    await screen.findAllByText('总 token')
+    expect(screen.getByRole('button', { name: '快捷区间' }).textContent).toBe('全部日期')
   })
 
   it('fetches with the model parameter when a model is chosen', async () => {
     const fetch = stubFetch(async () => ({ ok: true, json: async () => SUMMARY }))
     render(<TokenUsageSection close={() => {}} t={t} />)
     await screen.findAllByText('总 token')
-    fireEvent.change(screen.getByLabelText('模型'), { target: { value: 'deepseek-reasoner' } })
+    fireEvent.click(screen.getByRole('button', { name: '模型' }))
+    fireEvent.click(screen.getByRole('option', { name: 'deepseek-reasoner' }))
     await waitForCall(fetch, 2)
     const url = new URL(String(fetch.mock.calls[1]![0]), 'http://localhost')
     expect(url.searchParams.get('model')).toBe('deepseek-reasoner')
+    await screen.findAllByText('总 token')
+    expect(screen.getByRole('button', { name: '模型' }).textContent).toBe('deepseek-reasoner')
   })
 
-  it('marks the quick range custom once the day inputs diverge', async () => {
+  it('marks the quick range custom once the popover settles a non-quick range', async () => {
     stubFetch(async () => ({ ok: true, json: async () => SUMMARY }))
     render(<TokenUsageSection close={() => {}} t={t} />)
     await screen.findAllByText('总 token')
-    fireEvent.change(screen.getByLabelText('开始日期'), { target: { value: dayKey(-3) } })
+    fireEvent.click(screen.getByRole('button', { name: '日期范围' }))
+    fireEvent.click(screen.getByLabelText('上个月'))
+    // The previous month's first day clicked twice: a single-day custom range
+    // that never equals a quick range (those end on today).
+    fireEvent.click(screen.getByLabelText(prevMonthFirstDay()))
+    fireEvent.click(screen.getByLabelText(prevMonthFirstDay()))
     await screen.findAllByText('总 token')
-    expect((screen.getByLabelText('快捷区间') as HTMLSelectElement).value).toBe('custom')
+    expect(screen.getByRole('button', { name: '快捷区间' }).textContent).toBe('自定义')
   })
 
-  it('skips fetching while the range is mid-edit (from after to)', async () => {
+  it('sorts the range when the second click lands earlier than the first', async () => {
     const fetch = stubFetch(async () => ({ ok: true, json: async () => SUMMARY }))
     render(<TokenUsageSection close={() => {}} t={t} />)
     await screen.findAllByText('总 token')
-    // Start from the 7d quick window, then move the start past its end.
-    fireEvent.change(screen.getByLabelText('快捷区间'), { target: { value: '7' } })
+    // Click today first (the LATER end), then the previous month's first day:
+    // the committed range still arrives sorted.
+    fireEvent.click(screen.getByRole('button', { name: '日期范围' }))
+    fireEvent.click(screen.getByLabelText(dayKey(0)))
+    fireEvent.click(screen.getByLabelText('上个月'))
+    fireEvent.click(screen.getByLabelText(prevMonthFirstDay()))
     await waitForCall(fetch, 2)
-    await screen.findAllByText('总 token')
-    fireEvent.change(screen.getByLabelText('开始日期'), { target: { value: dayKey(5) } })
-    await new Promise(resolve => setTimeout(resolve, 50))
-    expect(fetch).toHaveBeenCalledTimes(2)
-    // Settling the end date past the start resumes fetching.
-    fireEvent.change(screen.getByLabelText('结束日期'), { target: { value: dayKey(10) } })
-    await waitForCall(fetch, 3)
-    const url = new URL(String(fetch.mock.calls[2]![0]), 'http://localhost')
-    expect(url.searchParams.get('from')).toBe(dayKey(5))
-    expect(url.searchParams.get('to')).toBe(dayKey(10))
+    const url = new URL(String(fetch.mock.calls[1]![0]), 'http://localhost')
+    expect(url.searchParams.get('from')).toBe(prevMonthFirstDay())
+    expect(url.searchParams.get('to')).toBe(dayKey(0))
   })
 
   it('orders the per-model columns with the cost and hit rate last-but-one / last', async () => {
@@ -569,9 +591,9 @@ describe('TokenUsageSection filtering', () => {
     await screen.findAllByText('总 token')
     // The fixture's days are in the past; clear the default 1d window so the
     // chart spans the fixture rows (the real server filters byDay instead).
-    fireEvent.change(screen.getByLabelText('开始日期'), { target: { value: '' } })
+    fireEvent.click(screen.getByRole('button', { name: '日期范围' }))
+    fireEvent.click(screen.getByText('清除范围'))
     await screen.findAllByText('总 token')
-    fireEvent.change(screen.getByLabelText('结束日期'), { target: { value: '' } })
     const chart = await screen.findByRole('img', { name: '每日总 token 曲线' })
     // Day totals are 31 and 16, so the y axis tops out at a round 40 (ticks 10..40).
     for (const tick of ['10', '20', '30', '40']) {
@@ -586,9 +608,9 @@ describe('TokenUsageSection filtering', () => {
     stubFetch(async () => ({ ok: true, json: async () => SUMMARY }))
     render(<TokenUsageSection close={() => {}} t={t} />)
     await screen.findAllByText('总 token')
-    fireEvent.change(screen.getByLabelText('开始日期'), { target: { value: '' } })
+    fireEvent.click(screen.getByRole('button', { name: '日期范围' }))
+    fireEvent.click(screen.getByText('清除范围'))
     await screen.findAllByText('总 token')
-    fireEvent.change(screen.getByLabelText('结束日期'), { target: { value: '' } })
     const chart = await screen.findByRole('img', { name: '每日总 token 曲线' })
 
     // No label before any interaction.
@@ -647,9 +669,189 @@ describe('TokenUsageSection filtering', () => {
     // The default 1d window renders the hourly chart.
     expect(await screen.findByRole('img', { name: '单日分时 token 曲线' })).toBeTruthy()
     // A wider range falls back to the daily granularity.
-    fireEvent.change(screen.getByLabelText('快捷区间'), { target: { value: '7' } })
+    fireEvent.click(screen.getByRole('button', { name: '快捷区间' }))
+    fireEvent.click(screen.getByRole('option', { name: '7d' }))
     await waitForCall(fetch, 2)
     expect(await screen.findByRole('img', { name: '每日总 token 曲线' })).toBeTruthy()
+  })
+})
+
+/** Local `YYYY-MM-DD` of today. */
+function todayKey(): string {
+  const now = new Date()
+  const month = String(now.getMonth() + 1).padStart(2, '0')
+  const day = String(now.getDate()).padStart(2, '0')
+  return `${now.getFullYear()}-${month}-${day}`
+}
+
+/** Local `YYYY-MM-DD` of the first day of the month before the current one. */
+function prevMonthFirstDay(): string {
+  const now = new Date()
+  const first = new Date(now.getFullYear(), now.getMonth() - 1, 1)
+  const month = String(first.getMonth() + 1).padStart(2, '0')
+  return `${first.getFullYear()}-${month}-01`
+}
+
+describe('DateRangePicker', () => {
+  it('keeps the first click while navigating months, then settles a cross-month range', async () => {
+    const fetch = stubFetch(async () => ({ ok: true, json: async () => SUMMARY }))
+    render(<TokenUsageSection close={() => {}} t={t} />)
+    await screen.findAllByText('总 token')
+    // An anchor on a mid-month day of the CURRENT month (distinct from the
+    // committed 1d endpoints, so its highlight can only come from the anchor).
+    const now = new Date()
+    const monthPrefix = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+    const anchorDay = todayKey() === `${monthPrefix}-01` ? `${monthPrefix}-02` : `${monthPrefix}-01`
+    fireEvent.click(screen.getByRole('button', { name: '日期范围' }))
+    fireEvent.click(screen.getByLabelText(anchorDay))
+    // Month navigation keeps the selection progress: navigate away and back,
+    // the first click stays highlighted (aria-pressed on the day button).
+    fireEvent.click(screen.getByLabelText('上个月'))
+    fireEvent.click(screen.getByLabelText('下个月'))
+    expect(screen.getByLabelText(anchorDay).getAttribute('aria-pressed')).toBe('true')
+    // The second click lands on the previous month: a cross-month range.
+    fireEvent.click(screen.getByLabelText('上个月'))
+    fireEvent.click(screen.getByLabelText(prevMonthFirstDay()))
+    await waitForCall(fetch, 2)
+    const url = new URL(String(fetch.mock.calls[1]![0]), 'http://localhost')
+    expect(url.searchParams.get('from')).toBe(prevMonthFirstDay())
+    expect(url.searchParams.get('to')).toBe(anchorDay)
+  })
+
+  it('discards the pending anchor when Escape closes the popover', async () => {
+    const fetch = stubFetch(async () => ({ ok: true, json: async () => SUMMARY }))
+    render(<TokenUsageSection close={() => {}} t={t} />)
+    await screen.findAllByText('总 token')
+    fireEvent.click(screen.getByRole('button', { name: '日期范围' }))
+    fireEvent.click(screen.getByLabelText(todayKey()))
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByRole('dialog', { name: '日期范围' })).toBeNull()
+    await new Promise(resolve => setTimeout(resolve, 50))
+    expect(fetch).toHaveBeenCalledTimes(1)
+    // Reopening starts fresh: the next first click is only an anchor (the
+    // panel stays open), so the second click settles a clean range.
+    fireEvent.click(screen.getByRole('button', { name: '日期范围' }))
+    fireEvent.click(screen.getByLabelText('上个月'))
+    fireEvent.click(screen.getByLabelText(prevMonthFirstDay()))
+    expect(screen.getByRole('dialog', { name: '日期范围' })).toBeTruthy()
+    fireEvent.click(screen.getByLabelText('下个月'))
+    fireEvent.click(screen.getByLabelText(todayKey()))
+    await waitForCall(fetch, 2)
+    const url = new URL(String(fetch.mock.calls[1]![0]), 'http://localhost')
+    expect(url.searchParams.get('from')).toBe(prevMonthFirstDay())
+    expect(url.searchParams.get('to')).toBe(todayKey())
+  })
+
+  it('closes on an outside pointerdown and keeps the committed range', async () => {
+    const fetch = stubFetch(async () => ({ ok: true, json: async () => SUMMARY }))
+    render(<TokenUsageSection close={() => {}} t={t} />)
+    await screen.findAllByText('总 token')
+    fireEvent.click(screen.getByRole('button', { name: '日期范围' }))
+    fireEvent.click(screen.getByLabelText(todayKey()))
+    fireEvent.pointerDown(document.body)
+    expect(screen.queryByRole('dialog', { name: '日期范围' })).toBeNull()
+    await new Promise(resolve => setTimeout(resolve, 50))
+    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole('button', { name: '日期范围' }).textContent).toBe(`${todayKey()} 至 ${todayKey()}`)
+  })
+
+  it('clears the range back to unconstrained', async () => {
+    const fetch = stubFetch(async () => ({ ok: true, json: async () => SUMMARY }))
+    render(<TokenUsageSection close={() => {}} t={t} />)
+    await screen.findAllByText('总 token')
+    fireEvent.click(screen.getByRole('button', { name: '日期范围' }))
+    fireEvent.click(screen.getByText('清除范围'))
+    await waitForCall(fetch, 2)
+    const url = new URL(String(fetch.mock.calls[1]![0]), 'http://localhost')
+    expect(url.searchParams.get('from')).toBeNull()
+    expect(url.searchParams.get('to')).toBeNull()
+    await screen.findAllByText('总 token')
+    expect(screen.getByRole('button', { name: '日期范围' }).textContent).toBe('全部日期')
+    // The unconstrained range reflects as the quick menu's ALL entry.
+    expect(screen.getByRole('button', { name: '快捷区间' }).textContent).toBe('全部日期')
+  })
+})
+
+describe('MenuSelect', () => {
+  /** Local `YYYY-MM-DD` of today shifted by whole days. */
+  function dayKey(offsetDays: number): string {
+    const date = new Date()
+    date.setDate(date.getDate() + offsetDays)
+    const month = String(date.getMonth() + 1).padStart(2, '0')
+    const day = String(date.getDate()).padStart(2, '0')
+    return `${date.getFullYear()}-${month}-${day}`
+  }
+
+  it('marks the selected option while the menu is open', async () => {
+    stubFetch(async () => ({ ok: true, json: async () => SUMMARY }))
+    render(<TokenUsageSection close={() => {}} t={t} />)
+    await screen.findAllByText('总 token')
+    fireEvent.click(screen.getByRole('button', { name: '模型' }))
+    expect(screen.getByRole('option', { name: '全部模型' }).getAttribute('aria-selected')).toBe('true')
+    expect(screen.getByRole('option', { name: 'deepseek-reasoner' }).getAttribute('aria-selected')).toBe('false')
+  })
+
+  it('closes the menu without changing the value on Escape', async () => {
+    const fetch = stubFetch(async () => ({ ok: true, json: async () => SUMMARY }))
+    render(<TokenUsageSection close={() => {}} t={t} />)
+    await screen.findAllByText('总 token')
+    fireEvent.click(screen.getByRole('button', { name: '快捷区间' }))
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByRole('listbox')).toBeNull()
+    await new Promise(resolve => setTimeout(resolve, 50))
+    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole('button', { name: '快捷区间' }).textContent).toBe('1d')
+    // Escape returns focus to the trigger.
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: '快捷区间' }))
+  })
+
+  it('roams the list with the keyboard and commits with Enter', async () => {
+    const fetch = stubFetch(async () => ({ ok: true, json: async () => SUMMARY }))
+    render(<TokenUsageSection close={() => {}} t={t} />)
+    await screen.findAllByText('总 token')
+    const trigger = screen.getByRole('button', { name: '快捷区间' })
+    trigger.focus()
+    // The trigger's arrow key opens the menu, focus landing on the
+    // selected option (1d).
+    fireEvent.keyDown(trigger, { key: 'ArrowDown' })
+    expect(screen.getByRole('listbox')).toBeTruthy()
+    // The selected row's text carries its check mark, hence toContain.
+    expect((document.activeElement as HTMLElement).textContent).toContain('1d')
+    fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' })
+    expect((document.activeElement as HTMLElement).textContent).toContain('7d')
+    fireEvent.keyDown(document.activeElement!, { key: 'End' })
+    expect((document.activeElement as HTMLElement).textContent).toContain('自定义')
+    fireEvent.keyDown(document.activeElement!, { key: 'Home' })
+    expect((document.activeElement as HTMLElement).textContent).toContain('1d')
+    fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' })
+    fireEvent.keyDown(document.activeElement!, { key: 'Enter' })
+    // Committing closes the menu. (Focus refocusing on the trigger happens
+    // inside the handler, but the commit's refetch swaps the section into
+    // its loading branch — unmounting the whole filter bar, focus with it —
+    // so no focus assertion survives here; the Escape case covers it.)
+    expect(screen.queryByRole('listbox')).toBeNull()
+    await waitForCall(fetch, 2)
+    const url = new URL(String(fetch.mock.calls[1]![0]), 'http://localhost')
+    expect(url.searchParams.get('from')).toBe(dayKey(-6))
+    expect(url.searchParams.get('to')).toBe(dayKey(0))
+  })
+
+  it('opens with focus on the selected option, scrolled into view', async () => {
+    stubFetch(async () => ({ ok: true, json: async () => SUMMARY }))
+    render(<TokenUsageSection close={() => {}} t={t} />)
+    await screen.findAllByText('总 token')
+    // Pick a non-first model first, so the re-open must find it mid-list.
+    fireEvent.click(screen.getByRole('button', { name: '模型' }))
+    fireEvent.click(screen.getByRole('option', { name: 'deepseek-reasoner' }))
+    await screen.findAllByText('总 token')
+    // jsdom ships no scrollIntoView; record the elements it is asked to show.
+    const scrolled: Element[] = []
+    Element.prototype.scrollIntoView = function (this: Element): void { scrolled.push(this) }
+    fireEvent.click(screen.getByRole('button', { name: '模型' }))
+    const focused = document.activeElement as HTMLElement
+    expect(focused.getAttribute('aria-selected')).toBe('true')
+    expect(focused.textContent).toContain('deepseek-reasoner')
+    expect(scrolled).toContain(focused)
   })
 })
 

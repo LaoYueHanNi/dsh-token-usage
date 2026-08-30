@@ -13,6 +13,28 @@ export declare function totalTokens(totals: UsageTotals): number;
 export declare function dayKeyOf(date: Date): string;
 /** Local day key of today shifted by whole days (test seam on `now`). */
 export declare function shiftedDayKey(deltaDays: number, now?: () => Date): string;
+/** A month the calendar panel shows (month is 0-based like Date). */
+export interface MonthView {
+    year: number;
+    month: number;
+}
+/** The month view holding one day key. */
+export declare function monthViewOf(dayKey: string): MonthView;
+/** The month view shifted by whole months (year overflow normalized). */
+export declare function shiftMonth(view: MonthView, deltaMonths: number): MonthView;
+/** One cell of a month grid: a day key plus whether it belongs to the shown month. */
+export interface MonthCell {
+    day: string;
+    inMonth: boolean;
+}
+/**
+ * The month grid of one month view: Monday-first whole weeks covering the
+ * month, so every column aligns under its weekday header. Days of the
+ * neighbouring months carry `inMonth: false` — the caller renders them as
+ * blank placeholders, keeping the shown month's date texts unique (for
+ * tests and screen readers).
+ */
+export declare function monthGrid(view: MonthView): MonthCell[];
 /** One plotted day of the trend chart. */
 export interface DayPoint {
     day: string;

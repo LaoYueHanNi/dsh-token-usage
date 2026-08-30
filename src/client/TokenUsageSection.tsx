@@ -19,10 +19,12 @@ import type { SettingsSectionOwnerProps } from '@deepseek-ai/dsh-client-ui-setti
 import type { ContextTier, DailySlot, ModelPricing, ModelRates, RateWindow, UsageSummary } from '../wire.ts'
 import { STATS_PATH } from '../wire.ts'
 import { useAsyncResource } from './async-resource.ts'
+import { DateRangePicker } from './DateRangePicker.tsx'
 import { dayKeyOf, shiftedDayKey, totalTokens } from './day.ts'
 import { currencyViewOf, formatCost, formatRate, formatRateWithSymbol, formatTokens } from './format.ts'
 import type { CurrencyView } from './format.ts'
 import { HitRateText } from './HitRateText.tsx'
+import { MenuSelect } from './MenuSelect.tsx'
 import { StatCard } from './StatCard.tsx'
 import { TrendChart } from './TrendChart.tsx'
 import { useColorSchemeMirror } from './use-color-scheme.ts'
@@ -76,9 +78,6 @@ function filterQuery(filters: Filters): string | null {
   if (filters.model !== '') params.set('model', filters.model)
   return Array.from(params).length > 0 ? `?${params.toString()}` : ''
 }
-
-/** Quick-range day span in days (1 = today only, inclusive on both ends). */
-const QUICK_DAYS = [1, 7, 30] as const
 
 /** The day keys of one quick range: today minus (days - 1) through today. */
 function quickRange(days: number): { from: string; to: string } {
@@ -265,55 +264,57 @@ function PricingDialog({ model, rules, view, onClose, t }: {
   )
 }
 
-/** The filter bar: quick range select, day range, model select — one row. */
+/** Quick-range menu entries (labels are locale-free day counts). */
+const QUICK_OPTIONS = [
+  { value: '1', label: '1d' },
+  { value: '7', label: '7d' },
+  { value: '30', label: '30d' },
+] as const
+
+/** The filter bar: quick range menu, day-range picker popover, model
+ * menu — one row, one popover language. */
 function FilterBar({ filters, models, onChange, t }: {
   filters: Filters
   models: readonly string[]
   onChange: (next: Filters) => void
   t: TranslateNS<'token-usage'>
 }): ReactNode {
-  // 'custom' when the day inputs no longer hold one of the quick ranges.
-  const quickValue = QUICK_DAYS.find(days => isQuickActive(days, filters)) ?? 'custom'
+  // 'all' when the range is unconstrained, 'custom' when it no longer
+  // holds one of the quick ranges.
+  const quickValue = QUICK_OPTIONS.find(option => isQuickActive(Number(option.value), filters))?.value
+    ?? (filters.from === '' && filters.to === '' ? 'all' : 'custom')
   return (
     <div className={styles['filters']}>
-      <select
-        aria-label={t('filter.quickRange')}
-        className={styles['control']}
+      <MenuSelect
+        ariaLabel={t('filter.quickRange')}
         value={quickValue}
-        onChange={event => {
-          const days = Number(event.target.value)
+        options={[
+          ...QUICK_OPTIONS,
+          { value: 'all', label: t('filter.allDates') },
+          { value: 'custom', label: t('filter.custom') },
+        ]}
+        onChange={value => {
+          // 'all' releases the range back to unconstrained; the 'custom'
+          // entry is informational: it mirrors the day range and never
+          // rewrites it.
+          if (value === 'all') onChange({ ...filters, from: '', to: '' })
+          const days = Number(value)
           if (days > 0) onChange({ ...filters, ...quickRange(days) })
         }}
-      >
-        <option value="1">1d</option>
-        <option value="7">7d</option>
-        <option value="30">30d</option>
-        <option value="custom">{t('filter.custom')}</option>
-      </select>
-      <input
-        type="date"
-        aria-label={t('filter.from')}
-        className={styles['dateControl']}
-        value={filters.from}
-        onChange={event => onChange({ ...filters, from: event.target.value })}
       />
-      <span className={styles['rangeSeparator']}>{t('filter.separator')}</span>
-      <input
-        type="date"
-        aria-label={t('filter.to')}
-        className={styles['dateControl']}
-        value={filters.to}
-        onChange={event => onChange({ ...filters, to: event.target.value })}
+      <DateRangePicker
+        from={filters.from}
+        to={filters.to}
+        onChange={next => onChange({ ...filters, ...next })}
+        t={t}
       />
-      <select
-        aria-label={t('filter.model')}
-        className={styles['modelControl']}
+      <MenuSelect
+        ariaLabel={t('filter.model')}
+        grow
         value={filters.model}
-        onChange={event => onChange({ ...filters, model: event.target.value })}
-      >
-        <option value="">{t('filter.allModels')}</option>
-        {models.map(model => <option key={model} value={model}>{model}</option>)}
-      </select>
+        options={[{ value: '', label: t('filter.allModels') }, ...models.map(model => ({ value: model, label: model }))]}
+        onChange={model => onChange({ ...filters, model })}
+      />
     </div>
   )
 }

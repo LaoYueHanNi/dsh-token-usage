@@ -50,9 +50,12 @@
 
 /* Scroll shell: the table keeps its natural single-line width and scrolls
  * horizontally when the panel is narrower, instead of squeezing cells into
- * wrapped or clipped content. */
+ * wrapped or clipped content. Vertically the shell is capped and scrolls
+ * on its own, so a long model list (or price table) stays inside the
+ * panel while the sticky header keeps the column titles in view. */
 .tableWrap {
-  overflow-x: auto;
+  overflow: auto;
+  max-height: 420px;
 }
 
 .table {
@@ -96,6 +99,12 @@
 .table th {
   font-weight: 500;
   color: var(--dsw-alias-label-secondary);
+  /* Sticky header: an opaque plate so scrolled rows pass under it, lifted
+   * above the cells (the scroll shell scrolls both axes). */
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--dsw-alias-bg-layer-2);
 }
 
 .table td {
@@ -123,74 +132,14 @@
   background: var(--dsw-interactive-bg-hover);
 }
 
+/* The filter row keeps to one line: the quick menu, the date-range
+ * trigger, and the shrinkable model menu (their popover plates live in
+ * their own CSS modules). */
 .filters {
   display: flex;
   flex-wrap: nowrap;
   align-items: center;
   gap: 8px;
-}
-
-/* The selects of the filter bar follow the shell's own select pattern
- * (e.g. the conversation model picker): appearance:none removes the UA
- * form skin (which renders light in dark mode — the shell never sets
- * color-scheme on plugin content), the chevron is drawn as an inline SVG
- * in a neutral gray that reads on both themes, and the colors come from
- * theme variables only. */
-.control,
-.modelControl {
-  appearance: none;
-  padding-right: 26px;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none'%3E%3Cpath d='M3 4.5L6 7.5L9 4.5' stroke='%2381858C' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-  background-position: right 6px center;
-  background-repeat: no-repeat;
-  background-size: 12px 12px;
-}
-
-.control {
-  box-sizing: border-box;
-  padding: 4px 8px;
-  padding-right: 26px;
-  font-size: 13px;
-  line-height: 20px;
-  color: var(--dsw-alias-label-primary);
-  background-color: var(--dsw-alias-bg-layer-2);
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 6px;
-}
-
-/* Fixed-narrow date inputs and a shrinkable model select keep the bar on one row. */
-.dateControl {
-  box-sizing: border-box;
-  flex: none;
-  width: 138px;
-  padding: 4px 6px;
-  font-size: 13px;
-  line-height: 20px;
-  color: var(--dsw-alias-label-primary);
-  background: var(--dsw-alias-bg-layer-2);
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 6px;
-}
-
-.modelControl {
-  box-sizing: border-box;
-  min-width: 0;
-  max-width: 220px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  padding: 4px 8px;
-  padding-right: 26px;
-  font-size: 13px;
-  line-height: 20px;
-  color: var(--dsw-alias-label-primary);
-  background-color: var(--dsw-alias-bg-layer-2);
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 6px;
-}
-
-.rangeSeparator {
-  font-size: 12px;
-  color: var(--dsw-alias-label-secondary);
 }
 
 .cards {

@@ -1,0 +1,108 @@
+/*
+ * Menu select styles (browser half): the filter bar's themed dropdown —
+ * a trigger button plus a menu popover replacing the native <select>,
+ * whose UA-painted option list ignores every design token. The popover
+ * rides the same menu plate as the date-range picker and the quota panel;
+ * the trigger mirrors the filter bar's control family (chevron included).
+ */
+
+/* The positioning context for the popover; sits inline in the filter row. */
+.wrapper {
+  position: relative;
+  display: inline-flex;
+}
+
+/* Trigger: the filter-bar control family — box metrics plus the same
+ * neutral chevron the old selects carried (it reads on both themes). */
+.trigger {
+  box-sizing: border-box;
+  flex: none;
+  padding: 4px 24px 4px 8px;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-primary);
+  background-color: var(--dsw-alias-bg-layer-2);
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none'%3E%3Cpath d='M3 4.5L6 7.5L9 4.5' stroke='%2381858C' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E/%3C/svg%3E");
+  background-position: right 6px center;
+  background-repeat: no-repeat;
+  background-size: 12px 12px;
+}
+
+.trigger:hover,
+.trigger[aria-expanded='true'] {
+  background-color: var(--dsw-alias-interactive-bg-hover);
+}
+
+/* Stretch variant (the model menu): shrinkable in the flex row, capped,
+ * label ellipsized — mirrors the old modelControl box. */
+.grow {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 220px;
+}
+
+/* Menu popover below the trigger — the same plate as the date-range
+ * picker's calendar (menu background, inverted border, shadow, z-index). */
+.panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 100;
+  box-sizing: border-box;
+  min-width: 100%;
+  max-width: 260px;
+  max-height: 240px;
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid var(--dsw-alias-border-inverted);
+  border-radius: 12px;
+  background: var(--dsw-specific-menu);
+  box-shadow: var(--dsw-shadow-lv3);
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-secondary);
+  text-align: left;
+  cursor: default;
+}
+
+/* One option row: label left, check right when selected. */
+.option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 4px 8px;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-primary);
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.option:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.optionLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.optionSelected {
+  color: var(--dsw-alias-brand-primary);
+}
+
+.check {
+  flex: none;
+  color: var(--dsw-alias-brand-primary);
+}

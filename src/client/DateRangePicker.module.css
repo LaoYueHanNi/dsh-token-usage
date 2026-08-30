@@ -1,0 +1,184 @@
+/*
+ * Range date picker styles (browser half): the filter bar's single date
+ * control — one trigger button plus a lightweight calendar popover. Every
+ * color/spacing rides a dsw design token so light/dark follow the shell;
+ * the popover mirrors the quota panel's plate (menu background, inverted
+ * border, shadow, z-index) and the trigger mirrors the filter bar's own
+ * control family.
+ */
+
+/* The positioning context for the popover; sits inline in the filter row. */
+.wrapper {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+}
+
+/* Trigger: the filter-bar control family (selects' box metrics). */
+.trigger {
+  box-sizing: border-box;
+  flex: none;
+  padding: 4px 10px;
+  font-size: 13px;
+  line-height: 20px;
+  font-variant-numeric: tabular-nums;
+  color: var(--dsw-alias-label-primary);
+  background-color: var(--dsw-alias-bg-layer-2);
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.trigger:hover,
+.trigger[aria-expanded='true'] {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+/* Calendar popover below the trigger (the filter bar sits high on the
+ * page, so it drops down). The menu plate, like the quota panel. */
+.panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 100;
+  box-sizing: border-box;
+  width: 266px;
+  max-width: calc(100vw - 32px);
+  padding: 10px;
+  border: 1px solid var(--dsw-alias-border-inverted);
+  border-radius: 12px;
+  background: var(--dsw-specific-menu);
+  box-shadow: var(--dsw-shadow-lv3);
+  font-size: 12px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-secondary);
+  text-align: left;
+  cursor: default;
+}
+
+/* Month navigation head: ‹ title › on one row. */
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+.nav {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--dsw-alias-label-secondary);
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.nav:hover {
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.monthTitle {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--dsw-alias-label-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Fixed 7-column lattice shared by the weekday header and the day grid. */
+.weekdays,
+.grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+}
+
+.weekday {
+  font-size: 11px;
+  line-height: 16px;
+  text-align: center;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* Day cell: a 34×26 hit target. Blank placeholders keep the lattice
+ * aligned without offering neighbouring-month days to click. */
+.blank {
+  height: 26px;
+  visibility: hidden;
+}
+
+.day {
+  height: 26px;
+  padding: 0;
+  font-size: 12px;
+  line-height: 26px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  color: var(--dsw-alias-label-primary);
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.day:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+/* Today reads as an outlined cell (it is usually outside the pending
+ * selection, so a background would compete with the range paint). */
+.dayToday {
+  box-shadow: inset 0 0 0 1px var(--dsw-alias-border-l2);
+}
+
+/* The pending first click (the anchor): the brand color outlines it
+ * (no selected-background token exists in the shell's set). */
+.dayAnchor {
+  color: var(--dsw-alias-brand-primary);
+  box-shadow: inset 0 0 0 1px var(--dsw-alias-brand-primary);
+  font-weight: 600;
+}
+
+/* The settled range: endpoints outlined brand, the span between tinted. */
+.daySelected {
+  color: var(--dsw-alias-brand-primary);
+  box-shadow: inset 0 0 0 1px var(--dsw-alias-brand-primary);
+  font-weight: 600;
+}
+
+.dayInRange {
+  background: var(--dsw-alias-interactive-bg-hover);
+  border-radius: 0;
+}
+
+/* Footer: the clear affordance releasing the range back to unconstrained. */
+.foot {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--dsw-alias-border-l1);
+}
+
+.clear {
+  padding: 2px 8px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-secondary);
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.clear:hover {
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-interactive-bg-hover);
+}
