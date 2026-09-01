@@ -5,8 +5,8 @@
  * installed). When a webServer exists, the plugin also serves the stats
  * route backing the web settings page (browser half in `src/client`).
  *
- * The settings namespace `token-usage` registers through
- * `installSettingsSection` with the composition entry as its base layer, and
+ * The settings namespace `token-usage` registers through the settings
+ * service's `installSection` (the composition entry as its base layer), and
  * both of its fields take effect live. A stored region pick (or a mirror
  * override) re-resolves the feed URL and re-syncs the mirror; a stored data
  * directory switches writes to the new location and migrates every row and
@@ -66,7 +66,7 @@ export declare function resolveDataDir(configPath: string | undefined): string;
 export declare const name = "token-usage";
 export declare const inject: string[];
 /** The settings namespace this plugin serves; its browser card spells the same string. */
-export declare const TOKEN_USAGE_NS: import("@deepseek-ai/dsh-settings").SettingsNamespace;
+export declare const TOKEN_USAGE_NS = "token-usage";
 /**
  * The settings-facing subset of the config: the data directory and the mirror
  * region pick. `pricingUrlDomestic` / `pricingUrlOverseas` stay

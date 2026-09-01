@@ -17,7 +17,7 @@
  *
  * @module token-usage/client/card-form
  */
-import type { SettingsScope } from '@deepseek-ai/dsh-client-runtime/client';
+import type { SettingsScope } from '@deepseek-ai/dsh-client-ui-settings/client';
 /** The fields this card edits. */
 export declare const CARD_FIELDS: readonly ["path", "pricingRegion"];
 /** One editable field of the token-usage settings section. */

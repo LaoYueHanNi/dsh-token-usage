@@ -86,6 +86,20 @@ class FakeSettings extends Service {
     this.sections.set(ns, section)
     for (const watcher of this.watchers) watcher()
   }
+
+  /** dsh 0.1.2-alpha.3 shape: register + source sink + change notification. */
+  installSection(
+    _owner: unknown,
+    ns: string,
+    _schema: unknown,
+    entry: Record<string, unknown>,
+    hooks: { setSource: (source: () => unknown) => void, onChange: () => void, validate?: (value: Record<string, unknown>) => void },
+  ): void {
+    const scope = this.register(ns, undefined, { base: entry, validate: hooks.validate })
+    hooks.setSource(() => scope.get())
+    hooks.onChange()
+    scope.watch(() => hooks.onChange())
+  }
 }
 
 /** In-process settings provider with one fixed document (mirrors harness tests). */

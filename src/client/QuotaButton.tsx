@@ -35,8 +35,9 @@ import type { CSSProperties, ReactNode } from 'react'
 import { Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 // Type-only: merges the standard session kit into the input-right runtime
-// props this component binds.
-import type {} from '@deepseek-ai/dsh-client-runtime/client'
+// props this component binds (the kit's SessionStandardProps declaration
+// lives in ui-session since dsh-client-runtime was removed).
+import type {} from '@deepseek-ai/dsh-client-ui-session/client'
 // Type-only: pulls the `conversation.input.right` SlotMap key.
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { QuotaError, QuotaPayload, QuotaTier, QuotaWindow } from '../wire.ts'

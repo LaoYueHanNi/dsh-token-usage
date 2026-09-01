@@ -6,16 +6,16 @@
  * namespace — the data directory and the pricing region — edited through
  * the settings scope, with the relocation progress polled from
  * `/token-usage/migration`). The card's browse button rides the shell's
- * workspace service (`ctx.workspaces.pickDirectory`), the same native
- * directory picker the workspace flows use. Export discipline: the /client
- * entry exposes only what cordis loading needs.
+ * workspace navigation service (`ctx.uiWorkspace.pickDirectory`), the same
+ * native directory picker the workspace flows use. Export discipline: the
+ * /client entry exposes only what cordis loading needs.
  *
  * @module token-usage/client
  */
-import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client';
+import type { Context as ClientContext } from '@deepseek-ai/cordis';
 /** Required services: the slot registry, the locale dictionaries, the
- * settings scope, and the workspace service (its native directory picker
- * backs the card's browse button). */
+ * settings scope, and the workspace navigation service (its native
+ * directory picker backs the card's browse button). */
 export declare const inject: string[];
 /**
  * Register the dictionary pair, then the settings page and the plugin

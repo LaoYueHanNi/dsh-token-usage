@@ -19,13 +19,15 @@
  */
 import type { ReactNode } from 'react';
 import type { SnapshotSelectorHook, TranslateNS } from '@deepseek-ai/dsh-client-ui-slots';
-import type { ConversationSnapshot, SessionListState, UseProjection } from '@deepseek-ai/dsh-client-runtime/client';
+import type { SessionListState, UseProjection } from '@deepseek-ai/dsh-api-session-controller/client';
 import type { SessionId } from '@deepseek-ai/dsh-client-connection/client';
 /** The view's scope switch: the session alone, or its whole subagent subtree. */
 export type UsageScope = 'session' | 'tree';
-/** Props: the conversation-view runtime seat (standard kit) plus the locale seat. */
+/** Props: the conversation-view runtime seat (standard kit) plus the locale seat.
+ * dsh 0.1.2-alpha.3 narrowed the kit's `useSession` to the Session lifecycle
+ * snapshot; the Conversation snapshot is no longer part of it — and this view
+ * never read it, so the seat is simply dropped. */
 export interface UsageViewProps {
-    useSession: SnapshotSelectorHook<ConversationSnapshot>;
     useSessions: SnapshotSelectorHook<SessionListState>;
     useProjection: UseProjection;
     sessionId: SessionId;

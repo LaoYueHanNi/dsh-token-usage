@@ -74,6 +74,20 @@ class FakeSettings extends Service {
   get(ns: string): unknown {
     return structuredClone(this.bases.get(ns))
   }
+
+  /** dsh 0.1.2-alpha.3 shape: register + source sink + change notification. */
+  installSection(
+    _owner: unknown,
+    ns: string,
+    _schema: unknown,
+    entry: Record<string, unknown>,
+    hooks: { setSource: (source: () => unknown) => void, onChange: () => void },
+  ): void {
+    const scope = this.register(ns, undefined, { base: entry })
+    hooks.setSource(() => scope.get())
+    hooks.onChange()
+    scope.watch(() => hooks.onChange())
+  }
 }
 
 /** Credentials seam over stored references plus the newer record store. */
