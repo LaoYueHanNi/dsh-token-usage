@@ -39,12 +39,26 @@ export interface SyncProgressTick {
   skipped: number
 }
 
+/** One open read channel onto a stored session's event log (duck-typed for tests). */
+export interface SyncReadHandle {
+  /** Read a slice of the valid contiguous log; the no-arg call returns it whole. */
+  read(offset?: number, length?: number, options?: { signal?: AbortSignal }): Promise<readonly SessionEvent[]>
+  /** Release the handle; idempotent and uncancellable. */
+  close(): Promise<void>
+}
+
 /** The persistence surface the sync needs (duck-typed for tests). */
 export interface SyncPersistence {
-  /** Every materialized session, in arbitrary order. */
-  list(signal?: AbortSignal): Promise<{ id: SessionId }[]>
-  /** Immutable logical event log of one session. */
-  inspect(id: SessionId, signal?: AbortSignal): Promise<{ events: readonly SessionEvent[] }>
+  /**
+   * Every materialized session, in arbitrary order. dsh 0.1.2-alpha.5 answers
+   * snapshots; the session id lives at `header.id`.
+   */
+  list(options?: { signal?: AbortSignal }): Promise<readonly { header: { id: SessionId } }[]>
+  /**
+   * Open a read-only channel onto one stored session's log. dsh 0.1.2-alpha.5
+   * removed the service-level `inspect`; this is its handle-shaped successor.
+   */
+  open(id: SessionId, access: 'read', options?: { signal?: AbortSignal }): Promise<SyncReadHandle>
 }
 
 /** Dependencies of one sync run. */
@@ -70,7 +84,7 @@ export async function syncHistory(
   signal?: AbortSignal,
 ): Promise<SyncResult> {
   await deps.log.scan()
-  const sessions = await deps.persistence.list(signal)
+  const sessions = await deps.persistence.list(signal === undefined ? undefined : { signal })
   let added = 0
   let skipped = 0
   const total = sessions.length
@@ -78,11 +92,22 @@ export async function syncHistory(
   onTick?.({ processed, total, added, skipped })
   for (const session of sessions) {
     signal?.throwIfAborted()
-    const inspection = await deps.persistence.inspect(session.id, signal)
-    for (const event of inspection.events) {
+    const options = signal === undefined ? undefined : { signal }
+    const handle = await deps.persistence.open(session.header.id, 'read', options)
+    let events: readonly SessionEvent[]
+    try {
+      events = await handle.read(0, undefined, options)
+    } catch (error) {
+      // The read failure is the actionable cause; a close failure on the same
+      // broken handle adds nothing.
+      try { await handle.close() } catch { /* see above */ }
+      throw error
+    }
+    await handle.close()
+    for (const event of events) {
       signal?.throwIfAborted()
       if (event.type !== 'assistant/message') continue
-      const record = recordFromEvent(event, session.id)
+      const record = recordFromEvent(event, session.header.id)
       if (await deps.log.record(record)) added += 1
       else skipped += 1
     }

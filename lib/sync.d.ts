@@ -33,16 +33,35 @@ export interface SyncProgressTick {
     /** Rows skipped by dedupe so far. */
     skipped: number;
 }
+/** One open read channel onto a stored session's event log (duck-typed for tests). */
+export interface SyncReadHandle {
+    /** Read a slice of the valid contiguous log; the no-arg call returns it whole. */
+    read(offset?: number, length?: number, options?: {
+        signal?: AbortSignal;
+    }): Promise<readonly SessionEvent[]>;
+    /** Release the handle; idempotent and uncancellable. */
+    close(): Promise<void>;
+}
 /** The persistence surface the sync needs (duck-typed for tests). */
 export interface SyncPersistence {
-    /** Every materialized session, in arbitrary order. */
-    list(signal?: AbortSignal): Promise<{
-        id: SessionId;
+    /**
+     * Every materialized session, in arbitrary order. dsh 0.1.2-alpha.5 answers
+     * snapshots; the session id lives at `header.id`.
+     */
+    list(options?: {
+        signal?: AbortSignal;
+    }): Promise<readonly {
+        header: {
+            id: SessionId;
+        };
     }[]>;
-    /** Immutable logical event log of one session. */
-    inspect(id: SessionId, signal?: AbortSignal): Promise<{
-        events: readonly SessionEvent[];
-    }>;
+    /**
+     * Open a read-only channel onto one stored session's log. dsh 0.1.2-alpha.5
+     * removed the service-level `inspect`; this is its handle-shaped successor.
+     */
+    open(id: SessionId, access: 'read', options?: {
+        signal?: AbortSignal;
+    }): Promise<SyncReadHandle>;
 }
 /** Dependencies of one sync run. */
 export interface SyncDeps {

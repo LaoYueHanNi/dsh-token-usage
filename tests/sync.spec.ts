@@ -11,12 +11,17 @@ import { messageEvent } from './helpers.ts'
 function fakePersistence(sessions: Array<{ id: string; events: SessionEvent[] }>): SyncPersistence {
   return {
     async list() {
-      return sessions.map(session => ({ id: session.id as SessionId }))
+      return sessions.map(session => ({ header: { id: session.id as SessionId } }))
     },
-    async inspect(id) {
+    async open(id) {
       const session = sessions.find(candidate => candidate.id === id)
       if (session === undefined) throw new Error(`missing session ${id}`)
-      return { events: session.events }
+      return {
+        async read(offset = 0) {
+          return session.events.slice(offset)
+        },
+        async close() {},
+      }
     },
   }
 }
@@ -78,22 +83,22 @@ describe('syncHistory', () => {
   })
 
   it('stops mid-sync when the signal fires', async () => {
-    let inspected = 0
+    let opened = 0
     const log = new FakeLog()
     const persistence: SyncPersistence = {
       async list() {
-        return [{ id: 's1' as SessionId }, { id: 's2' as SessionId }]
+        return [{ header: { id: 's1' as SessionId } }, { header: { id: 's2' as SessionId } }]
       },
-      async inspect() {
-        inspected += 1
+      async open() {
+        opened += 1
         const controller = new AbortController()
         controller.abort()
         controller.signal.throwIfAborted()
-        return { events: [] }
+        throw new Error('unreachable')
       },
     }
     await expect(syncHistory({ persistence, log })).rejects.toMatchObject({ name: 'AbortError' })
-    expect(inspected).toBe(1)
+    expect(opened).toBe(1)
   })
 })
 

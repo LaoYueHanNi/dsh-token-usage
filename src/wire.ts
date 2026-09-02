@@ -142,7 +142,7 @@ export const DIR_GUARD_PATH = '/token-usage/dir-guard'
 /**
  * The full-sync endpoint path: the card's manual "scan again" affordance.
  * `POST` starts one full scan over every session log (the same scan the
- * one-shot startup sync ran on first install — list + inspect + dedupe), and
+ * one-shot startup sync ran on first install — list + open/read + dedupe), and
  * `GET` returns the live progress. The scan is fire-and-forget on the host
  * side, so the card polls while it runs.
  */

@@ -674,15 +674,18 @@ describe('plugin webServer wiring', () => {
     await next.plugin(MockWebServer)
     await next.plugin(class extends Service {
       constructor(context: Context) { super(context, 'sessions') }
-      list(): Array<{ id: string; events: unknown[] }> { return sessions.map(session => ({ id: session.id, events: session.events })) }
+      list(): Array<{ snapshotEvents(): unknown[] }> { return sessions.map(session => ({ snapshotEvents: () => session.events })) }
     })
     await next.plugin(class extends Service {
       constructor(context: Context) { super(context, 'sessionPersistence') }
-      async list(): Promise<Array<{ id: string }>> { return sessions.map(session => ({ id: session.id })) }
-      async inspect(id: string): Promise<{ events: unknown[] }> {
+      async list(): Promise<Array<{ header: { id: string } }>> { return sessions.map(session => ({ header: { id: session.id } })) }
+      async open(id: string): Promise<{ read(offset?: number): Promise<unknown[]>; close(): Promise<void> }> {
         const session = sessions.find(candidate => candidate.id === id)
         if (session === undefined) throw new Error(`missing session ${id}`)
-        return { events: session.events }
+        return {
+          read: async (offset = 0) => session.events.slice(offset),
+          close: async () => {},
+        }
       }
     })
     await next.plugin(class extends Service {

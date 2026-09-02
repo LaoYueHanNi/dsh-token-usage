@@ -37,7 +37,7 @@ import { UsageLog } from './usage-log.ts'
 import { cleanSource, copyData, type MigrationProgress } from './migrate.ts'
 import { resolvePricingUrl, syncCloudPricing, type PricingSourceInput } from './pricing.ts'
 import { recordFromEvent } from './usage-record.ts'
-import { autoSyncIfNeeded, syncHistory } from './sync.ts'
+import { autoSyncIfNeeded, syncHistory, type SyncPersistence } from './sync.ts'
 import { clearRecordCache, warmRecordCache } from './record-cache.ts'
 import { createDirectoryGuardRoute, createFullSyncRoute, createMigrationRoute, createStatsRoute, type FullSyncTrigger } from './stats-route.ts'
 import { currencyOfRegion, type DirectoryGuardView, type FullSyncView, type QuotaPayload } from './wire.ts'
@@ -226,6 +226,19 @@ export interface SectionGuard {
   runningDir: string | undefined
   /** Sessions mid-conversation (an open turn) at validation time. */
   interactingSessions: number
+}
+
+/**
+ * The host's sessionPersistence service through the sync's duck-type lens.
+ * The published .d.ts of dsh-session-persistence@0.1.2-alpha.5 still carries
+ * the pre-alpha.5 face (service-level `inspect`, bare-Signal `list` of bare
+ * headers); the runtime service the host actually registers is the handle
+ * face (snapshot `list`, `open`/read/close) that the harness monorepo source
+ * ships. The runtime is the contract the plugin runs against, so the cast
+ * crosses out a stale typing, not a shape mismatch.
+ */
+function hostPersistence(ctx: Context): SyncPersistence {
+  return ctx.sessionPersistence as unknown as SyncPersistence
 }
 
 /**
@@ -457,7 +470,7 @@ export function apply(ctx: Context, config: Config = {}) {
   /**
    * Kick off one full scan over every persisted session log and stream the
    * live counts into {@link fullSyncStatus}. The scan is the same shape as
-   * the one-shot startup sync (list + inspect + UsageLog dedupe) — there is
+   * the one-shot startup sync (list + open/read + UsageLog dedupe) — there is
    * no watermark shortcut here, so the user gets a guarantee that every
    * persisted request row the log does not yet hold will land. The run is
    * fire-and-forget: a second trigger while one is in flight returns
@@ -470,7 +483,7 @@ export function apply(ctx: Context, config: Config = {}) {
     if (target === undefined) return { started: false, reason: 'already-running' }
     fullSyncRunning = true
     fullSyncStatus = { status: 'running', processed: 0, total: 0, added: 0, skipped: 0 }
-    void syncHistory({ persistence: ctx.sessionPersistence, log: target.log },
+    void syncHistory({ persistence: hostPersistence(ctx), log: target.log },
       (tick) => {
         // The route's status thunk reads `fullSyncStatus` by reference, so each
         // tick is visible to the next poll without any other wiring.
@@ -629,7 +642,7 @@ export function apply(ctx: Context, config: Config = {}) {
     // One-shot backfill for requests recorded before this plugin was installed.
     // Fire-and-forget: a failure leaves the marker unwritten and the next
     // startup retries; a crash mid-run is absorbed by the sync's dedupe.
-    void autoSyncIfNeeded({ persistence: ctx.sessionPersistence, log }, dir)
+    void autoSyncIfNeeded({ persistence: hostPersistence(ctx), log }, dir)
       .then((result) => {
         if (result !== null) {
           console.log(`[token-usage] first-run sync: ${result.added} added, ${result.skipped} skipped`)

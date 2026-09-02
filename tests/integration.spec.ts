@@ -17,14 +17,17 @@ function persistenceService(sessions: Array<{ id: string; events: unknown[] }>) 
       super(ctx, 'sessionPersistence')
     }
 
-    async list(): Promise<Array<{ id: string }>> {
-      return sessions.map(session => ({ id: session.id }))
+    async list(): Promise<Array<{ header: { id: string } }>> {
+      return sessions.map(session => ({ header: { id: session.id } }))
     }
 
-    async inspect(id: string): Promise<{ events: unknown[] }> {
+    async open(id: string): Promise<{ read(offset?: number): Promise<unknown[]>; close(): Promise<void> }> {
       const session = sessions.find(candidate => candidate.id === id)
       if (session === undefined) throw new Error(`missing session ${id}`)
-      return { events: session.events }
+      return {
+        read: async (offset = 0) => session.events.slice(offset),
+        close: async () => {},
+      }
     }
   }
 }
