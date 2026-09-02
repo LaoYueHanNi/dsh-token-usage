@@ -87,10 +87,10 @@ describe('countInteractingSessions', () => {
     const closedTurn = [{ type: 'turn/start' }, { type: 'user/message' }, { type: 'turn/end' }]
     const reopened = [...closedTurn, { type: 'turn/start' }]
     expect(countInteractingSessions([])).toBe(0)
-    expect(countInteractingSessions([{ events: [] }, { events: [{ type: 'session/title' }] }])).toBe(0)
-    expect(countInteractingSessions([{ events: closedTurn }, { events: [{ type: 'session/title' }] }])).toBe(0)
-    expect(countInteractingSessions([{ events: openTurn }, { events: closedTurn }])).toBe(1)
-    expect(countInteractingSessions([{ events: reopened }, { events: openTurn }])).toBe(2)
+    expect(countInteractingSessions([[], [{ type: 'session/title' }]])).toBe(0)
+    expect(countInteractingSessions([closedTurn, [{ type: 'session/title' }]])).toBe(0)
+    expect(countInteractingSessions([openTurn, closedTurn])).toBe(1)
+    expect(countInteractingSessions([reopened, openTurn])).toBe(2)
   })
 })
 

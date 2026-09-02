@@ -13,7 +13,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Context, Service } from '@deepseek-ai/cordis'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
-import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import { SessionSeq, type SessionEvent } from '@deepseek-ai/dsh-session'
 import * as plugin from '../src/index.ts'
 import type { QuotaPayload } from '../src/wire.ts'
 
@@ -169,7 +169,7 @@ function fakeResponse(): { res: ServerResponse; captured: Captured } {
 function contextEvent(provider: string, model: string): SessionEvent<'request/context'> {
   return {
     type: 'request/context',
-    seq: 1,
+    seq: SessionSeq(1),
     time: Date.now(),
     data: { provider, model },
   } as SessionEvent<'request/context'>

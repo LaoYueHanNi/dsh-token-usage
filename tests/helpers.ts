@@ -1,4 +1,4 @@
-import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import { SessionSeq, type SessionEvent } from '@deepseek-ai/dsh-session'
 
 /** Minimal but shape-true assistant/message event for unit tests. */
 export function messageEvent(overrides: {
@@ -13,7 +13,7 @@ export function messageEvent(overrides: {
 } = {}): SessionEvent<'assistant/message'> {
   return {
     type: 'assistant/message',
-    seq: overrides.seq ?? 1,
+    seq: SessionSeq(overrides.seq ?? 1),
     time: overrides.time ?? 1_700_000_000_000,
     data: {
       turn: overrides.turn ?? 1,

@@ -2,7 +2,7 @@ import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import type { SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
+import { SessionSeq, type SessionEvent, type SessionId } from '@deepseek-ai/dsh-session'
 import type { UsageLog } from '../src/usage-log.ts'
 import { autoSyncIfNeeded, syncHistory, type SyncPersistence } from '../src/sync.ts'
 import { isInitialized } from '../src/sync-state.ts'
@@ -42,9 +42,9 @@ describe('syncHistory', () => {
       {
         id: 's1',
         events: [
-          { type: 'turn/start', seq: 0, time: 1, data: { turn: 1 } } as SessionEvent,
+          { type: 'turn/start', seq: SessionSeq(0), time: 1, data: { turn: 1 } } as SessionEvent,
           messageEventWith('m1', 1),
-          { type: 'assistant/chunk', seq: 2, time: 2, data: { turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: 'x' } } } as SessionEvent,
+          { type: 'assistant/chunk', seq: SessionSeq(2), time: 2, data: { turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: 'x' } } } as SessionEvent,
         ],
       },
     ])

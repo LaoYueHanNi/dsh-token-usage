@@ -234,14 +234,15 @@ export interface SectionGuard {
  * `turn/end`). Existence alone must not count — an idle open tab stays in the
  * store while its conversation ended, and events only append while a turn is
  * open, which is exactly the window that makes a migration unsafe.
- * @param sessions - the store's live sessions (creation order; irrelevant here).
+ * dsh 0.1.2-alpha.5 made `Session.events` private behind `snapshotEvents()`;
+ * callers pass each session's snapshot so this stays a plain duck type.
+ * @param eventLogs - each live session's event snapshot (order irrelevant).
  * @returns how many of them are mid-conversation right now.
  */
-export function countInteractingSessions(sessions: readonly { events: readonly { type: string }[] }[]): number {
+export function countInteractingSessions(eventLogs: readonly (readonly { type: string }[])[]): number {
   let interacting = 0
-  for (const session of sessions) {
+  for (const events of eventLogs) {
     // The turn a log ends in is the one that matters; scan back to its edge.
-    const events = session.events
     for (let i = events.length - 1; i >= 0; i--) {
       const type = events[i]?.type
       if (type === 'turn/start') {
@@ -340,7 +341,7 @@ export function apply(ctx: Context, config: Config = {}) {
     // runs; a copied file would then be stale the moment it lands. Refuse the
     // move and keep the current directory — the user lets the conversation
     // finish and retries.
-    const interacting = countInteractingSessions(ctx.sessions.list())
+    const interacting = countInteractingSessions(ctx.sessions.list().map(session => session.snapshotEvents()))
     if (interacting > 0) {
       throw new Error(`cannot move the data directory while ${String(interacting)} session(s) are mid-conversation; let them finish and save again`)
     }
@@ -662,7 +663,7 @@ export function apply(ctx: Context, config: Config = {}) {
       webCtx.effect(() => webCtx.webServer.register(
         createDirectoryGuardRoute((proposed): DirectoryGuardView => directoryGuard(proposed, {
           runningDir: current?.dir,
-          interactingSessions: countInteractingSessions(ctx.sessions.list()),
+          interactingSessions: countInteractingSessions(ctx.sessions.list().map(session => session.snapshotEvents())),
         })),
       ), 'token-usage: directory guard route')
       // The card's manual "scan again" affordance: `POST` kicks off a run,
@@ -700,7 +701,7 @@ export function apply(ctx: Context, config: Config = {}) {
     settingsCtx.settings.installSection(ctx, TOKEN_USAGE_NS, sectionSchema, sectionOf(config), {
       validate: (value) => validateSectionChange(value, {
         runningDir: current?.dir,
-        interactingSessions: countInteractingSessions(ctx.sessions.list()),
+        interactingSessions: countInteractingSessions(ctx.sessions.list().map(session => session.snapshotEvents())),
       }),
       setSource: (source) => { sectionSource = source },
       onChange: () => { start(); requestSync() },

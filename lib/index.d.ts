@@ -102,14 +102,14 @@ export interface SectionGuard {
  * `turn/end`). Existence alone must not count — an idle open tab stays in the
  * store while its conversation ended, and events only append while a turn is
  * open, which is exactly the window that makes a migration unsafe.
- * @param sessions - the store's live sessions (creation order; irrelevant here).
+ * dsh 0.1.2-alpha.5 made `Session.events` private behind `snapshotEvents()`;
+ * callers pass each session's snapshot so this stays a plain duck type.
+ * @param eventLogs - each live session's event snapshot (order irrelevant).
  * @returns how many of them are mid-conversation right now.
  */
-export declare function countInteractingSessions(sessions: readonly {
-    events: readonly {
-        type: string;
-    }[];
-}[]): number;
+export declare function countInteractingSessions(eventLogs: readonly (readonly {
+    type: string;
+}[])[]): number;
 /**
  * The refusal facts of one would-be directory save: `blocked` says the
  * section validator would refuse that save right now (a directory change
