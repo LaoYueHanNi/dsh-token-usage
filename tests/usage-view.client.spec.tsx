@@ -428,6 +428,32 @@ describe('UsageView', () => {
     expect(screen.getAllByLabelText(/请求/).length).toBe(2)
   })
 
+  it('switches the trend chart to cumulative totals', async () => {
+    // Same burst fixture: two buckets of 50 and 5 requests (17.25K + 3.1K).
+    const series = Array.from({ length: 55 }, (_, index) => ({
+      time: 1_000 + index * 100,
+      tokens: 100 + index * 10,
+    }))
+    const fetch = stubFetch({ root: { ...ROOT_SUMMARY, requestSeries: series } })
+    renderView({ liveStats: LIVE_STATS })
+    // Interval is the default; both mode buttons sit beside the chart title.
+    const intervalBtn = await screen.findByRole('button', { name: '分时' })
+    const cumulativeBtn = screen.getByRole('button', { name: '累计' })
+    expect(intervalBtn.getAttribute('aria-pressed')).toBe('true')
+    expect(cumulativeBtn.getAttribute('aria-pressed')).toBe('false')
+    expect(screen.getByLabelText('按时间分段的 token 曲线')).toBeTruthy()
+    fireEvent.click(cumulativeBtn)
+    expect(cumulativeBtn.getAttribute('aria-pressed')).toBe('true')
+    expect(intervalBtn.getAttribute('aria-pressed')).toBe('false')
+    expect(screen.getByLabelText('累计 token 曲线')).toBeTruthy()
+    // Every point's aria now reads a running total: the second bucket's 5
+    // requests carry everything before them (17.25K + 3.1K → 20K).
+    expect(screen.getAllByLabelText(/累计/).length).toBe(3)
+    expect(screen.getByLabelText(/累计 20K/)).toBeTruthy()
+    // The mode flip is a pure client-side re-render — no new fetch.
+    expect(fetch.mock.calls).toHaveLength(1)
+  })
+
   it('keeps previous figures on screen while a refresh runs (no flash)', async () => {
     let treeCalls = 0
     let resolveSecond: (value: unknown) => void = () => {}

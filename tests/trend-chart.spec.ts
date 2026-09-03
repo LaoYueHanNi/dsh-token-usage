@@ -7,7 +7,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
-  MAX_BUCKETS, bucketSeries, bucketWidth, buildChartPoints, scaleSeries, scaleToSpan,
+  MAX_BUCKETS, bucketSeries, bucketWidth, buildChartPoints, cumulateSeries, scaleSeries, scaleToSpan,
 } from '../src/client/TrendChart.tsx'
 import type { ChartSeries } from '../src/client/TrendChart.tsx'
 import type { RequestPoint } from '../src/wire.ts'
@@ -132,6 +132,60 @@ describe('buildChartPoints', () => {
       expect(series.points[0]?.count).toBe(10)
       expect(series.points[0]?.full).toContain('–')
     }
+  })
+})
+
+describe('cumulateSeries', () => {
+  it('replaces each temporal point with the running total, keeping shape fields', () => {
+    const series: ChartSeries = {
+      mode: 'temporal',
+      points: [
+        { key: 'b0', label: '10:00', full: '10:00', tokens: 50, time: 1_000, count: 3 },
+        { key: 'b1', label: '10:05', full: '10:05', tokens: 80, time: 6_000, count: 5 },
+        { key: 'b2', label: '10:10', full: '10:10', tokens: 20, time: 11_000, count: 1 },
+      ],
+    }
+    const cumulative = cumulateSeries(series)
+    expect(cumulative.mode).toBe('temporal')
+    expect(cumulative.points.map(point => point.tokens)).toEqual([50, 130, 150])
+    if (cumulative.mode === 'temporal') {
+      // The x-axis inputs (time / count) ride along untouched, so the
+      // renderer's temporal scale and the bucket tooltip stay correct.
+      expect(cumulative.points[0]).toMatchObject({ time: 1_000, count: 3 })
+      expect(cumulative.points[2]).toMatchObject({ time: 11_000, count: 1 })
+    }
+  })
+
+  it('turns an empty equidistant point into a flat plateau instead of a dip to zero', () => {
+    const series: ChartSeries = {
+      mode: 'equidistant',
+      points: [
+        { key: '2026-09-01', label: '09-01', full: '2026-09-01', tokens: 100 },
+        { key: '2026-09-02', label: '09-02', full: '2026-09-02', tokens: 0 },
+        { key: '2026-09-03', label: '09-03', full: '2026-09-03', tokens: 30 },
+      ],
+    }
+    expect(cumulateSeries(series).points.map(point => point.tokens)).toEqual([100, 100, 130])
+  })
+
+  it('maps a single point to its own total', () => {
+    const series: ChartSeries = {
+      mode: 'equidistant',
+      points: [{ key: 'd0', label: '', full: '', tokens: 42 }],
+    }
+    expect(cumulateSeries(series).points[0]?.tokens).toBe(42)
+  })
+
+  it('leaves the input series untouched', () => {
+    const series: ChartSeries = {
+      mode: 'equidistant',
+      points: [
+        { key: 'd0', label: '', full: '', tokens: 10 },
+        { key: 'd1', label: '', full: '', tokens: 10 },
+      ],
+    }
+    cumulateSeries(series)
+    expect(series.points.map(point => point.tokens)).toEqual([10, 10])
   })
 })
 

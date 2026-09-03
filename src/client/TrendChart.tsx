@@ -25,13 +25,13 @@ import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { RequestPoint, UsageDayRow, UsageHourRow } from '../wire.ts'
 import { formatTokens } from './format.ts'
 import { tickValues } from './trend-chart/axis.ts'
-import { buildChartPoints } from './trend-chart/points.ts'
+import { buildChartPoints, cumulateSeries } from './trend-chart/points.ts'
 import { dotRadius, labelIndices, scaleSeries } from './trend-chart/scale.ts'
 import styles from './TrendChart.module.css'
 
 /** Re-export the chart's pure helpers for the test suite. */
 export {
-  MAX_BUCKETS, bucketSeries, bucketWidth, buildChartPoints, dotRadius, labelIndices,
+  MAX_BUCKETS, bucketSeries, bucketWidth, buildChartPoints, cumulateSeries, dotRadius, labelIndices,
   niceStep, scaleSeries, scaleToSpan, tickValues,
 } from './trend-chart/index.ts'
 export type { TrendBucket } from './trend-chart/bucket.ts'
@@ -66,22 +66,30 @@ interface PlottedPoint {
 }
 
 /**
+ * The chart's y-axis reading: each point's own interval total (the
+ * default), or the running cumulative total up to that point — a
+ * monotonic rise over the same x axis.
+ */
+export type TrendChartMode = 'interval' | 'cumulative'
+
+/**
  * Apply the `t`-based localisation to a point's `full` tooltip. The pre-shape
  * labels live in points.ts; the chart's aria-label and the floating tooltip
- * both use this single source so the two stay consistent.
+ * both use this single source so the two stay consistent. Cumulative mode
+ * swaps in its own phrasing so "total" never reads ambiguous next to a
+ * running sum.
  * @param t - the locale seat.
  * @param point - the pre-shaped point.
+ * @param mode - the active y-axis mode.
  * @returns the tooltip / aria-label text.
  */
-function tipOf(t: TranslateNS<'token-usage'>, point: PlottedPoint): string {
+function tipOf(t: TranslateNS<'token-usage'>, point: PlottedPoint, mode: TrendChartMode): string {
   if (point.time !== undefined) {
-    return t('chart.bucket', {
-      window: point.full,
-      count: String(point.count ?? 0),
-      tokens: formatTokens(point.tokens),
-    })
+    const params = { window: point.full, count: String(point.count ?? 0), tokens: formatTokens(point.tokens) }
+    return mode === 'cumulative' ? t('chart.cumulativeBucket', params) : t('chart.bucket', params)
   }
-  return t('chart.pointLabel', { day: point.full, tokens: formatTokens(point.tokens) })
+  const params = { day: point.full, tokens: formatTokens(point.tokens) }
+  return mode === 'cumulative' ? t('chart.cumulativePoint', params) : t('chart.pointLabel', params)
 }
 
 /**
@@ -97,22 +105,28 @@ function tipOf(t: TranslateNS<'token-usage'>, point: PlottedPoint): string {
  * @param props - the filtered per-day rows plus the optional per-hour rows
  * (when present the chart plots hours instead of days), the optional
  * per-request series (session-scoped reads), the active range bounds
- * (absent when unfiltered; the chart then spans first to last row), and
+ * (absent when unfiltered; the chart then spans first to last row), the
+ * optional y-axis mode (interval totals, or their running cumulative sum),
+ * and
  * the `t` seat for the empty hint and chart aria-label.
  * @returns the SVG chart, or a placeholder for an empty range.
  */
-export function TrendChart({ rows, hours, requests, from, to, t }: {
+export function TrendChart({ rows, hours, requests, from, to, mode = 'interval', t }: {
   rows: readonly UsageDayRow[]
   hours?: readonly UsageHourRow[]
   requests?: readonly RequestPoint[]
   from?: string
   to?: string
+  mode?: TrendChartMode
   t: TranslateNS<'token-usage'>
 }): ReactNode {
-  const series = buildChartPoints({ rows, hours, requests, from, to })
-  if (series === null) {
+  const base = buildChartPoints({ rows, hours, requests, from, to })
+  if (base === null) {
     return <p className={styles.empty}>{t('chart.empty')}</p>
   }
+  // Cumulative mode is a pure y-axis transform on the built points (a
+  // prefix sum); the x axis, bucketing, and point count are untouched.
+  const series = mode === 'cumulative' ? cumulateSeries(base) : base
   // Materialise the points (and apply t() through `tipOf` at render time).
   const points: PlottedPoint[] = series.points.map(point => ({
     key: point.key,
@@ -136,9 +150,14 @@ export function TrendChart({ rows, hours, requests, from, to, t }: {
     .map((point, index) => `${index === 0 ? 'M' : 'L'}${xs[index]!.toFixed(1)},${y(point.tokens).toFixed(1)}`)
     .join(' ')
 
-  const chartAria = series.mode === 'temporal'
-    ? t('chart.ariaRequests')
-    : hours !== undefined ? t('chart.ariaHour') : t('chart.aria')
+  // Cumulative reads one aria regardless of granularity: the per-mode
+  // phrasing ("daily" / "hourly" / "request-bucketed") describes interval
+  // totals and would mislabel a running sum; the tooltip carries the detail.
+  const chartAria = mode === 'cumulative'
+    ? t('chart.ariaCumulative')
+    : series.mode === 'temporal'
+      ? t('chart.ariaRequests')
+      : hours !== undefined ? t('chart.ariaHour') : t('chart.aria')
 
   // The hit target around each point spans to the midpoint of each
   // neighbour (the full width for a single point), with a floor so
@@ -201,7 +220,7 @@ export function TrendChart({ rows, hours, requests, from, to, t }: {
             width={hit.width}
             height={innerHeight}
             fill="transparent"
-            aria-label={tipOf(t, point)}
+            aria-label={tipOf(t, point, mode)}
             role="button"
             tabIndex={0}
             className={styles.hit}
@@ -216,7 +235,7 @@ export function TrendChart({ rows, hours, requests, from, to, t }: {
           // Floating label: kept inside the canvas horizontally (near
           // the edges it flips toward the center), above the point with
           // a ceiling at the canvas top.
-          const label = tipOf(t, activePoint)
+          const label = tipOf(t, activePoint, mode)
           const charWidth = 6.2
           const labelWidth = label.length * charWidth + 12
           const center = xs[active!]!

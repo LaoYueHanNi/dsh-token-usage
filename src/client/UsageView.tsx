@@ -37,6 +37,7 @@ import { HitRateText } from './HitRateText.tsx'
 import { aggregateProjections, buildChildIndex, directSubagentIds, subagentParentOf, subtreeIds, buildStatsFreshnessKey } from './session-stats.ts'
 import { RequestsCell, RequestsSplitHead, RequestsStatCard, StatCard } from './StatCard.tsx'
 import { TrendChart } from './TrendChart.tsx'
+import type { TrendChartMode } from './TrendChart.tsx'
 import { useColorSchemeMirror } from './use-color-scheme.ts'
 import styles from './UsageView.module.css'
 
@@ -88,6 +89,9 @@ export function UsageView({ useSessions, useProjection, sessionId, t }: UsageVie
   const rootRef = useRef<HTMLDivElement>(null)
   useColorSchemeMirror(rootRef)
   const [scope, setScope] = useState<UsageScope>('session')
+  // The trend chart's y-axis reading: per-interval totals or their running
+  // cumulative sum. Session-local like the scope switch (no persistence).
+  const [chartMode, setChartMode] = useState<TrendChartMode>('interval')
   // The dashboard focus: the active conversation until a subagent row is
   // drilled into. Reset when the conversation itself changes — the pane
   // may reuse this instance across session switches.
@@ -237,12 +241,33 @@ export function UsageView({ useSessions, useProjection, sessionId, t }: UsageVie
               : null}
             <div className={styles['mid']}>
               <section className={styles['chartCol']}>
-                <h3 className={styles['subtitle']}>{t('view.chart.title')}</h3>
+                <div className={styles['chartHead']}>
+                  <h3 className={styles['subtitle']}>{t('view.chart.title')}</h3>
+                  <div className={styles['segmented']} role="group" aria-label={t('chart.mode.label')}>
+                    <button
+                      type="button"
+                      className={chartMode === 'interval' ? `${styles['segBtn']} ${styles['segActive']}` : styles['segBtn']}
+                      aria-pressed={chartMode === 'interval'}
+                      onClick={() => setChartMode('interval')}
+                    >
+                      {t('chart.mode.interval')}
+                    </button>
+                    <button
+                      type="button"
+                      className={chartMode === 'cumulative' ? `${styles['segBtn']} ${styles['segActive']}` : styles['segBtn']}
+                      aria-pressed={chartMode === 'cumulative'}
+                      onClick={() => setChartMode('cumulative')}
+                    >
+                      {t('chart.mode.cumulative')}
+                    </button>
+                  </div>
+                </div>
                 {/* Session-scoped reads carry the per-request series: the
                     trend plots one point per request. The whole-log settings
                     read has no series and falls back to the day/hour rows. */}
                 <TrendChart
                   rows={summary.byDay}
+                  mode={chartMode}
                   t={t}
                   {...summary.requestSeries !== undefined ? { requests: summary.requestSeries } : {}}
                   {...summary.byDay.length === 1 ? { hours: summary.byHour } : {}}

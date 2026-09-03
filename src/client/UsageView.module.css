@@ -177,6 +177,14 @@
   gap: 8px;
 }
 
+/* Same pattern as .subagentsHead: the trend-mode segmented control sits
+ * tight to the right of the chart title, not spread to the row's far end. */
+.chartHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .subtitle {
   margin: 0;
   font-size: 13px;

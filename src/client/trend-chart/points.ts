@@ -66,6 +66,27 @@ export function buildChartPoints(input: BuildPointsInput): ChartSeries | null {
   return null
 }
 
+/**
+ * The cumulative view of a series: every point's `tokens` replaced by the
+ * running total up to and including that point (a prefix sum), so the chart
+ * reads as a monotonic rise. Orthogonal to the mode — all three input
+ * shapes are time-ascending, so a plain forward fold is order-correct. The
+ * input series is left untouched; each point is copied with only `tokens`
+ * rewritten, so the renderer's shape probes (`'time' in point`) keep working.
+ * @param series - the series from {@link buildChartPoints}.
+ * @returns a new series of the same mode and shape.
+ */
+export function cumulateSeries(series: ChartSeries): ChartSeries {
+  let running = 0
+  const fold = <T extends { tokens: number }>(points: readonly T[]): T[] =>
+    points.map(point => {
+      running += point.tokens
+      return { ...point, tokens: running }
+    })
+  if (series.mode === 'equidistant') return { mode: 'equidistant', points: fold(series.points) }
+  return { mode: 'temporal', points: fold(series.points) }
+}
+
 /** A series that already carries `count` (the host's `fields=session`
  * downsample) is plotted as-is; a raw per-request series is folded here. */
 function bucketsOf(requests: readonly RequestPoint[]): TrendBucket[] {
