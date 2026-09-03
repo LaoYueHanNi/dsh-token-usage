@@ -24,7 +24,7 @@ Repo: <https://github.com/LaoYueHanNi/dsh-token-usage>
 
 ## Features
 
-- **Live hook**: every successful model request is appended to per-day JSONL files (request id, model, input / output / cache-read / cache-write tokens, time, session id).
+- **Live hook**: every provider-billed call is appended to per-day JSONL files (request id, model, input / output / cache-read / cache-write tokens, time, session id).
 - **Web stats page**: filters (date range + model + `1d`/`7d`/`30d` shortcuts), summary cards, daily trend chart (hover a day for its total), per-model table.
 - **Session usage view tab**: the conversation pane gains a **Usage** view tab (beside Chat / Trajectory) showing the active session's token & cost dashboard — six stat cards (requests, cost, cache hit rate, average time-to-first-token, generation throughput, total tokens), a 4-bucket token strip, an hourly trend chart, and a per-model table. A **Session / With subagents** scope switch aggregates the whole subagent subtree in one request, and the subagent table lists each child (requests, total tokens, cost, hit rate, TTFT, throughput) with drill-in navigation back to the parent. Token/cost figures come from the plugin's own billing chain (post-install records); TTFT and throughput come from DSH's `sessionStats` session projection (covers pre-install history). Sessions without records degrade to a placeholder, never an error.
 

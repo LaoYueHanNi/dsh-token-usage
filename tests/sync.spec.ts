@@ -6,7 +6,7 @@ import type { SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
 import type { UsageLog } from '../src/usage-log.ts'
 import { autoSyncIfNeeded, syncHistory, type SyncPersistence } from '../src/sync.ts'
 import { isInitialized } from '../src/sync-state.ts'
-import { messageEvent } from './helpers.ts'
+import { compactionEvent, messageEvent } from './helpers.ts'
 
 function fakePersistence(sessions: Array<{ id: string; events: SessionEvent[] }>): SyncPersistence {
   return {
@@ -67,6 +67,71 @@ describe('syncHistory', () => {
     const persistence = fakePersistence([{ id: 's1', events: [messageEventWith('m1', 1), messageEventWith('m2', 2)] }])
     const result = await syncHistory({ persistence, log })
     expect(result).toEqual({ added: 1, skipped: 1 })
+  })
+
+  it('records compaction/summary events as compaction rows', async () => {
+    const log = new FakeLog()
+    const persistence = fakePersistence([
+      {
+        id: 's1',
+        events: [
+          messageEventWith('m1', 1),
+          compactionEvent({ seq: 4 }),
+        ] as SessionEvent[],
+      },
+    ])
+    const result = await syncHistory({ persistence, log })
+    expect(result).toEqual({ added: 2, skipped: 0 })
+    expect(log.rows.map(row => row.requestId)).toEqual(['m1', 'compaction:s1:4'])
+    expect(log.rows[1]).toMatchObject({ kind: 'compaction', model: 'deepseek-chat' })
+  })
+
+  it('skips compaction/summary events without usable usage', async () => {
+    const log = new FakeLog()
+    const persistence = fakePersistence([
+      {
+        id: 's1',
+        events: [
+          messageEventWith('m1', 1),
+          compactionEvent({ seq: 4, usage: undefined }),
+        ] as SessionEvent[],
+      },
+    ])
+    const result = await syncHistory({ persistence, log })
+    expect(result).toEqual({ added: 1, skipped: 0 })
+    expect(log.rows.map(row => row.requestId)).toEqual(['m1'])
+  })
+
+  it('dedupes compaction rows across repeated syncs', async () => {
+    const log = new FakeLog()
+    const persistence = fakePersistence([
+      {
+        id: 's1',
+        events: [
+          messageEventWith('m1', 1),
+          compactionEvent({ seq: 4 }),
+        ] as SessionEvent[],
+      },
+    ])
+    await syncHistory({ persistence, log })
+    const result = await syncHistory({ persistence, log })
+    expect(result).toEqual({ added: 0, skipped: 2 })
+  })
+
+  it('skips compaction/summary events when recordCompaction is false', async () => {
+    const log = new FakeLog()
+    const persistence = fakePersistence([
+      {
+        id: 's1',
+        events: [
+          messageEventWith('m1', 1),
+          compactionEvent({ seq: 4 }),
+        ] as SessionEvent[],
+      },
+    ])
+    const result = await syncHistory({ persistence, log, recordCompaction: false })
+    expect(result).toEqual({ added: 1, skipped: 0 })
+    expect(log.rows.map(row => row.requestId)).toEqual(['m1'])
   })
 
   it('throws AbortError when the signal is already aborted', async () => {

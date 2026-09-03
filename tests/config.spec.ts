@@ -58,6 +58,12 @@ describe('validateConfig', () => {
     expect(() => validateConfig({ startupCapMs: -1 } as unknown as Config)).toThrow(/non-negative/)
   })
 
+  it('accepts a recordCompaction boolean and rejects a non-boolean', () => {
+    expect(() => validateConfig({ recordCompaction: true })).not.toThrow()
+    expect(() => validateConfig({ recordCompaction: false })).not.toThrow()
+    expect(() => validateConfig({ recordCompaction: 1 } as unknown as Config)).toThrow(/recordCompaction/)
+  })
+
   it('rejects a blank path', () => {
     expect(() => validateConfig({ path: '' })).toThrow(/non-empty string/)
   })

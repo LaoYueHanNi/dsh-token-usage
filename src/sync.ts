@@ -1,6 +1,8 @@
 /**
  * History sync: replay every persisted session log and append the request
- * rows the log does not already hold, deduped by request id. The sync runs
+ * rows the log does not already hold, deduped by request id. Rows come from
+ * `assistant/message` events (plain requests) and, unless disabled, from
+ * `compaction/summary` events (the summarize provider calls). The sync runs
  * automatically ONCE, on the first startup after installation (gated by the
  * initialized marker).
  *
@@ -8,8 +10,11 @@
  */
 
 import type { SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
+// Type-only: ensures the merged `compaction/*` payload types are in this
+// program independent of the usage-record import chain.
+import type {} from '@deepseek-ai/dsh-compaction/types'
 import { isInitialized, markInitialized } from './sync-state.ts'
-import { recordFromEvent } from './usage-record.ts'
+import { recordFromCompaction, recordFromEvent, type UsageRecord } from './usage-record.ts'
 import type { UsageLog } from './usage-log.ts'
 
 /** Outcome of one sync run. */
@@ -51,6 +56,9 @@ export interface SyncPersistence {
 export interface SyncDeps {
   persistence: SyncPersistence
   log: UsageLog
+  /** Whether the sync records `compaction/summary` events (default true,
+   * mirroring the `recordCompaction` config). */
+  recordCompaction?: boolean
 }
 
 /**
@@ -81,8 +89,14 @@ export async function syncHistory(
     const inspection = await deps.persistence.inspect(session.id, signal)
     for (const event of inspection.events) {
       signal?.throwIfAborted()
-      if (event.type !== 'assistant/message') continue
-      const record = recordFromEvent(event, session.id)
+      let record: UsageRecord | null | undefined
+      if (event.type === 'assistant/message') {
+        record = recordFromEvent(event, session.id)
+      } else if (event.type === 'compaction/summary' && deps.recordCompaction !== false) {
+        // A compaction without usable usage reads as null and is skipped.
+        record = recordFromCompaction(event, session.id)
+      }
+      if (record === undefined || record === null) continue
       if (await deps.log.record(record)) added += 1
       else skipped += 1
     }

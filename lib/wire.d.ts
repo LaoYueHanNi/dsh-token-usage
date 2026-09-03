@@ -120,7 +120,9 @@ export type FullSyncView = {
 };
 /** Aggregated token counts over one group of records. */
 export interface UsageTotals {
-    /** Number of recorded requests (records without provider usage count here). */
+    /** Number of recorded provider-billed calls: plain requests plus
+     * compaction summarize requests (records without provider usage count
+     * here). */
     requests: number;
     /** Uncached input tokens; billed input = input + cacheRead + cacheWrite. */
     inputTokens: number;
@@ -130,6 +132,9 @@ export interface UsageTotals {
     cacheReadTokens: number;
     /** Cache-write input tokens. */
     cacheWriteTokens: number;
+    /** Compaction summarize requests in this group; absent on legacy rollups
+     * (reads as 0). Plain requests = `requests - (compactions ?? 0)`. */
+    compactions?: number;
 }
 /** One per-day aggregation row, keyed by local date `YYYY-MM-DD`. */
 export interface UsageDayRow {

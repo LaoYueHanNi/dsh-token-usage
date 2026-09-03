@@ -2,10 +2,11 @@ import { describe, expect, it } from 'vitest'
 import {
   parseRecord,
   projectUsage,
+  recordFromCompaction,
   recordFromEvent,
   serializeRecord,
 } from '../src/usage-record.ts'
-import { messageEvent } from './helpers.ts'
+import { compactionEvent, messageEvent } from './helpers.ts'
 
 describe('projectUsage', () => {
   it('renders an absent usage record as undefined', () => {
@@ -65,6 +66,40 @@ describe('recordFromEvent', () => {
   })
 })
 
+describe('recordFromCompaction', () => {
+  it('projects the summarize call with the compaction kind', () => {
+    const record = recordFromCompaction(compactionEvent(), 'session-1')
+    expect(record).toEqual({
+      requestId: 'compaction:session-1:7',
+      time: 1_700_000_000_000,
+      sessionId: 'session-1',
+      model: 'deepseek-chat',
+      usage: { inputTokens: 100_000, outputTokens: 500, cacheReadTokens: 3_000 },
+      kind: 'compaction',
+    })
+  })
+
+  it('keys the row on the event seq, not the compactionId', () => {
+    const first = recordFromCompaction(compactionEvent({ seq: 7, compactionId: 'cmp-x' }), 's1')
+    const second = recordFromCompaction(compactionEvent({ seq: 8, compactionId: 'cmp-x' }), 's1')
+    expect(first!.requestId).toBe('compaction:s1:7')
+    expect(second!.requestId).toBe('compaction:s1:8')
+    // A different session at the same seq stays distinct.
+    const other = recordFromCompaction(compactionEvent({ seq: 7 }), 's2')
+    expect(other!.requestId).toBe('compaction:s2:7')
+  })
+
+  it('returns null when the event carries no usage', () => {
+    expect(recordFromCompaction(compactionEvent({ usage: undefined }), 'session-1')).toBeNull()
+  })
+
+  it('returns null when the usage is invalid', () => {
+    expect(recordFromCompaction(compactionEvent({
+      usage: { inputTokens: NaN, outputTokens: 5 },
+    }), 'session-1')).toBeNull()
+  })
+})
+
 describe('serialize/parse round trip', () => {
   it('round-trips a full record', () => {
     const record = recordFromEvent(messageEvent(), 'session-1')
@@ -82,6 +117,11 @@ describe('serialize/parse round trip', () => {
       model: 'model "x" \n',
     }), 'sess/1')
     expect(parseRecord(serializeRecord(record))).toEqual(record)
+  })
+
+  it('round-trips a compaction record with its kind', () => {
+    const record = recordFromCompaction(compactionEvent(), 'session-1')
+    expect(parseRecord(serializeRecord(record!))).toEqual(record)
   })
 })
 
@@ -146,6 +186,41 @@ describe('parseRecord', () => {
       time: 1_700_000_000_000,
       sessionId: 's1',
       model: 'deepseek-chat',
+    })
+  })
+
+  it('normalizes an absent or unknown kind to a plain request', () => {
+    const legacy = JSON.stringify({
+      requestId: 'legacy-3',
+      time: 1_700_000_000_000,
+      sessionId: 's1',
+      model: 'deepseek-chat',
+      usage: { inputTokens: 10, outputTokens: 5 },
+    })
+    // No kind key at all (a pre-compaction row).
+    expect('kind' in parseRecord(legacy)!).toBe(false)
+    // An unknown kind value (a future row kind) keeps the row as a request.
+    const future = JSON.parse(legacy) as Record<string, unknown>
+    future.kind = 'rebalance'
+    expect('kind' in parseRecord(JSON.stringify(future))!).toBe(false)
+  })
+
+  it('keeps the compaction kind through coercion', () => {
+    const row = JSON.stringify({
+      requestId: 'compaction:s1:7',
+      time: 1_700_000_000_000,
+      sessionId: 's1',
+      model: 'deepseek-chat',
+      kind: 'compaction',
+      usage: { inputTokens: 100, outputTokens: 5 },
+    })
+    expect(parseRecord(row)).toEqual({
+      requestId: 'compaction:s1:7',
+      time: 1_700_000_000_000,
+      sessionId: 's1',
+      model: 'deepseek-chat',
+      kind: 'compaction',
+      usage: { inputTokens: 100, outputTokens: 5 },
     })
   })
 })

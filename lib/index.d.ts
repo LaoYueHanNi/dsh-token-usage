@@ -47,6 +47,10 @@ export interface Config {
     /** The provider quota feature (the input-bar button): enabled by default,
      * with the poll cadence the host asks the browser to follow. */
     quota?: QuotaConfig;
+    /** Whether compaction summarize requests (`compaction/summary` events)
+     * are recorded and billed like plain requests (default `true`). `false`
+     * skips them in both the live hook and the history sync. */
+    recordCompaction?: boolean;
 }
 /** Composition knobs of the quota feature (cordis.yml level). */
 export interface QuotaConfig {

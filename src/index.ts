@@ -17,6 +17,7 @@
  */
 
 import { homedir } from 'node:os'
+import { unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
@@ -25,6 +26,8 @@ import z from '@deepseek-ai/schemastery'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 // Type-only: pulls the ctx.sessionPersistence declaration merge into the program.
 import type {} from '@deepseek-ai/dsh-session-persistence'
+// Type-only: pulls the merged `compaction/*` event payloads into the program.
+import type {} from '@deepseek-ai/dsh-compaction/types'
 // Type-only: pulls the ctx.webServer declaration merge into the program.
 import type {} from '@deepseek-ai/dsh-host-webserver'
 // Type-only: pulls the ctx.llm declaration merge (the provider directory).
@@ -32,9 +35,10 @@ import type {} from '@deepseek-ai/dsh-llm'
 import { UsageLog } from './usage-log.ts'
 import { cleanSource, copyData, type MigrationProgress } from './migrate.ts'
 import { resolvePricingUrl, syncCloudPricing, type PricingSourceInput } from './pricing.ts'
-import { recordFromEvent } from './usage-record.ts'
+import { recordFromCompaction, recordFromEvent, type UsageRecord } from './usage-record.ts'
 import { autoSyncIfNeeded, syncHistory } from './sync.ts'
 import { clearRecordCache, warmRecordCache } from './record-cache.ts'
+import { ROLLUP_FILE_NAME, ROLLUP_TMP_FILE_NAME } from './rollup.ts'
 import { createDirectoryGuardRoute, createFullSyncRoute, createMigrationRoute, createStatsRoute, type FullSyncTrigger } from './stats-route.ts'
 import { currencyOfRegion, type DirectoryGuardView, type FullSyncView, type QuotaPayload } from './wire.ts'
 import { createQuotaRoute } from './quota/quota-route.ts'
@@ -74,6 +78,10 @@ export interface Config {
   /** The provider quota feature (the input-bar button): enabled by default,
    * with the poll cadence the host asks the browser to follow. */
   quota?: QuotaConfig
+  /** Whether compaction summarize requests (`compaction/summary` events)
+   * are recorded and billed like plain requests (default `true`). `false`
+   * skips them in both the live hook and the history sync. */
+  recordCompaction?: boolean
 }
 
 /** Composition knobs of the quota feature (cordis.yml level). */
@@ -101,6 +109,7 @@ export const Config: z<Config> = z.object({
   pricingRegion: z.union([z.const('domestic'), z.const('overseas')]),
   startupDeferMs: z.number().min(0),
   startupCapMs: z.number().min(0),
+  recordCompaction: z.boolean(),
   quota: z.object({
     enabled: z.boolean(),
     intervalSec: z.number().min(15).max(3600),
@@ -113,6 +122,7 @@ export function validateConfig(config: Config): void {
     key !== 'path' && key !== 'pricingUrl' && key !== 'pricingUrlDomestic'
     && key !== 'pricingUrlOverseas' && key !== 'pricingRegion' && key !== 'startupDeferMs'
     && key !== 'startupCapMs'
+    && key !== 'recordCompaction'
     && key !== 'quota')
   if (unknown !== undefined) {
     throw new Error(`TokenUsageConfig: unknown key "${unknown}"`)
@@ -142,6 +152,9 @@ export function validateConfig(config: Config): void {
   if (config.startupCapMs !== undefined
       && (!Number.isFinite(config.startupCapMs) || config.startupCapMs < 0)) {
     throw new Error('TokenUsageConfig: "startupCapMs" must be a non-negative number')
+  }
+  if (config.recordCompaction !== undefined && typeof config.recordCompaction !== 'boolean') {
+    throw new Error('TokenUsageConfig: "recordCompaction" must be a boolean')
   }
   if (config.quota !== undefined) {
     if (typeof config.quota !== 'object' || config.quota === null) {
@@ -491,7 +504,7 @@ export function apply(ctx: Context, config: Config = {}) {
     if (target === undefined) return { started: false, reason: 'already-running' }
     fullSyncRunning = true
     fullSyncStatus = { status: 'running', processed: 0, total: 0, added: 0, skipped: 0 }
-    void syncHistory({ persistence: ctx.sessionPersistence, log: target.log },
+    void syncHistory({ persistence: ctx.sessionPersistence, log: target.log, recordCompaction },
       (tick) => {
         // The route's status thunk reads `fullSyncStatus` by reference, so each
         // tick is visible to the next poll without any other wiring.
@@ -513,6 +526,10 @@ export function apply(ctx: Context, config: Config = {}) {
           added: result.added,
           skipped: result.skipped,
         }
+        // A manual scan usually backfills compactions this version just
+        // learned to record (or rows a crash dropped): drop the derived
+        // stats state so the next read aggregates over the appended rows.
+        if (result.added > 0) invalidateDerivedState(target.dir)
         logger.info(`[token-usage] full sync done: ${String(result.added)} added, ${String(result.skipped)} skipped`)
       })
       .catch((error: unknown) => {
@@ -593,6 +610,23 @@ export function apply(ctx: Context, config: Config = {}) {
 
   const quotaEnabled = config.quota?.enabled !== false
   const quotaIntervalSec = Math.min(3600, Math.max(15, Math.round(config.quota?.intervalSec ?? 60)))
+  // Whether compaction summarize requests join the billing chain. Resolved
+  // once at apply: the composition config is immutable for the runtime.
+  const recordCompaction = config.recordCompaction !== false
+
+  /**
+   * Drop the derived stats state after a sync appended rows. The rollup may
+   * already cover a day the appended rows landed in (a sync straddling
+   * midnight writes into a file that turns frozen mid-run, and a frozen file
+   * at or before `upto` is never re-read), and the record cache may hold a
+   * stale parse of a file the sync appended to. Both are derived state: the
+   * next stats read rebuilds them, so dropping them is lossless.
+   */
+  const invalidateDerivedState = (dir: string): void => {
+    clearRecordCache(dir)
+    void unlink(join(dir, ROLLUP_FILE_NAME)).catch(() => undefined)
+    void unlink(join(dir, ROLLUP_TMP_FILE_NAME)).catch(() => undefined)
+  }
   const quotaService = new QuotaService({
     resolveProvider: sessionId => resolveCurrentProvider({
       tracker: quotaTracker,
@@ -641,8 +675,14 @@ export function apply(ctx: Context, config: Config = {}) {
     void warmRecordCache(dir, undefined, logger)
 
     ctx.on('session/event', (session: Session, event: SessionEvent) => {
-      if (event.type !== 'assistant/message') return
-      const record = recordFromEvent(event, session.id)
+      let record: UsageRecord | null | undefined
+      if (event.type === 'assistant/message') {
+        record = recordFromEvent(event, session.id)
+      } else if (event.type === 'compaction/summary' && recordCompaction) {
+        // A compaction without usable usage reads as null and is skipped.
+        record = recordFromCompaction(event, session.id)
+      }
+      if (record === undefined || record === null) return
       // Fire-and-forget: the log serializes appends and reports its own failures.
       void current?.log.record(record)
     })
@@ -650,10 +690,14 @@ export function apply(ctx: Context, config: Config = {}) {
     // One-shot backfill for requests recorded before this plugin was installed.
     // Fire-and-forget: a failure leaves the marker unwritten and the next
     // startup retries; a crash mid-run is absorbed by the sync's dedupe.
-    void autoSyncIfNeeded({ persistence: ctx.sessionPersistence, log }, dir)
+    void autoSyncIfNeeded({ persistence: ctx.sessionPersistence, log, recordCompaction }, dir)
       .then((result) => {
         if (result !== null) {
           logger.info(`[token-usage] first-run sync: ${result.added} added, ${result.skipped} skipped`)
+          // Appended rows (compactions backfilled by an upgrade, or requests
+          // a previous run missed) invalidate the derived stats state before
+          // the cache re-warms over the new contents.
+          if (result.added > 0) invalidateDerivedState(dir)
         }
         return warmRecordCache(dir, undefined, logger)
       })

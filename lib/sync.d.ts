@@ -1,6 +1,8 @@
 /**
  * History sync: replay every persisted session log and append the request
- * rows the log does not already hold, deduped by request id. The sync runs
+ * rows the log does not already hold, deduped by request id. Rows come from
+ * `assistant/message` events (plain requests) and, unless disabled, from
+ * `compaction/summary` events (the summarize provider calls). The sync runs
  * automatically ONCE, on the first startup after installation (gated by the
  * initialized marker).
  *
@@ -48,6 +50,9 @@ export interface SyncPersistence {
 export interface SyncDeps {
     persistence: SyncPersistence;
     log: UsageLog;
+    /** Whether the sync records `compaction/summary` events (default true,
+     * mirroring the `recordCompaction` config). */
+    recordCompaction?: boolean;
 }
 /**
  * Append every missing request row. The log's dedupe set is rebuilt from the
