@@ -165,8 +165,8 @@ export interface DirectoryGuardView {
  */
 export type FullSyncView =
   | { status: 'idle' }
-  | { status: 'running'; processed: number; total: number; added: number; skipped: number }
-  | { status: 'done'; processed: number; total: number; added: number; skipped: number }
+  | { status: 'running'; processed: number; total: number; added: number; skipped: number; failedSessions: number }
+  | { status: 'done'; processed: number; total: number; added: number; skipped: number; failedSessions: number }
   | { status: 'failed'; error: string }
 
 /** Aggregated token counts over one group of records. */

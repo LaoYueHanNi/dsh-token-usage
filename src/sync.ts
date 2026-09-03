@@ -6,7 +6,10 @@
  * whose reason is an LLM error (terminal failed requests), and `llm/retry`
  * events (failed attempts that the retry plugin then scheduled another try
  * for). The sync runs automatically ONCE, on the first startup after
- * installation (gated by the initialized marker).
+ * installation (gated by the initialized marker). A session whose stored
+ * log fails to load or validate is skipped and counted, never fatal to
+ * the run — one unreadable file must not keep the rest of the history
+ * out of the ledger.
  *
  * @module token-usage/sync
  */
@@ -27,6 +30,10 @@ export interface SyncResult {
   added: number
   /** Requests already present in the log (deduped). */
   skipped: number
+  /** Sessions whose stored log failed to load or validate. Their rows are
+   * absent from this run; every such session is reported through
+   * {@link SyncDeps.onSessionFailure} and counted here. */
+  failedSessions: number
 }
 
 /**
@@ -46,6 +53,9 @@ export interface SyncProgressTick {
   added: number
   /** Rows skipped by dedupe so far. */
   skipped: number
+  /** Sessions skipped so far because their stored log failed to load or
+   * validate; they count as processed for the progress bar. */
+  failedSessions: number
 }
 
 /** The persistence surface the sync needs (duck-typed for tests). */
@@ -63,6 +73,10 @@ export interface SyncDeps {
   /** Whether the sync records `compaction/summary` events (default true,
    * mirroring the `recordCompaction` config). */
   recordCompaction?: boolean
+  /** Called once per session whose stored log failed to load or validate
+   * (the session is then skipped). The host uses this to log which session
+   * and why; aborts raised through `signal` are re-thrown, never reported. */
+  onSessionFailure?: (id: SessionId, error: unknown) => void
 }
 
 /**
@@ -85,12 +99,28 @@ export async function syncHistory(
   const sessions = await deps.persistence.list(signal)
   let added = 0
   let skipped = 0
+  let failedSessions = 0
   const total = sessions.length
   let processed = 0
-  onTick?.({ processed, total, added, skipped })
+  onTick?.({ processed, total, added, skipped, failedSessions })
   for (const session of sessions) {
     signal?.throwIfAborted()
-    const inspection = await deps.persistence.inspect(session.id, signal)
+    // One unreadable session log (a format the current dsh build rejects,
+    // a torn file, …) must not abort the whole walk: skip the session,
+    // report it, and let the rest of the history land.
+    let inspection: { events: readonly SessionEvent[] }
+    try {
+      inspection = await deps.persistence.inspect(session.id, signal)
+    } catch (error) {
+      // A cancellation is the caller's (or the host read path's) abort —
+      // always fatal to the run, never a session to skip.
+      if (signal?.aborted || (error instanceof Error && error.name === 'AbortError')) throw error
+      failedSessions += 1
+      processed += 1
+      deps.onSessionFailure?.(session.id, error)
+      onTick?.({ processed, total, added, skipped, failedSessions })
+      continue
+    }
     // Last-known route model of this session: failure rows need a model to
     // attribute, and turn/end names none, so the walk follows the same
     // request/context + assistant/message events the live recorder does.
@@ -105,9 +135,9 @@ export async function syncHistory(
       else skipped += 1
     }
     processed += 1
-    onTick?.({ processed, total, added, skipped })
+    onTick?.({ processed, total, added, skipped, failedSessions })
   }
-  return { added, skipped }
+  return { added, skipped, failedSessions }
 }
 
 /**

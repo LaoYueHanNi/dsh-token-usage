@@ -98,7 +98,14 @@ export function TokenUsageCard(props: TokenUsageCardProps) {
       if (body.status === 'running' || body.status === 'done') {
         if (typeof body.processed === 'number' && typeof body.total === 'number'
             && typeof body.added === 'number' && typeof body.skipped === 'number') {
-          return { status: body.status, processed: body.processed, total: body.total, added: body.added, skipped: body.skipped }
+          return {
+            status: body.status,
+            processed: body.processed,
+            total: body.total,
+            added: body.added,
+            skipped: body.skipped,
+            failedSessions: typeof body.failedSessions === 'number' ? body.failedSessions : 0,
+          }
         }
         return null
       }
@@ -136,7 +143,7 @@ export function TokenUsageCard(props: TokenUsageCardProps) {
     try {
       const response = await fetch(FULL_SYNC_PATH, { method: 'POST' })
       if (response.status === 202) {
-        setFullSync({ status: 'running', processed: 0, total: 0, added: 0, skipped: 0 })
+        setFullSync({ status: 'running', processed: 0, total: 0, added: 0, skipped: 0, failedSessions: 0 })
         return
       }
       if (response.status === 409) {
@@ -253,6 +260,9 @@ export function TokenUsageCard(props: TokenUsageCardProps) {
                         added: String(fullSync.added),
                         skipped: String(fullSync.skipped),
                       })}
+                      {fullSync.failedSessions > 0
+                        ? t('card.fullSync.failuresNote', { count: String(fullSync.failedSessions) })
+                        : ''}
                     </span>
                     <span className={css.fullSyncBar}>
                       <span
@@ -270,6 +280,9 @@ export function TokenUsageCard(props: TokenUsageCardProps) {
                       added: String(fullSync.added),
                       skipped: String(fullSync.skipped),
                     })}
+                    {fullSync.failedSessions > 0
+                      ? t('card.fullSync.failuresNote', { count: String(fullSync.failedSessions) })
+                      : ''}
                   </p>
                 )
                 : null}

@@ -33,7 +33,7 @@ describe('syncHistory', () => {
       { id: 's2', events: [messageEventWith('m3', 1)] },
     ])
     const result = await syncHistory({ persistence, log })
-    expect(result).toEqual({ added: 3, skipped: 0 })
+    expect(result).toEqual({ added: 3, skipped: 0, failedSessions: 0 })
   })
 
   it('ignores non-assistant/message events', async () => {
@@ -49,7 +49,7 @@ describe('syncHistory', () => {
       },
     ])
     const result = await syncHistory({ persistence, log })
-    expect(result).toEqual({ added: 1, skipped: 0 })
+    expect(result).toEqual({ added: 1, skipped: 0, failedSessions: 0 })
     expect(log.rows.map(row => row.requestId)).toEqual(['m1'])
   })
 
@@ -58,7 +58,7 @@ describe('syncHistory', () => {
     await log.recordRow('m1')
     const persistence = fakePersistence([{ id: 's1', events: [messageEventWith('m1', 1), messageEventWith('m2', 2)] }])
     const result = await syncHistory({ persistence, log })
-    expect(result).toEqual({ added: 1, skipped: 1 })
+    expect(result).toEqual({ added: 1, skipped: 1, failedSessions: 0 })
   })
 
   it('dedupes rows found in the data files via scan', async () => {
@@ -66,7 +66,7 @@ describe('syncHistory', () => {
     await log.seedFile('m1')
     const persistence = fakePersistence([{ id: 's1', events: [messageEventWith('m1', 1), messageEventWith('m2', 2)] }])
     const result = await syncHistory({ persistence, log })
-    expect(result).toEqual({ added: 1, skipped: 1 })
+    expect(result).toEqual({ added: 1, skipped: 1, failedSessions: 0 })
   })
 
   it('records compaction/summary events as compaction rows', async () => {
@@ -81,7 +81,7 @@ describe('syncHistory', () => {
       },
     ])
     const result = await syncHistory({ persistence, log })
-    expect(result).toEqual({ added: 2, skipped: 0 })
+    expect(result).toEqual({ added: 2, skipped: 0, failedSessions: 0 })
     expect(log.rows.map(row => row.requestId)).toEqual(['m1', 'compaction:s1:4'])
     expect(log.rows[1]).toMatchObject({ kind: 'compaction', model: 'deepseek-chat' })
   })
@@ -98,7 +98,7 @@ describe('syncHistory', () => {
       },
     ])
     const result = await syncHistory({ persistence, log })
-    expect(result).toEqual({ added: 2, skipped: 0 })
+    expect(result).toEqual({ added: 2, skipped: 0, failedSessions: 0 })
     expect(log.rows[1]).toMatchObject({
       requestId: 'failure:s1:5',
       kind: 'failure',
@@ -151,7 +151,7 @@ describe('syncHistory', () => {
       },
     ])
     const result = await syncHistory({ persistence, log })
-    expect(result).toEqual({ added: 3, skipped: 0 })
+    expect(result).toEqual({ added: 3, skipped: 0, failedSessions: 0 })
     expect(log.rows.slice(1)).toEqual([
       expect.objectContaining({
         requestId: 'failure:s1:4',
@@ -179,7 +179,7 @@ describe('syncHistory', () => {
       },
     ])
     const result = await syncHistory({ persistence, log })
-    expect(result).toEqual({ added: 2, skipped: 0 })
+    expect(result).toEqual({ added: 2, skipped: 0, failedSessions: 0 })
     expect(log.rows.map(row => row.requestId)).toEqual(['failure:s1:4', 'failure:s1:7'])
   })
 
@@ -195,7 +195,7 @@ describe('syncHistory', () => {
       { id: 's1', events: [retryEvent({ seq: 4 }), started] },
     ])
     const result = await syncHistory({ persistence, log })
-    expect(result).toEqual({ added: 1, skipped: 0 })
+    expect(result).toEqual({ added: 1, skipped: 0, failedSessions: 0 })
     expect(log.rows.map(row => row.requestId)).toEqual(['failure:s1:4'])
   })
 
@@ -206,7 +206,7 @@ describe('syncHistory', () => {
     ])
     await syncHistory({ persistence, log })
     const result = await syncHistory({ persistence, log })
-    expect(result).toEqual({ added: 0, skipped: 1 })
+    expect(result).toEqual({ added: 0, skipped: 1, failedSessions: 0 })
   })
 
   it('skips turn/end events for non-error endings', async () => {
@@ -222,7 +222,7 @@ describe('syncHistory', () => {
       },
     ])
     const result = await syncHistory({ persistence, log })
-    expect(result).toEqual({ added: 0, skipped: 0 })
+    expect(result).toEqual({ added: 0, skipped: 0, failedSessions: 0 })
     expect(log.rows).toHaveLength(0)
   })
 
@@ -233,7 +233,7 @@ describe('syncHistory', () => {
     ])
     await syncHistory({ persistence, log })
     const result = await syncHistory({ persistence, log })
-    expect(result).toEqual({ added: 0, skipped: 1 })
+    expect(result).toEqual({ added: 0, skipped: 1, failedSessions: 0 })
   })
 
   it('skips compaction/summary events without usable usage', async () => {
@@ -248,7 +248,7 @@ describe('syncHistory', () => {
       },
     ])
     const result = await syncHistory({ persistence, log })
-    expect(result).toEqual({ added: 1, skipped: 0 })
+    expect(result).toEqual({ added: 1, skipped: 0, failedSessions: 0 })
     expect(log.rows.map(row => row.requestId)).toEqual(['m1'])
   })
 
@@ -265,7 +265,7 @@ describe('syncHistory', () => {
     ])
     await syncHistory({ persistence, log })
     const result = await syncHistory({ persistence, log })
-    expect(result).toEqual({ added: 0, skipped: 2 })
+    expect(result).toEqual({ added: 0, skipped: 2, failedSessions: 0 })
   })
 
   it('skips compaction/summary events when recordCompaction is false', async () => {
@@ -280,7 +280,7 @@ describe('syncHistory', () => {
       },
     ])
     const result = await syncHistory({ persistence, log, recordCompaction: false })
-    expect(result).toEqual({ added: 1, skipped: 0 })
+    expect(result).toEqual({ added: 1, skipped: 0, failedSessions: 0 })
     expect(log.rows.map(row => row.requestId)).toEqual(['m1'])
   })
 
@@ -318,7 +318,7 @@ describe('autoSyncIfNeeded', () => {
     const log = new FakeLog()
     const persistence = fakePersistence([{ id: 's1', events: [messageEventWith('m1', 1)] }])
     const result = await autoSyncIfNeeded({ persistence, log }, dir)
-    expect(result).toEqual({ added: 1, skipped: 0 })
+    expect(result).toEqual({ added: 1, skipped: 0, failedSessions: 0 })
     expect(log.rows.map(row => row.requestId)).toEqual(['m1'])
     expect(await isInitialized(dir)).toBe(true)
   })
@@ -340,16 +340,16 @@ describe('syncHistory progress', () => {
       { id: 's1', events: [messageEventWith('m1', 1)] },
       { id: 's2', events: [messageEventWith('m2', 1), messageEventWith('m3', 2)] },
     ])
-    const ticks: Array<{ processed: number; total: number; added: number; skipped: number }> = []
+    const ticks: Array<{ processed: number; total: number; added: number; skipped: number; failedSessions: number }> = []
     const result = await syncHistory({ persistence, log },
       tick => { ticks.push({ ...tick }) },
     )
-    expect(result).toEqual({ added: 3, skipped: 0 })
+    expect(result).toEqual({ added: 3, skipped: 0, failedSessions: 0 })
     // One leading tick at processed: 0, then one per session.
     expect(ticks).toEqual([
-      { processed: 0, total: 2, added: 0, skipped: 0 },
-      { processed: 1, total: 2, added: 1, skipped: 0 },
-      { processed: 2, total: 2, added: 3, skipped: 0 },
+      { processed: 0, total: 2, added: 0, skipped: 0, failedSessions: 0 },
+      { processed: 1, total: 2, added: 1, skipped: 0, failedSessions: 0 },
+      { processed: 2, total: 2, added: 3, skipped: 0, failedSessions: 0 },
     ])
   })
 
@@ -360,8 +360,75 @@ describe('syncHistory progress', () => {
     const result = await syncHistory({ persistence, log },
       tick => { ticks.push(tick.total) },
     )
-    expect(result).toEqual({ added: 0, skipped: 0 })
+    expect(result).toEqual({ added: 0, skipped: 0, failedSessions: 0 })
     expect(ticks).toEqual([0])
+  })
+})
+
+describe('syncHistory unreadable sessions', () => {
+  /** Persistence twin whose inspect throws for the listed ids, mimicking a
+   * stored log the current dsh build fails to load or validate. */
+  function persistenceWithFailures(
+    sessions: Array<{ id: string; events: SessionEvent[] }>,
+    failingIds: string[],
+  ): SyncPersistence {
+    const inner = fakePersistence(sessions)
+    return {
+      ...inner,
+      async inspect(id) {
+        if (failingIds.includes(id)) {
+          throw new Error(`stored session "${id}" failed validation`)
+        }
+        return inner.inspect(id)
+      },
+    }
+  }
+
+  it('skips a session whose inspect throws, records it, and continues the walk', async () => {
+    const log = new FakeLog()
+    const failures: Array<{ id: string; message: string }> = []
+    const persistence = persistenceWithFailures([
+      { id: 'broken', events: [messageEventWith('m1', 1)] },
+      { id: 's2', events: [messageEventWith('m2', 1), messageEventWith('m3', 2)] },
+      { id: 's3', events: [messageEventWith('m4', 1)] },
+    ], ['broken'])
+    const ticks: Array<{ processed: number; total: number; failedSessions: number }> = []
+    const result = await syncHistory({ persistence, log,
+        onSessionFailure: (id, error) => { failures.push({ id, message: error instanceof Error ? error.message : String(error) }) } },
+      tick => { ticks.push({ processed: tick.processed, total: tick.total, failedSessions: tick.failedSessions }) },
+    )
+    // The readable sessions still land; the broken one is counted, reported,
+    // and progresses the bar so it always reaches `total`.
+    expect(result).toEqual({ added: 3, skipped: 0, failedSessions: 1 })
+    expect(log.rows.map(row => row.requestId).sort()).toEqual(['m2', 'm3', 'm4'])
+    expect(failures).toEqual([{ id: 'broken', message: 'stored session "broken" failed validation' }])
+    expect(ticks.map(tick => tick.failedSessions)).toEqual([0, 1, 1, 1])
+    expect(ticks.at(-1)).toEqual({ processed: 3, total: 3, failedSessions: 1 })
+  })
+
+  it('keeps the run alive when every session fails, then succeeds again', async () => {
+    const log = new FakeLog()
+    const persistence = persistenceWithFailures([
+      { id: 'a', events: [] },
+      { id: 'b', events: [] },
+    ], ['a', 'b'])
+    const result = await syncHistory({ persistence, log })
+    expect(result).toEqual({ added: 0, skipped: 0, failedSessions: 2 })
+  })
+
+  it('re-throws an inspect failure raised after the signal aborts', async () => {
+    const log = new FakeLog()
+    const controller = new AbortController()
+    const persistence: SyncPersistence = {
+      async list() { return [{ id: 's1' as SessionId }] },
+      async inspect() {
+        // The caller cancels while the read is failing: the failure is the
+        // caller's abort, not a session to skip.
+        controller.abort()
+        throw new Error('torn read')
+      },
+    }
+    await expect(syncHistory({ persistence, log }, undefined, controller.signal)).rejects.toThrow('torn read')
   })
 })
 
