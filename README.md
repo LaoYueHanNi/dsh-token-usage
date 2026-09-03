@@ -21,6 +21,8 @@ Repo: <https://github.com/LaoYueHanNi/dsh-token-usage>
 > ```
 >
 > Usage data under `$DSH_HOME/token-usage/` is untouched by the migration — recorded history carries over.
+>
+> **GitHub direct installs have ended.** The repository no longer carries prebuilt `lib/` output: dsh installs git-hosted plugins through pnpm, which blocks build-on-install, so a fresh `github:` spec has no artifacts to load. Install from npm instead — the package name is unchanged, so re-running the `add` command above switches a legacy `github:` install over to the registry.
 
 ## Features
 

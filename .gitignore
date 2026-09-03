@@ -1,4 +1,6 @@
 node_modules/
+# Build output — enters the npm tarball via prepublishOnly, never the repo (see docs/decisions/)
+lib/
 *.tsbuildinfo
 .npm-cache/
 

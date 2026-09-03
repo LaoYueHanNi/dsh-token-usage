@@ -21,6 +21,8 @@
 > ```
 >
 > 迁移不影响数据：`$DSH_HOME/token-usage/` 下的历史记录完整保留。
+>
+> **GitHub 直装已终止。** 仓库不再携带构建好的 `lib/` 产物：dsh 经 pnpm 安装 git 托管插件，而 pnpm 会拦截安装期构建，新的 `github:` 安装无产物可加载。请改从 npm 安装——包名不变，重跑上面的 `add` 命令即可把旧的 `github:` 安装切换到 registry。
 
 ## 功能
 

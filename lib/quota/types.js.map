@@ -1,1 +1,0 @@
-{"version":3,"file":"types.js","sourceRoot":"","sources":["../../src/quota/types.ts"],"names":[],"mappings":"AAAA;;;;;;;;;;;;;GAaG;AAkEH,2DAA2D;AAC3D,MAAM,OAAO,eAAgB,SAAQ,KAAK;IACnB;IAArB,YAAqB,IAAoB,EAAE,OAAe;QACxD,KAAK,CAAC,OAAO,CAAC,CAAA;QADK,SAAI,GAAJ,IAAI,CAAgB;QAEvC,IAAI,CAAC,IAAI,GAAG,iBAAiB,CAAA;IAC/B,CAAC;CACF"}
