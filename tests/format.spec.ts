@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { currencyViewOf, formatCost, formatRate, formatRateWithSymbol } from '../src/client/format.ts'
+import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
+import { currencyViewOf, failuresTooltip, formatCost, formatRate, formatRateWithSymbol } from '../src/client/format.ts'
+import { zh } from '../src/client/locales.ts'
+
+const t = ((key: string): string => (zh as Record<string, string>)[key] ?? key) as TranslateNS<'token-usage'>
 
 describe('formatCost', () => {
   it('formats with the ¥ symbol and two decimals', () => {
@@ -66,5 +70,23 @@ describe('currencyViewOf', () => {
 
   it('carries the wire exchange rate for USD summaries', () => {
     expect(currencyViewOf({ currency: 'USD', usdExchangeRate: 7.25 })).toEqual({ symbol: '$', rate: 7.25 })
+  })
+})
+
+describe('failuresTooltip', () => {
+  it('renders one label ×count line per class, largest first', () => {
+    expect(failuresTooltip({ RATE_LIMIT: 16, TRANSPORT: 2 }, t)).toBe('限流 ×16\n网络异常 ×2')
+    // Ties break on the code name ascending (RATE_LIMIT before TRANSPORT).
+    expect(failuresTooltip({ TRANSPORT: 1, RATE_LIMIT: 1 }, t)).toBe('限流 ×1\n网络异常 ×1')
+  })
+
+  it('falls back to the raw code when the locale has no label', () => {
+    expect(failuresTooltip({ BRAND_NEW_CODE: 3 }, t)).toBe('BRAND_NEW_CODE ×3')
+  })
+
+  it('yields an empty string for nothing to show', () => {
+    expect(failuresTooltip(undefined, t)).toBe('')
+    expect(failuresTooltip({}, t)).toBe('')
+    expect(failuresTooltip({ RATE_LIMIT: 0 }, t)).toBe('')
   })
 })

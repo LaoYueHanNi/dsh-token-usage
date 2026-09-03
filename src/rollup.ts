@@ -1,12 +1,12 @@
 /**
  * The per-day rollup store of the token-usage plugin: an on-disk aggregate of
- * every frozen (pre-today) day file. Day files are immutable once their date
- * has passed — writes always append to the file of the current day — so an
- * absorbed aggregate never goes stale and needs no invalidation. The stats
- * read advances the rollup lazily: whenever unabsorbed frozen files exist,
- * they are folded in and the rollup is rewritten atomically (temp file +
- * rename, like the sync marker). A missing or malformed rollup simply reads
- * as absent and is rebuilt from the day files.
+ * every frozen (pre-today) day file. Live appends go to the event's own day
+ * file, so a history sync or refile can write through a frozen file; the
+ * stats read drops the rollup after those writes (see index.ts) and rebuilds
+ * it. The stats read also advances the rollup lazily: whenever unabsorbed
+ * frozen files exist, they are folded in and the rollup is rewritten
+ * atomically (temp file + rename, like the sync marker). A missing or
+ * malformed rollup simply reads as absent and is rebuilt from the day files.
  *
  * @module token-usage/rollup
  */

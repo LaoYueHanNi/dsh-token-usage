@@ -29,13 +29,102 @@
 
 /* The value: bold, primary, tabular numerals, fixed font so cards line
  * up across renders — a half-width digit on a previous render would
- * otherwise jitter the column. */
+ * otherwise jitter the column. Flex so a requests card can sit a
+ * failure pill beside the hero number and wrap it under on a squeezed
+ * column instead of clipping it. */
 .cardValue {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
   font-size: 18px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   color: var(--dsw-alias-label-primary);
+  min-width: 0;
+}
+
+/* Hero figure inside a requests card; ellipsizes before the pill shrinks. */
+.cardValueMain {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  min-width: 0;
 }
+
+/* Failure-count hover (card pill and the table's red B). The bubble is a
+ * Fragment sibling (shell Tooltip is not a body portal). `pre` +
+ * `max-content` keeps each `限流 ×n` line intact: CJK min-content of
+ * `pre-line` is one glyph. QuotaButton's tooltip is outside `.pillWrap`
+ * and keeps the shell default. */
+.pillWrap {
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.pillWrap :global([role="tooltip"]) {
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.4;
+  white-space: pre;
+  width: max-content;
+  min-width: max-content;
+  max-width: none;
+}
+
+/* Per-model success/fail column: three tracks so every row's slash sits
+ * on the same vertical line (the column midline). `minmax(0, 1fr)` on
+ * both sides — not `1fr` (= minmax(auto, 1fr)) — otherwise a long A
+ * (2,289) would shove that row's slash right of a short row's slash.
+ * A right-aligns against the slash; B left-aligns. */
+.split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: baseline;
+  column-gap: 4px;
+  width: 100%;
+}
+
+.splitOk {
+  text-align: right;
+  min-width: 0;
+}
+
+.splitSep {
+  color: var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary));
+}
+
+.splitFailHead {
+  text-align: left;
+  min-width: 0;
+}
+
+.splitFail {
+  display: block;
+  text-align: left;
+  min-width: 0;
+  color: var(--dsw-alias-state-error-primary);
+}
+
+/* Tooltip wrap in the B track: fill the half so the figure stays left. */
+.split > .pillWrap {
+  display: block;
+  min-width: 0;
+  justify-self: stretch;
+}
+
+/* Failure count sitting beside the successful-request figure on the card. */
+.pill {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.4;
+  padding: 1px 7px;
+  border-radius: 999px;
+  white-space: nowrap;
+  color: var(--dsw-alias-state-error-primary);
+  background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--dsw-alias-state-error-primary) 28%, transparent);
+}
+

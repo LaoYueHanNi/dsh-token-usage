@@ -25,7 +25,7 @@ import { currencyViewOf, formatCost, formatRate, formatRateWithSymbol, formatTok
 import type { CurrencyView } from './format.ts'
 import { HitRateText } from './HitRateText.tsx'
 import { MenuSelect } from './MenuSelect.tsx'
-import { StatCard } from './StatCard.tsx'
+import { RequestsCell, RequestsSplitHead, RequestsStatCard, StatCard } from './StatCard.tsx'
 import { TrendChart } from './TrendChart.tsx'
 import { useColorSchemeMirror } from './use-color-scheme.ts'
 import styles from './TokenUsageSection.module.css'
@@ -391,7 +391,7 @@ export function TokenUsageSection({ t }: SettingsSectionOwnerProps & { t: Transl
       <h2 className={styles['title']}>{t('nav.label')}</h2>
       <p className={styles['muted']}>{t('dataDir', { path: state.value.dataDir })}</p>
       <FilterBar filters={filters} models={models} onChange={setFilters} t={t} />
-      {total.requests === 0
+      {total.requests === 0 && (total.failures ?? 0) === 0
         ? (
           // One hint covers both an empty log and an empty filtered window:
           // the page opens on today (1d), so the two are indistinguishable
@@ -404,7 +404,12 @@ export function TokenUsageSection({ t }: SettingsSectionOwnerProps & { t: Transl
         : (
           <>
             <div className={styles['cards']}>
-              <StatCard label={t('stat.requests')} value={total.requests.toLocaleString()} />
+              <RequestsStatCard
+                requests={total.requests}
+                failures={total.failures ?? 0}
+                failuresByCode={total.failuresByCode}
+                t={t}
+              />
               <StatCard label={t('stat.cost')} value={formatCost(state.value.totalCost, view)} />
               <StatCard label={t('stat.totalTokens')} value={formatTokens(totalTokens(total))} />
               <StatCard label={t('stat.hitRate')} value={<HitRateText totals={total} />} />
@@ -444,7 +449,7 @@ export function TokenUsageSection({ t }: SettingsSectionOwnerProps & { t: Transl
                       <thead>
                         <tr>
                           <th className={styles['modelHead']}>{t('filter.model')}</th>
-                          <th>{t('stat.requests')}</th>
+                          <th aria-label={t('stat.successFail')}><RequestsSplitHead t={t} /></th>
                           <th>{t('stat.cost')}</th>
                           <th>{t('stat.totalTokens')}</th>
                           <th>{t('stat.input')}</th>
@@ -482,7 +487,14 @@ export function TokenUsageSection({ t }: SettingsSectionOwnerProps & { t: Transl
                                     )}
                                 </span>
                               </td>
-                              <td>{row.totals.requests.toLocaleString()}</td>
+                              <td>
+                                <RequestsCell
+                                  requests={row.totals.requests}
+                                  failures={row.totals.failures ?? 0}
+                                  failuresByCode={row.totals.failuresByCode}
+                                  t={t}
+                                />
+                              </td>
                               <td>
                                 {rules !== undefined ? formatCost(row.cost, view) : '—'}
                               </td>

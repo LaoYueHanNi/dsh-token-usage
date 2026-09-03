@@ -7,7 +7,7 @@ import { Context, Service } from '@deepseek-ai/cordis'
 import SettingsProvider, { type SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import * as plugin from '../src/index.ts'
 import { DEFAULT_PRICING_URL_OVERSEAS } from '../src/pricing.ts'
-import { compactionEvent, messageEvent } from './helpers.ts'
+import { compactionEvent, messageEvent, retryEvent } from './helpers.ts'
 
 /** Returns persisted sessions from a shared mutable list. */
 function persistenceService(sessions: Array<{ id: string; events: unknown[] }>) {
@@ -129,13 +129,16 @@ async function pollRows(dir: string, count: number): Promise<Array<Record<string
   const deadline = Date.now() + 2_000
   while (Date.now() < deadline) {
     const names = (await readdir(dir).catch(() => [] as string[]))
-      .filter(name => name.endsWith('.jsonl'))
+      .filter(name => name.endsWith('.jsonl')).sort()
+    const rows: Array<Record<string, unknown>> = []
     for (const name of names) {
       const text = await readFile(join(dir, name), 'utf8').catch(() => '')
-      const rows = text.split('\n').filter(line => line !== '')
-        .map(line => JSON.parse(line) as Record<string, unknown>)
-      if (rows.length >= count) return rows
+      for (const line of text.split('\n')) {
+        if (line === '') continue
+        rows.push(JSON.parse(line) as Record<string, unknown>)
+      }
     }
+    if (rows.length >= count) return rows
     await new Promise(resolve => setTimeout(resolve, 20))
   }
   throw new Error(`no log file with ${String(count)} rows appeared`)
@@ -261,6 +264,38 @@ describe('plugin integration', () => {
       kind: 'compaction',
     })
     expect((rows[1]!.usage as { inputTokens: number }).inputTokens).toBe(100_000)
+  })
+
+  it('writes one live failure row per llm/retry event', async () => {
+    const mounted = await mount()
+    await waitForState(mounted.dir)
+    ctx!.emit('session/event', { id: 's1' }, messageEvent({ messageId: 'm1' }))
+    await pollLogFile(mounted.dir)
+    ctx!.emit('session/event', { id: 's1' }, retryEvent({ seq: 4 }))
+    const rows = await pollRows(mounted.dir, 2)
+    expect(rows).toHaveLength(2)
+    expect(rows[1]).toMatchObject({
+      requestId: 'failure:s1:4',
+      sessionId: 's1',
+      model: 'deepseek-chat',
+      kind: 'failure',
+      failureCode: 'RATE_LIMIT',
+    })
+  })
+
+  it('backfills llm/retry events on the first-run sync', async () => {
+    sessions.push({
+      id: 's1',
+      events: [
+        messageEvent({ messageId: 'm1', seq: 1 }),
+        retryEvent({ seq: 3 }),
+        messageEvent({ messageId: 'm2', seq: 6 }),
+      ],
+    })
+    const mounted = await mount()
+    await waitForState(mounted.dir)
+    const rows = await pollRows(mounted.dir, 3)
+    expect(rows.map(row => row.requestId)).toEqual(['m1', 'failure:s1:3', 'm2'])
   })
 
   it('skips compaction/summary events when recordCompaction is false', async () => {

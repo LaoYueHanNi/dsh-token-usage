@@ -5,7 +5,7 @@
  * throughput), the sessionId query parameters for the scope switch and the
  * subagent drill-in, and the empty-session em-dash degradation.
  */
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ConversationSnapshot, SessionListState } from '@deepseek-ai/dsh-client-runtime/client'
@@ -16,6 +16,32 @@ import type { UsageSummary } from '../src/wire.ts'
 import {
   makeSessionStateHook, makeUseProjection, useSessionFromSnapshot,
 } from './test-kit.ts'
+
+// The shell Tooltip ships inside the primitives package whose CSS imports the
+// Node test runtime cannot load (quota-button.client.spec mocks it for the
+// same reason). This stand-in keeps the hover contract real: mouseenter shows
+// a role="tooltip" bubble with the label, mouseleave hides it.
+vi.mock('@deepseek-ai/dsh-client-ui-primitives', async () => {
+  const { cloneElement, useState } = await import('react')
+  return {
+    Tooltip: ({ label, disabled, children }: {
+      label: string
+      disabled?: boolean
+      children: React.ReactElement<{ onMouseEnter?: () => void, onMouseLeave?: () => void }>
+    }) => {
+      const [visible, setVisible] = useState(false)
+      return (
+        <>
+          {cloneElement(children, {
+            onMouseEnter: () => { if (disabled !== true) setVisible(true) },
+            onMouseLeave: () => setVisible(false),
+          })}
+          {visible ? <span role="tooltip">{label}</span> : null}
+        </>
+      )
+    },
+  }
+})
 
 /** Common-namespace zh values the tests assert against (shell-owned copy). */
 const COMMON_ZH: Record<string, string> = {
@@ -37,6 +63,7 @@ const ROOT_SUMMARY: UsageSummary = {
   usdExchangeRate: 7,
   total: {
     requests: 10, inputTokens: 120_000, outputTokens: 8_000, cacheReadTokens: 40_000, cacheWriteTokens: 2_000,
+    failures: 2, failuresByCode: { RATE_LIMIT: 1, TRANSPORT: 1 },
   },
   totalCost: 12.34,
   unpricedModels: [],
@@ -48,7 +75,8 @@ const ROOT_SUMMARY: UsageSummary = {
   byHour: [],
   byModel: [{
     model: 'deepseek-chat',
-    totals: { requests: 10, inputTokens: 120_000, outputTokens: 8_000, cacheReadTokens: 40_000, cacheWriteTokens: 2_000 },
+    totals: { requests: 10, inputTokens: 120_000, outputTokens: 8_000, cacheReadTokens: 40_000, cacheWriteTokens: 2_000,
+      failures: 2, failuresByCode: { RATE_LIMIT: 1, TRANSPORT: 1 } },
     cost: 12.34,
   }],
   rateRows: [],
@@ -69,7 +97,8 @@ const CHILD_SUMMARY: UsageSummary = {
   totalCost: 3.21,
   byModel: [{
     model: 'deepseek-reasoner',
-    totals: { requests: 3, inputTokens: 30_000, outputTokens: 2_000, cacheReadTokens: 10_000, cacheWriteTokens: 500 },
+    totals: { requests: 3, inputTokens: 30_000, outputTokens: 2_000, cacheReadTokens: 10_000, cacheWriteTokens: 500,
+      failures: 0 },
     cost: 3.21,
   }],
 }
@@ -77,8 +106,23 @@ const CHILD_SUMMARY: UsageSummary = {
 /** The aggregated parent+child summary served for the tree scope. */
 const TREE_SUMMARY: UsageSummary = {
   ...ROOT_SUMMARY,
-  total: { requests: 13, inputTokens: 150_000, outputTokens: 10_000, cacheReadTokens: 50_000, cacheWriteTokens: 2_500 },
+  total: { requests: 13, inputTokens: 150_000, outputTokens: 10_000, cacheReadTokens: 50_000, cacheWriteTokens: 2_500,
+    failures: 2, failuresByCode: { RATE_LIMIT: 1, TRANSPORT: 1 } },
   totalCost: 15.55,
+  byModel: [
+    {
+      model: 'deepseek-chat',
+      totals: { requests: 10, inputTokens: 120_000, outputTokens: 8_000, cacheReadTokens: 40_000, cacheWriteTokens: 2_000,
+        failures: 2, failuresByCode: { RATE_LIMIT: 1, TRANSPORT: 1 } },
+      cost: 12.34,
+    },
+    {
+      model: 'deepseek-reasoner',
+      totals: { requests: 3, inputTokens: 30_000, outputTokens: 2_000, cacheReadTokens: 10_000, cacheWriteTokens: 500,
+        failures: 0 },
+      cost: 3.21,
+    },
+  ],
   children: {
     child: {
       total: { requests: 3, inputTokens: 30_000, outputTokens: 2_000, cacheReadTokens: 10_000, cacheWriteTokens: 500 },
@@ -208,10 +252,14 @@ describe('UsageView', () => {
   it('renders the six stat cards, the token strip, and the model table', async () => {
     const fetch = stubFetch()
     renderView({ liveStats: LIVE_STATS })
-    // Cards: requests, cost, hit rate, TTFT, throughput, total tokens.
-    // (The TTFT figure is the first ready-state marker: unique on screen.)
+    // Cards: successful requests (failure pill), cost, hit rate, TTFT,
+    // throughput, total tokens. (The TTFT figure is the first ready-state
+    // marker: unique on screen.)
     expect(await screen.findByText('0.1s')).toBeTruthy()
-    expectText('10') // requests
+    expectText('10') // successful requests
+    expectText('失败 2')
+    expect(screen.getAllByText('失败 2')).toHaveLength(1)
+    expect(screen.getByRole('columnheader', { name: '成功/失败' })).toBeTruthy()
     expectText('¥12.34') // cost
     // hit rate: 40K cache reads / (120K + 40K) served input = 25%.
     expectText('25%')
@@ -254,6 +302,15 @@ describe('UsageView', () => {
     // The tree aggregate renders: 13 requests, ¥15.55.
     expectText('13')
     expectText('¥15.55')
+    // Per-model cells are `A/B` from that row's totals: the child's
+    // reasoner has zero failures, so the cell is just `3` — no `/0`.
+    expect(screen.getByText('deepseek-reasoner')).toBeTruthy()
+    const modelTable = screen.getByRole('table', { name: '按模型' })
+    expect(within(modelTable).getByLabelText('失败 2')).toBeTruthy()
+    expect(within(modelTable).queryByText('失败 2')).toBeNull()
+    expect(within(modelTable).queryByLabelText('失败 0')).toBeNull()
+    const reasonerRow = screen.getByText('deepseek-reasoner').closest('tr')
+    expect(reasonerRow?.textContent).not.toContain('/')
   })
 
   it('drills into a subagent row and offers the back control', async () => {
@@ -274,12 +331,43 @@ describe('UsageView', () => {
     await waitFor(() => expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(2))
   })
 
+  it('shows the per-code failure breakdown on the failure-pill hover', async () => {
+    stubFetch()
+    renderView({ liveStats: LIVE_STATS })
+    const cardPill = await screen.findByText('失败 2')
+    fireEvent.mouseEnter(cardPill)
+    await waitFor(() => expect(screen.getByRole('tooltip').textContent).toBe('限流 ×1\n网络异常 ×1'))
+    fireEvent.mouseLeave(cardPill)
+    await waitFor(() => expect(screen.queryByRole('tooltip')).toBeNull())
+    // The per-model cell is `A/B`; hover the red B (row's own totals).
+    const table = screen.getByRole('table', { name: '按模型' })
+    fireEvent.mouseEnter(within(table).getByLabelText('失败 2'))
+    await waitFor(() => expect(screen.getByRole('tooltip').textContent).toBe('限流 ×1\n网络异常 ×1'))
+    fireEvent.mouseLeave(within(table).getByLabelText('失败 2'))
+    await waitFor(() => expect(screen.queryByRole('tooltip')).toBeNull())
+  })
+
   it('shows the empty hint for a session with no records', async () => {
     stubFetch({ root: EMPTY_SUMMARY })
     // No subagents at all: drop the child row from the mirror.
     renderView({ byId: { root: SESSION_STATE.byId.root! } })
     expect(await screen.findByText('该会话暂无用量记录。')).toBeTruthy()
     expect(screen.getByText('无子会话')).toBeTruthy()
+  })
+
+  it('renders the stat band for a session whose every request failed', async () => {
+    // Zero successful requests but two failures: the band still renders
+    // (the empty hint only covers a session with no records at all).
+    stubFetch({
+      root: {
+        ...EMPTY_SUMMARY,
+        total: { requests: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, failures: 2 },
+      },
+    })
+    renderView({ byId: { root: SESSION_STATE.byId.root! } })
+    expect(await screen.findByText('失败 2')).toBeTruthy()
+    expectText('成功请求数')
+    expectText('0')
   })
 
   it('marks a subagent row that owns nested subagents of its own', async () => {

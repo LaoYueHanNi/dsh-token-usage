@@ -2,7 +2,7 @@ import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { dayFileName, UsageLog } from '../src/usage-log.ts'
+import { dayFileName, dayFileNameOf, UsageLog } from '../src/usage-log.ts'
 import { serializeRecord } from '../src/usage-record.ts'
 import { messageEvent } from './helpers.ts'
 import { recordFromEvent } from '../src/usage-record.ts'
@@ -28,25 +28,26 @@ async function rmIfExists(dir: string): Promise<void> {
   }
 }
 
-function event(messageId: string, seq: number, time = 1_700_000_000_000) {
+function event(messageId: string, seq: number, time = new Date(2026, 0, 15, 12).getTime()) {
   return messageEvent({ messageId, seq, time })
 }
 
-function record(messageId: string, seq: number, time = 1_700_000_000_000) {
-  return recordFromEvent(event(messageId, seq, time), 'session-1', 'live')
+function record(messageId: string, seq: number, time = new Date(2026, 0, 15, 12).getTime()) {
+  return recordFromEvent(event(messageId, seq, time), 'session-1')
 }
 
 describe('dayFileName', () => {
   it('formats a local-time date', () => {
     expect(dayFileName(new Date(2026, 0, 15, 12, 30))).toBe('usage-2026-01-15.jsonl')
     expect(dayFileName(new Date(2026, 11, 31, 23, 59))).toBe('usage-2026-12-31.jsonl')
+    expect(dayFileNameOf(new Date(2026, 0, 15, 12).getTime())).toBe('usage-2026-01-15.jsonl')
   })
 })
 
 describe('UsageLog.record', () => {
   it('appends one line per record', async () => {
     const dir = await tempDir()
-    const log = new UsageLog(dir, () => new Date(2026, 0, 15, 12))
+    const log = new UsageLog(dir)
     expect(await log.record(record('a', 1))).toBe(true)
     expect(await log.record(record('b', 2))).toBe(true)
     const lines = (await readFile(join(dir, 'usage-2026-01-15.jsonl'), 'utf8')).trim().split('\n')
@@ -57,7 +58,7 @@ describe('UsageLog.record', () => {
 
   it('recreates the data directory when it vanishes under a running log', async () => {
     const dir = await tempDir()
-    const log = new UsageLog(dir, () => new Date(2026, 0, 15, 12))
+    const log = new UsageLog(dir)
     expect(await log.record(record('a', 1))).toBe(true)
     // The location is removed underneath the process (a migration that stayed
     // behind, a user cleanup): the next append must self-heal, not fail
@@ -74,7 +75,7 @@ describe('UsageLog.record', () => {
     const log = new UsageLog(dir)
     expect(await log.record(record('a', 1))).toBe(true)
     expect(await log.record(record('a', 2))).toBe(false)
-    const lines = (await readFile(join(dir, dayFileName(new Date())), 'utf8')).trim().split('\n')
+    const lines = (await readFile(join(dir, 'usage-2026-01-15.jsonl'), 'utf8')).trim().split('\n')
     expect(lines).toHaveLength(1)
   })
 
@@ -83,18 +84,19 @@ describe('UsageLog.record', () => {
     const log = new UsageLog(dir)
     const calls = [record('a', 1), record('b', 2), record('c', 3)]
     await Promise.all(calls.map(r => log.record(r)))
-    const lines = (await readFile(join(dir, dayFileName(new Date())), 'utf8')).trim().split('\n')
+    const lines = (await readFile(join(dir, 'usage-2026-01-15.jsonl'), 'utf8')).trim().split('\n')
     expect(lines.map(line => JSON.parse(line).requestId)).toEqual(['a', 'b', 'c'])
   })
 
-  it('writes to per-day files', async () => {
+  it('writes each row to the event-day file, not the wall-clock day', async () => {
     const dir = await tempDir()
-    const times = [new Date(2026, 0, 15, 23, 59), new Date(2026, 0, 16, 0, 1)]
-    const log = new UsageLog(dir, () => times.shift() ?? new Date(2026, 0, 16))
-    await log.record(record('a', 1, 1_750_000_000_000))
-    await log.record(record('b', 2, 1_750_100_000_000))
+    const log = new UsageLog(dir)
+    await log.record(record('a', 1, new Date(2026, 0, 15, 23, 59).getTime()))
+    await log.record(record('b', 2, new Date(2026, 0, 16, 0, 1).getTime()))
     const names = (await readdir(dir)).sort()
     expect(names).toEqual(['usage-2026-01-15.jsonl', 'usage-2026-01-16.jsonl'])
+    expect((await readFile(join(dir, 'usage-2026-01-15.jsonl'), 'utf8'))).toContain('"requestId":"a"')
+    expect((await readFile(join(dir, 'usage-2026-01-16.jsonl'), 'utf8'))).toContain('"requestId":"b"')
   })
 
   it('creates the data directory on first write', async () => {
@@ -118,7 +120,7 @@ describe('UsageLog.record', () => {
 describe('UsageLog.scan', () => {
   it('rebuilds the dedupe set across day files', async () => {
     const dir = await tempDir()
-    const log = new UsageLog(dir, () => new Date(2026, 0, 15, 12))
+    const log = new UsageLog(dir)
     await log.record(record('a', 1))
     await log.record(record('b', 2))
     // A second day file, written directly to simulate a previous process.
@@ -153,5 +155,25 @@ describe('UsageLog.scan', () => {
     const fresh = new UsageLog(join(base, 'absent'))
     await fresh.scan()
     expect(fresh.has('a')).toBe(false)
+  })
+})
+
+describe('UsageLog.refileByEventDay', () => {
+  it('moves rows parked in the wrong day file onto the event day', async () => {
+    const dir = await tempDir()
+    const parked = record('old', 1, new Date(2026, 0, 10, 8).getTime())
+    await writeFile(
+      join(dir, 'usage-2026-01-15.jsonl'),
+      `${serializeRecord(parked)}\n${serializeRecord(record('today', 2))}\n`,
+    )
+    const log = new UsageLog(dir)
+    await log.scan()
+    expect(await log.refileByEventDay()).toBe(1)
+    expect((await readdir(dir)).sort()).toEqual(['usage-2026-01-10.jsonl', 'usage-2026-01-15.jsonl'])
+    expect(await readFile(join(dir, 'usage-2026-01-10.jsonl'), 'utf8')).toContain('"requestId":"old"')
+    expect(await readFile(join(dir, 'usage-2026-01-15.jsonl'), 'utf8')).toContain('"requestId":"today"')
+    expect(await readFile(join(dir, 'usage-2026-01-15.jsonl'), 'utf8')).not.toContain('"requestId":"old"')
+    // A second pass is a no-op (crash-safe / already-correct files).
+    expect(await log.refileByEventDay()).toBe(0)
   })
 })

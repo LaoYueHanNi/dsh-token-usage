@@ -2,11 +2,12 @@
  * The conversation view tab "Usage" (browser half): one entry of the
  * `conversation.view` slot ring (beside Chat / Trajectory), rendering the
  * per-session token & cost dashboard for the ACTIVE conversation. The tab
- * shows the focused session's totals (4 token buckets, cost, hit rate,
- * TTFT average, decode throughput) with a scope switch between the session
- * alone and its whole subagent subtree, a per-hour trend chart and the
- * per-model table from the host stats route (`sessionId`-scoped), and a
- * subagent table below — each row drill-in switches the focus to that child.
+ * shows the focused session's totals (successful requests with a failure
+ * pill, 4 token buckets, cost, hit rate, TTFT average, decode throughput) with a
+ * scope switch between the session alone and its whole subagent subtree, a
+ * per-hour trend chart and the per-model table from the host stats route
+ * (`sessionId`-scoped), and a subagent table below — each row drill-in
+ * switches the focus to that child.
  *
  * Data sources: token/cost figures come from the host route (the pricing
  * rule chain's authority); TTFT and throughput come from the framework's
@@ -34,7 +35,7 @@ import { totalTokens } from './day.ts'
 import { currencyViewOf, formatCost, formatSpeed, formatTokens, formatTtft } from './format.ts'
 import { HitRateText } from './HitRateText.tsx'
 import { aggregateProjections, buildChildIndex, directSubagentIds, subagentParentOf, subtreeIds, buildStatsFreshnessKey } from './session-stats.ts'
-import { StatCard } from './StatCard.tsx'
+import { RequestsCell, RequestsSplitHead, RequestsStatCard, StatCard } from './StatCard.tsx'
 import { TrendChart } from './TrendChart.tsx'
 import { useColorSchemeMirror } from './use-color-scheme.ts'
 import styles from './UsageView.module.css'
@@ -196,15 +197,21 @@ export function UsageView({ useSessions, useProjection, sessionId, t }: UsageVie
   return (
     <div ref={rootRef} className={styles['root']}>
       {header}
-      {total.requests === 0
-        // The session has no recorded requests; the stat band is skipped
-        // but the subagent table below still renders (children may hold
-        // usage even when this session's scoped summary is empty).
+      {total.requests === 0 && (total.failures ?? 0) === 0
+        // The session has no recorded requests (successful or failed); the
+        // stat band is skipped but the subagent table below still renders
+        // (children may hold usage even when this session's scoped summary
+        // is empty).
         ? <p className={styles['empty']}>{t('view.empty')}</p>
         : (
           <>
             <div className={styles['cards']}>
-              <StatCard label={t('stat.requests')} value={total.requests.toLocaleString()} />
+              <RequestsStatCard
+                requests={total.requests}
+                failures={total.failures ?? 0}
+                failuresByCode={total.failuresByCode}
+                t={t}
+              />
               <StatCard label={t('stat.cost')} value={formatCost(summary.totalCost, view)} />
               <StatCard label={t('stat.totalTokens')} value={formatTokens(totalTokens(total))} />
               <StatCard label={t('stat.hitRate')} value={<HitRateText totals={total} />} />
@@ -250,7 +257,7 @@ export function UsageView({ useSessions, useProjection, sessionId, t }: UsageVie
                         <thead>
                           <tr>
                             <th className={styles['modelHead']}>{t('filter.model')}</th>
-                            <th>{t('stat.requests')}</th>
+                            <th aria-label={t('stat.successFail')}><RequestsSplitHead t={t} /></th>
                             <th>{t('stat.input')}</th>
                             <th>{t('stat.output')}</th>
                             <th>{t('stat.cacheRead')}</th>
@@ -263,7 +270,14 @@ export function UsageView({ useSessions, useProjection, sessionId, t }: UsageVie
                           {summary.byModel.map(row => (
                             <tr key={row.model}>
                               <td className={styles['modelCell']}>{row.model}</td>
-                              <td>{row.totals.requests.toLocaleString()}</td>
+                              <td>
+                                <RequestsCell
+                                  requests={row.totals.requests}
+                                  failures={row.totals.failures ?? 0}
+                                  failuresByCode={row.totals.failuresByCode}
+                                  t={t}
+                                />
+                              </td>
                               <td>{formatTokens(row.totals.inputTokens)}</td>
                               <td>{formatTokens(row.totals.outputTokens)}</td>
                               <td>{formatTokens(row.totals.cacheReadTokens)}</td>
@@ -368,7 +382,7 @@ export function UsageView({ useSessions, useProjection, sessionId, t }: UsageVie
             </div>
           )}
       </section>
-      {total.requests > 0 && <p className={styles['note']}>{t('view.note')}</p>}
+      {(total.requests > 0 || (total.failures ?? 0) > 0) && <p className={styles['note']}>{t('view.note')}</p>}
     </div>
   )
 }

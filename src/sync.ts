@@ -1,10 +1,12 @@
 /**
  * History sync: replay every persisted session log and append the request
  * rows the log does not already hold, deduped by request id. Rows come from
- * `assistant/message` events (plain requests) and, unless disabled, from
- * `compaction/summary` events (the summarize provider calls). The sync runs
- * automatically ONCE, on the first startup after installation (gated by the
- * initialized marker).
+ * `assistant/message` events (plain requests), `compaction/summary` events
+ * (the summarize provider calls, unless disabled), `turn/end` events
+ * whose reason is an LLM error (terminal failed requests), and `llm/retry`
+ * events (failed attempts that the retry plugin then scheduled another try
+ * for). The sync runs automatically ONCE, on the first startup after
+ * installation (gated by the initialized marker).
  *
  * @module token-usage/sync
  */
@@ -13,8 +15,10 @@ import type { SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
 // Type-only: ensures the merged `compaction/*` payload types are in this
 // program independent of the usage-record import chain.
 import type {} from '@deepseek-ai/dsh-compaction/types'
+// Type-only: pulls the merged `llm/retry` payload into this program.
+import type {} from '@deepseek-ai/dsh-llm-retry/types'
 import { isInitialized, markInitialized } from './sync-state.ts'
-import { recordFromCompaction, recordFromEvent, type UsageRecord } from './usage-record.ts'
+import { modelOfEvent, recordOfEvent } from './usage-record.ts'
 import type { UsageLog } from './usage-log.ts'
 
 /** Outcome of one sync run. */
@@ -87,16 +91,16 @@ export async function syncHistory(
   for (const session of sessions) {
     signal?.throwIfAborted()
     const inspection = await deps.persistence.inspect(session.id, signal)
+    // Last-known route model of this session: failure rows need a model to
+    // attribute, and turn/end names none, so the walk follows the same
+    // request/context + assistant/message events the live recorder does.
+    let model = ''
     for (const event of inspection.events) {
       signal?.throwIfAborted()
-      let record: UsageRecord | null | undefined
-      if (event.type === 'assistant/message') {
-        record = recordFromEvent(event, session.id)
-      } else if (event.type === 'compaction/summary' && deps.recordCompaction !== false) {
-        // A compaction without usable usage reads as null and is skipped.
-        record = recordFromCompaction(event, session.id)
-      }
-      if (record === undefined || record === null) continue
+      const revealed = modelOfEvent(event)
+      if (revealed !== undefined) model = revealed
+      const record = recordOfEvent(event, session.id, model, deps.recordCompaction !== false)
+      if (record === null) continue
       if (await deps.log.record(record)) added += 1
       else skipped += 1
     }

@@ -56,13 +56,15 @@ export function emptyTotals(): UsageTotals {
     cacheReadTokens: 0,
     cacheWriteTokens: 0,
     compactions: 0,
+    failures: 0,
   }
 }
 
 /**
- * Add one totals row into another, field by field. `compactions` merges with
- * a `?? 0` fallback so a legacy rollup (no key) folds into new aggregates
- * without NaN.
+ * Add one totals row into another, field by field. `compactions` and
+ * `failures` merge with a `?? 0` fallback so a legacy rollup (no key) folds
+ * into new aggregates without NaN; `failuresByCode` merges key-wise with
+ * the same absent-reads-as-empty rule.
  */
 function addTotals(target: UsageTotals, source: UsageTotals): void {
   target.requests += source.requests
@@ -71,6 +73,15 @@ function addTotals(target: UsageTotals, source: UsageTotals): void {
   target.cacheReadTokens += source.cacheReadTokens
   target.cacheWriteTokens += source.cacheWriteTokens
   target.compactions = (target.compactions ?? 0) + (source.compactions ?? 0)
+  target.failures = (target.failures ?? 0) + (source.failures ?? 0)
+  const codes = source.failuresByCode
+  if (codes !== undefined) {
+    const merged = target.failuresByCode ?? {}
+    for (const [code, count] of Object.entries(codes)) {
+      merged[code] = (merged[code] ?? 0) + count
+    }
+    target.failuresByCode = merged
+  }
 }
 
 /** Sort a day row map ascending by day, matching {@link summarizeRecords}. */
@@ -110,9 +121,21 @@ function rateRowKey(day: string, model: string, rate: RateKey): string {
 /**
  * Fold one record into totals; a record without provider usage still counts a
  * request, and a compaction record additionally counts the `compactions`
- * dimension (absent kind reads as a plain request).
+ * dimension (absent kind reads as a plain request). A failure record counts
+ * only the `failures` dimension — it bills no tokens and never joins
+ * `requests`, so the requests figure stays "successful requests" — and its
+ * `failureCode` folds into the per-code breakdown the failure pill's
+ * tooltip renders.
  */
 function addUsage(totals: UsageTotals, record: UsageRecord): void {
+  if (record.kind === 'failure') {
+    totals.failures = (totals.failures ?? 0) + 1
+    const code = record.failureCode ?? 'UNKNOWN'
+    const byCode = totals.failuresByCode ?? {}
+    byCode[code] = (byCode[code] ?? 0) + 1
+    totals.failuresByCode = byCode
+    return
+  }
   totals.requests += 1
   if (record.kind === 'compaction') {
     totals.compactions = (totals.compactions ?? 0) + 1
@@ -180,13 +203,19 @@ export function summarizeRecords(records: readonly UsageRecord[], resolve: RateR
     const dayTotals = days.get(day) ?? emptyTotals()
     addUsage(dayTotals, record)
     days.set(day, dayTotals)
-    const hour = hourKey(record.time)
-    const hourTotals = hours.get(hourRowKey(hour, record.model)) ?? emptyTotals()
-    addUsage(hourTotals, record)
-    hours.set(hourRowKey(hour, record.model), hourTotals)
-    const modelTotals = models.get(record.model) ?? emptyTotals()
-    addUsage(modelTotals, record)
-    models.set(record.model, modelTotals)
+    // An unattributed failure (`model === ''`) still folds into totals,
+    // byDay, and rateRows (so a day-range filter keeps the count). It
+    // stays out of byModel / byHour — a blank table row would pretend
+    // we know the route.
+    if (record.model !== '') {
+      const hour = hourKey(record.time)
+      const hourTotals = hours.get(hourRowKey(hour, record.model)) ?? emptyTotals()
+      addUsage(hourTotals, record)
+      hours.set(hourRowKey(hour, record.model), hourTotals)
+      const modelTotals = models.get(record.model) ?? emptyTotals()
+      addUsage(modelTotals, record)
+      models.set(record.model, modelTotals)
+    }
     const rate = resolve(record)
     const rowKey = rateRowKey(day, record.model, rate)
     const cell = rated.get(rowKey)
@@ -275,9 +304,11 @@ export function filterRecordsByRange(
 
 /**
  * The per-request token series of a record set, in time order — one point
- * per request, so a 55-request session plots 55 points. The conversation
- * view tab draws this at request granularity; the settings page's hourly
- * aggregation is unchanged (this field is session-scope only).
+ * per request, so a 55-request session plots 55 points. Failed requests are
+ * excluded: they carry no token figure, and a zero-token point per failure
+ * would only sawtooth the curve. The conversation view tab draws this at
+ * request granularity; the settings page's hourly aggregation is unchanged
+ * (this field is session-scope only).
  * @param records - the scoped records (day-file order is chronological).
  * @param from - optional inclusive day key; the series keeps those requests.
  * @param to - optional inclusive day key.
@@ -291,6 +322,7 @@ export function requestSeriesOf(
   model?: string,
 ): RequestPoint[] {
   return filterRecordsByRange(records, undefined, dayRangeFilter(from, to, model))
+    .filter(record => record.kind !== 'failure')
     .map(record => ({
       time: record.time,
       tokens: record.usage === undefined ? 0
@@ -398,9 +430,11 @@ export function filterSummary(
     const day = days.get(row.day) ?? emptyTotals()
     addTotals(day, row.totals)
     days.set(row.day, day)
-    const perModel = models.get(row.model) ?? emptyTotals()
-    addTotals(perModel, row.totals)
-    models.set(row.model, perModel)
+    if (row.model !== '') {
+      const perModel = models.get(row.model) ?? emptyTotals()
+      addTotals(perModel, row.totals)
+      models.set(row.model, perModel)
+    }
   }
   const recent = filterRecordsByRange(summary.recent, undefined, dayRangeFilter(from, to, model))
   return { dataDir: summary.dataDir, total, byDay: dayRows(days), byHour, byModel: modelRows(models), rateRows: rateRowsSorted(rows), recent }

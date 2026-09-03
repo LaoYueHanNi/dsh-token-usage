@@ -173,7 +173,7 @@ export type FullSyncView =
 export interface UsageTotals {
   /** Number of recorded provider-billed calls: plain requests plus
    * compaction summarize requests (records without provider usage count
-   * here). */
+   * here). Failed requests never join this count — see {@link failures}. */
   requests: number
   /** Uncached input tokens; billed input = input + cacheRead + cacheWrite. */
   inputTokens: number
@@ -186,6 +186,17 @@ export interface UsageTotals {
   /** Compaction summarize requests in this group; absent on legacy rollups
    * (reads as 0). Plain requests = `requests - (compactions ?? 0)`. */
   compactions?: number
+  /** Failed model requests in this group (`turn/end` LLM errors plus
+   * `llm/retry` scheduled after a failed attempt); absent on legacy
+   * rollups and pre-failure shapes (reads as 0). Success rate =
+   * requests / (requests + failures) is attempt-level, not turn-level. */
+  failures?: number
+  /** Failure counts by the provider-neutral `LlmFailure.code`
+   * (`{ RATE_LIMIT: 16, TRANSPORT: 2, … }`); absent when the
+   * group holds no failures or the shape predates the key (reads as an
+   * empty map). Sums to `failures` when present. Codes are an open set:
+   * unknown future codes read verbatim. */
+  failuresByCode?: Record<string, number>
 }
 
 /** One per-day aggregation row, keyed by local date `YYYY-MM-DD`. */

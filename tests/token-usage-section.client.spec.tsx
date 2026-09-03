@@ -7,12 +7,38 @@
  * pins the token-abbreviation and cache-hit-rate formatting, and covers the
  * per-model pricing dialog (open/close, full rule-chain rows).
  */
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import { formatHitRate, formatTokens, TokenUsageSection, totalTokens } from '../src/client/TokenUsageSection.tsx'
 import { zh } from '../src/client/locales.ts'
 import type { UsageSummary } from '../src/wire.ts'
+
+// The shell Tooltip ships inside the primitives package whose CSS imports the
+// Node test runtime cannot load (quota-button.client.spec mocks it for the
+// same reason). This stand-in keeps the hover contract real: mouseenter shows
+// a role="tooltip" bubble with the label, mouseleave hides it.
+vi.mock('@deepseek-ai/dsh-client-ui-primitives', async () => {
+  const { cloneElement, useState } = await import('react')
+  return {
+    Tooltip: ({ label, disabled, children }: {
+      label: string
+      disabled?: boolean
+      children: React.ReactElement<{ onMouseEnter?: () => void, onMouseLeave?: () => void }>
+    }) => {
+      const [visible, setVisible] = useState(false)
+      return (
+        <>
+          {cloneElement(children, {
+            onMouseEnter: () => { if (disabled !== true) setVisible(true) },
+            onMouseLeave: () => setVisible(false),
+          })}
+          {visible ? <span role="tooltip">{label}</span> : null}
+        </>
+      )
+    },
+  }
+})
 
 /** Common-namespace zh values the tests assert against (shell-owned copy). */
 const COMMON_ZH: Record<string, string> = {
@@ -41,6 +67,8 @@ const SUMMARY: UsageSummary = {
     outputTokens: 12,
     cacheReadTokens: 3,
     cacheWriteTokens: 2,
+    failures: 1,
+    failuresByCode: { RATE_LIMIT: 1 },
   },
   totalCost: 0.0014,
   unpricedModels: [],
@@ -66,6 +94,8 @@ const SUMMARY: UsageSummary = {
       outputTokens: 60,
       cacheReadTokens: 40,
       cacheWriteTokens: 0,
+      failures: 1,
+      failuresByCode: { RATE_LIMIT: 1 },
     },
     cost: 0.0014,
   }],
@@ -154,9 +184,12 @@ describe('TokenUsageSection', () => {
     expect(screen.getByText('加载中…')).toBeTruthy()
     // '总 token' appears twice: the card label and the table column header.
     expect(await screen.findAllByText('总 token')).toHaveLength(2)
-    // Row 1 cards: requests / cost / total tokens (47) / hit rate (9.1%).
-    expect(screen.getAllByText('请求数').length).toBeGreaterThan(0)
+    // Row 1 cards: successful requests (failure pill) / cost / total
+    // tokens (47) / hit rate (9.1%). The label also heads the table column.
+    expect(screen.getAllByText('成功请求数').length).toBeGreaterThan(0)
     expect(screen.getByText('4')).toBeTruthy()
+    expect(screen.getByText('失败 1')).toBeTruthy()
+    expect(screen.getByRole('columnheader', { name: '成功/失败' })).toBeTruthy()
     // The cost card and the per-model cost column share the same ¥ figure.
     expect(screen.getAllByText('¥0.00').length).toBeGreaterThan(0)
     expect(screen.getByText('47')).toBeTruthy()
@@ -190,6 +223,19 @@ describe('TokenUsageSection', () => {
     // No per-day / recent sections.
     expect(screen.queryByText('按日')).toBeNull()
     expect(screen.queryByText('最近请求')).toBeNull()
+  })
+
+  it('shows the per-code failure breakdown on the failure-pill hover', async () => {
+    stubFetch(async () => ({ ok: true, json: async () => SUMMARY }))
+    render(<TokenUsageSection close={() => {}} t={t} />)
+    const cardPill = await screen.findByText('失败 1')
+    fireEvent.mouseEnter(cardPill)
+    await waitFor(() => expect(screen.getByRole('tooltip').textContent).toBe('限流 ×1'))
+    fireEvent.mouseLeave(cardPill)
+    await waitFor(() => expect(screen.queryByRole('tooltip')).toBeNull())
+    const table = screen.getByRole('table', { name: '按模型' })
+    fireEvent.mouseEnter(within(table).getByLabelText('失败 1'))
+    await waitFor(() => expect(screen.getByRole('tooltip').textContent).toBe('限流 ×1'))
   })
 
   it('shows the empty hint when nothing matches', async () => {
@@ -436,7 +482,7 @@ describe('TokenUsageSection filtering', () => {
     await screen.findAllByText('总 token')
     const headers = within(screen.getByRole('table', { name: '按模型' })).getAllByRole('columnheader')
     expect(headers.map(cell => cell.textContent)).toEqual(
-      ['模型', '请求数', '费用', '总 token', '入', '出', '缓', '写', '命中率'])
+      ['模型', '成功/失败', '费用', '总 token', '入', '出', '缓', '写', '命中率'])
   })
 
   it('opens a pricing dialog from the model row: each billing condition on its own row', async () => {

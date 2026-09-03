@@ -1,12 +1,17 @@
 import { describe, expect, it } from 'vitest'
+import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import {
+  modelOfEvent,
   parseRecord,
   projectUsage,
   recordFromCompaction,
   recordFromEvent,
+  recordFromRetry,
+  recordFromTurnEnd,
+  recordOfEvent,
   serializeRecord,
 } from '../src/usage-record.ts'
-import { compactionEvent, messageEvent } from './helpers.ts'
+import { compactionEvent, messageEvent, retryEvent, turnEndEvent } from './helpers.ts'
 
 describe('projectUsage', () => {
   it('renders an absent usage record as undefined', () => {
@@ -97,6 +102,118 @@ describe('recordFromCompaction', () => {
     expect(recordFromCompaction(compactionEvent({
       usage: { inputTokens: NaN, outputTokens: 5 },
     }), 'session-1')).toBeNull()
+  })
+})
+
+describe('recordFromTurnEnd', () => {
+  it('projects an errored turn as a failure row with the failure code', () => {
+    const record = recordFromTurnEnd(turnEndEvent(), 'session-1', 'deepseek-chat')
+    expect(record).toEqual({
+      requestId: 'failure:session-1:9',
+      time: 1_700_000_000_000,
+      sessionId: 'session-1',
+      model: 'deepseek-chat',
+      kind: 'failure',
+      failureCode: 'RATE_LIMIT',
+    })
+  })
+
+  it('omits failureCode when the classifier names none', () => {
+    const record = recordFromTurnEnd(turnEndEvent({
+      reason: { kind: 'error', error: { message: 'boom', code: '' } },
+    }), 'session-1', 'm')
+    expect('failureCode' in record!).toBe(false)
+  })
+
+  it('returns null for every non-error ending', () => {
+    expect(recordFromTurnEnd(turnEndEvent({ reason: { kind: 'completed' } }), 's', 'm')).toBeNull()
+    expect(recordFromTurnEnd(turnEndEvent({ reason: { kind: 'blocked' } }), 's', 'm')).toBeNull()
+    expect(recordFromTurnEnd(turnEndEvent({ reason: { kind: 'max-tokens' } }), 's', 'm')).toBeNull()
+    expect(recordFromTurnEnd(turnEndEvent({ reason: { kind: 'interrupted' } }), 's', 'm')).toBeNull()
+    expect(recordFromTurnEnd(turnEndEvent({
+      reason: { kind: 'aborted', reason: { kind: 'user' } },
+    }), 's', 'm')).toBeNull()
+  })
+
+  it('keys the row on the event seq, not the turn number', () => {
+    const first = recordFromTurnEnd(turnEndEvent({ seq: 11, turn: 3 }), 's1', 'm')
+    const second = recordFromTurnEnd(turnEndEvent({ seq: 12, turn: 3 }), 's1', 'm')
+    expect(first!.requestId).toBe('failure:s1:11')
+    expect(second!.requestId).toBe('failure:s1:12')
+    // A different session at the same seq stays distinct.
+    expect(recordFromTurnEnd(turnEndEvent({ seq: 11 }), 's2', 'm')!.requestId).toBe('failure:s2:11')
+  })
+
+  it('round-trips a failure record with its code through serialize/parse', () => {
+    const record = recordFromTurnEnd(turnEndEvent(), 'session-1', '')
+    expect(parseRecord(serializeRecord(record!))).toEqual(record)
+  })
+})
+
+describe('recordFromRetry', () => {
+  it('projects an llm/retry as a failure row with the failure code', () => {
+    const record = recordFromRetry(retryEvent(), 'session-1', 'deepseek-chat')
+    expect(record).toEqual({
+      requestId: 'failure:session-1:8',
+      time: 1_700_000_000_000,
+      sessionId: 'session-1',
+      model: 'deepseek-chat',
+      kind: 'failure',
+      failureCode: 'RATE_LIMIT',
+    })
+  })
+
+  it('omits failureCode when the classifier names none', () => {
+    const record = recordFromRetry(retryEvent({
+      failure: { message: 'boom', code: '' },
+    }), 's', 'm')
+    expect('failureCode' in record).toBe(false)
+  })
+
+  it('keys the row on the event seq, distinct from a turn/end at another seq', () => {
+    const retried = recordFromRetry(retryEvent({ seq: 8 }), 's1', 'm')
+    const terminal = recordFromTurnEnd(turnEndEvent({ seq: 12 }), 's1', 'm')
+    expect(retried.requestId).toBe('failure:s1:8')
+    expect(terminal!.requestId).toBe('failure:s1:12')
+  })
+})
+
+describe('recordOfEvent', () => {
+  it('projects each recorded origin and skips the rest', () => {
+    expect(recordOfEvent(messageEvent(), 's1', '')?.requestId).toBe('msg-1')
+    expect(recordOfEvent(compactionEvent({ seq: 4 }), 's1', '')?.requestId).toBe('compaction:s1:4')
+    expect(recordOfEvent(turnEndEvent({ seq: 9 }), 's1', 'm')?.requestId).toBe('failure:s1:9')
+    expect(recordOfEvent(retryEvent({ seq: 8 }), 's1', 'm')?.requestId).toBe('failure:s1:8')
+    expect(recordOfEvent(turnEndEvent({ reason: { kind: 'completed' } }), 's1', 'm')).toBeNull()
+    expect(recordOfEvent(
+      { type: 'turn/start', seq: 0, time: 1, data: { turn: 1 } } as SessionEvent,
+      's1', '',
+    )).toBeNull()
+  })
+
+  it('honours the compaction recording switch', () => {
+    expect(recordOfEvent(compactionEvent({ seq: 4 }), 's1', '', false)).toBeNull()
+  })
+})
+
+describe('modelOfEvent', () => {
+  it('reads the model off a request/context route change', () => {
+    const event = {
+      type: 'request/context',
+      seq: 1,
+      time: 1,
+      data: { provider: 'deepseek', model: 'deepseek-reasoner' },
+    } as unknown as SessionEvent
+    expect(modelOfEvent(event)).toBe('deepseek-reasoner')
+  })
+
+  it('reads the model off an assistant message source', () => {
+    expect(modelOfEvent(messageEvent({ model: 'kimi-k2' }))).toBe('kimi-k2')
+  })
+
+  it('returns undefined for events that carry no model', () => {
+    expect(modelOfEvent(compactionEvent())).toBeUndefined()
+    expect(modelOfEvent(turnEndEvent())).toBeUndefined()
   })
 })
 
@@ -222,5 +339,47 @@ describe('parseRecord', () => {
       kind: 'compaction',
       usage: { inputTokens: 100, outputTokens: 5 },
     })
+  })
+
+  it('keeps the failure kind through coercion', () => {
+    const row = JSON.stringify({
+      requestId: 'failure:s1:9',
+      time: 1_700_000_000_000,
+      sessionId: 's1',
+      model: 'deepseek-chat',
+      kind: 'failure',
+    })
+    expect(parseRecord(row)).toEqual({
+      requestId: 'failure:s1:9',
+      time: 1_700_000_000_000,
+      sessionId: 's1',
+      model: 'deepseek-chat',
+      kind: 'failure',
+    })
+  })
+
+  it('keeps the failure code on failure rows and drops it elsewhere', () => {
+    const failure = JSON.stringify({
+      requestId: 'failure:s1:9',
+      time: 1_700_000_000_000,
+      sessionId: 's1',
+      model: 'deepseek-chat',
+      kind: 'failure',
+      failureCode: 'TRANSPORT',
+    })
+    expect(parseRecord(failure)).toMatchObject({ kind: 'failure', failureCode: 'TRANSPORT' })
+    // A non-string code normalizes to omission.
+    const badCode = JSON.stringify({ ...JSON.parse(failure), failureCode: 42 })
+    expect('failureCode' in parseRecord(badCode)!).toBe(false)
+    // A failure code on a plain request row never survives coercion.
+    const foreign = JSON.stringify({
+      requestId: 'r1',
+      time: 1_700_000_000_000,
+      sessionId: 's1',
+      model: 'm',
+      failureCode: 'TRANSPORT',
+      usage: { inputTokens: 1, outputTokens: 1 },
+    })
+    expect('failureCode' in parseRecord(foreign)!).toBe(false)
   })
 })

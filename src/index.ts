@@ -28,6 +28,8 @@ import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-session-persistence'
 // Type-only: pulls the merged `compaction/*` event payloads into the program.
 import type {} from '@deepseek-ai/dsh-compaction/types'
+// Type-only: pulls the merged `llm/retry` event payload into the program.
+import type {} from '@deepseek-ai/dsh-llm-retry/types'
 // Type-only: pulls the ctx.webServer declaration merge into the program.
 import type {} from '@deepseek-ai/dsh-host-webserver'
 // Type-only: pulls the ctx.llm declaration merge (the provider directory).
@@ -35,7 +37,7 @@ import type {} from '@deepseek-ai/dsh-llm'
 import { UsageLog } from './usage-log.ts'
 import { cleanSource, copyData, type MigrationProgress } from './migrate.ts'
 import { resolvePricingUrl, syncCloudPricing, type PricingSourceInput } from './pricing.ts'
-import { recordFromCompaction, recordFromEvent, type UsageRecord } from './usage-record.ts'
+import { modelOfEvent, recordOfEvent } from './usage-record.ts'
 import { autoSyncIfNeeded, syncHistory } from './sync.ts'
 import { clearRecordCache, warmRecordCache } from './record-cache.ts'
 import { ROLLUP_FILE_NAME, ROLLUP_TMP_FILE_NAME } from './rollup.ts'
@@ -394,10 +396,12 @@ export function apply(ctx: Context, config: Config = {}) {
 
     // Phase 2: flip the running configuration. A fresh log knows the rows the
     // target already holds, so post-flip events dedupe against them.
-    const log = new UsageLog(nextDir, undefined, logger)
+    const log = new UsageLog(nextDir, logger)
     await log.scan()
+    const moved = await log.refileByEventDay()
     current = { dir: nextDir, log }
     clearRecordCache(previous.dir)
+    if (moved > 0) invalidateDerivedState(nextDir)
     void warmRecordCache(nextDir, undefined, logger)
 
     // Phase 3: remove the source files that verifiably landed, then the
@@ -511,7 +515,7 @@ export function apply(ctx: Context, config: Config = {}) {
         fullSyncStatus = { status: 'running', ...tick }
       },
     )
-      .then((result) => {
+      .then(async (result) => {
         // `syncHistory` always emits a final tick at `processed: total`, but
         // we re-stamp the done state from the resolved result so the
         // `added` / `skipped` totals match the function's return exactly
@@ -529,7 +533,11 @@ export function apply(ctx: Context, config: Config = {}) {
         // A manual scan usually backfills compactions this version just
         // learned to record (or rows a crash dropped): drop the derived
         // stats state so the next read aggregates over the appended rows.
-        if (result.added > 0) invalidateDerivedState(target.dir)
+        const moved = await target.log.refileByEventDay()
+        if (result.added > 0 || moved > 0) invalidateDerivedState(target.dir)
+        if (moved > 0) {
+          logger.info(`[token-usage] refiled ${String(moved)} rows onto event-day files`)
+        }
         logger.info(`[token-usage] full sync done: ${String(result.added)} added, ${String(result.skipped)} skipped`)
       })
       .catch((error: unknown) => {
@@ -615,11 +623,11 @@ export function apply(ctx: Context, config: Config = {}) {
   const recordCompaction = config.recordCompaction !== false
 
   /**
-   * Drop the derived stats state after a sync appended rows. The rollup may
-   * already cover a day the appended rows landed in (a sync straddling
-   * midnight writes into a file that turns frozen mid-run, and a frozen file
-   * at or before `upto` is never re-read), and the record cache may hold a
-   * stale parse of a file the sync appended to. Both are derived state: the
+   * Drop the derived stats state after a sync appended rows or a refile
+   * moved rows onto a different day file. Frozen day files are no longer
+   * immutable — history sync and refile write through them — so a rollup
+   * whose `upto` already covers that day would skip the new contents, and
+   * the record cache may hold a stale parse. Both are derived state: the
    * next stats read rebuilds them, so dropping them is lossless.
    */
   const invalidateDerivedState = (dir: string): void => {
@@ -670,33 +678,45 @@ export function apply(ctx: Context, config: Config = {}) {
       return
     }
     const dir = resolved
-    const log = new UsageLog(dir, undefined, logger)
+    const log = new UsageLog(dir, logger)
     current = { dir, log }
     void warmRecordCache(dir, undefined, logger)
 
+    // Last-known route model per session: failure rows need a model to
+    // attribute while turn/end names none, so the recorder follows the same
+    // events the sync walk does (request/context route changes, then
+    // assistant/message confirmations). Bounded by the session count.
+    const lastModel = new Map<string, string>()
     ctx.on('session/event', (session: Session, event: SessionEvent) => {
-      let record: UsageRecord | null | undefined
-      if (event.type === 'assistant/message') {
-        record = recordFromEvent(event, session.id)
-      } else if (event.type === 'compaction/summary' && recordCompaction) {
-        // A compaction without usable usage reads as null and is skipped.
-        record = recordFromCompaction(event, session.id)
-      }
-      if (record === undefined || record === null) return
+      const revealed = modelOfEvent(event)
+      if (revealed !== undefined) lastModel.set(session.id, revealed)
+      const record = recordOfEvent(
+        event, session.id, lastModel.get(session.id) ?? '', recordCompaction,
+      )
+      if (record === null) return
       // Fire-and-forget: the log serializes appends and reports its own failures.
       void current?.log.record(record)
     })
 
-    // One-shot backfill for requests recorded before this plugin was installed.
-    // Fire-and-forget: a failure leaves the marker unwritten and the next
-    // startup retries; a crash mid-run is absorbed by the sync's dedupe.
-    void autoSyncIfNeeded({ persistence: ctx.sessionPersistence, log, recordCompaction }, dir)
+    // Refile rows that an older build parked in the sync-day file, then the
+    // one-shot backfill. Both share the log's append queue, so a live write
+    // cannot interleave with the rewrite. History sync then lands each new
+    // row on the event's own day.
+    void log.refileByEventDay()
+      .then((moved) => {
+        if (moved > 0) {
+          logger.info(`[token-usage] refiled ${String(moved)} rows onto event-day files`)
+          invalidateDerivedState(dir)
+        }
+        return autoSyncIfNeeded({ persistence: ctx.sessionPersistence, log, recordCompaction }, dir)
+      })
       .then((result) => {
         if (result !== null) {
           logger.info(`[token-usage] first-run sync: ${result.added} added, ${result.skipped} skipped`)
           // Appended rows (compactions backfilled by an upgrade, or requests
           // a previous run missed) invalidate the derived stats state before
-          // the cache re-warms over the new contents.
+          // the cache re-warms over the new contents — including writes into
+          // frozen day files the rollup may already have absorbed.
           if (result.added > 0) invalidateDerivedState(dir)
         }
         return warmRecordCache(dir, undefined, logger)

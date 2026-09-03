@@ -23,7 +23,7 @@ Status: implemented
 
 ### 2. 实时采集与历史回填
 
-- `src/index.ts` 的 `session/event` 监听改为三分支：`assistant/message` → `recordFromEvent`；`compaction/summary`（开关开）→ `recordFromCompaction`，null 跳过；其余 return。
+- `src/index.ts` 的 `session/event` 监听与 `syncHistory` 走共用投影入口 `recordOfEvent`：`assistant/message` → `recordFromEvent`；`compaction/summary`（开关开）→ `recordFromCompaction`，null 跳过；其余 origin（后来的失败源）由同一入口扩展。
 - `src/sync.ts` 的 `syncHistory` 事件循环同样加 `compaction/summary` 分支；`SyncDeps` 加 `recordCompaction?: boolean`（缺省 true），首次安装回填与手动 full-sync 都经它控制。dedupe 由 `UsageLog` 的 requestId 全局集合保证（压缩行前缀 `compaction:` 含 sessionId，跨会话唯一）。
 
 ### 3. 统计并入（`wire.ts` / `stats.ts` / `rollup.ts`）
@@ -34,7 +34,7 @@ Status: implemented
 
 ### 4. 同步后的派生态失效
 
-`UsageLog.appendOnce` 按**当前时钟**分桶写文件，回填行落在回填当天的 day 文件（hot，每次 stats 全量重读）——提案期"写入旧日期文件被 rollup 吸收"的表述与实际机制不符。真正要防御的是**跨午夜 sync** 的边缘窗口：午夜前写入的文件午夜后变 frozen，若中途 stats 读取已把 rollup `upto` 推过该日，追加行会被 `day <= upto` 跳过；record-cache 的 frozen 缓存同理可能 stale。补偿：`autoSyncIfNeeded` / `triggerFullSync` 完成回调在 `added > 0` 时 `clearRecordCache(dir)` + 删除 `rollup.json`（及 `.tmp`）——两者都是派生态，下次 stats 读无损重建；`ROLLUP_FILE_NAME` 自 `rollup.ts` 导出为单一权威。
+`UsageLog.appendOnce` 按事件本地日写文件的口径见 [`2026-09-03-event-day-files`](./2026-09-03-event-day-files.md)（本条第 4 节「按当前时钟分桶」已被推翻）。回填会写入已经 frozen 的 day 文件，因此 `added > 0` 以及 refile 搬行后仍须丢掉 rollup 与 record-cache——`day <= upto` 的 frozen 文件默认不再重读。`ROLLUP_FILE_NAME` 自 `rollup.ts` 导出为单一权威。
 
 ### 5. 配置开关
 

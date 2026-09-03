@@ -1,14 +1,31 @@
 /**
  * Browser-side display formatting of the token-usage settings page: token
- * abbreviation (K/M/B), the cache hit rate, and the cost/rate figures of the
+ * abbreviation (K/M/B), the cache hit rate, the cost/rate figures of the
  * pricing layer (wire amounts are RMB; the currency view converts them to
- * the region-picked display currency, ¥ or $). Pure functions only, shared
- * by the section and the trend chart.
+ * the region-picked display currency, ¥ or $), and the failure-pill
+ * tooltip labels. Pure functions only, shared by the section and the
+ * trend chart.
  *
  * @module token-usage/client/format
  */
 
+import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { UsageSummary, UsageTotals } from '../wire.ts'
+import type { TokenUsageKey } from './locales.ts'
+
+/** Known `LlmFailure.code`s that have a `fail.*` locale label. An unknown
+ * future code is not in this map and the tooltip renders it verbatim. */
+const FAILURE_CODE_LABEL_KEYS = {
+  RATE_LIMIT: 'fail.RATE_LIMIT',
+  SERVER: 'fail.SERVER',
+  TIMEOUT: 'fail.TIMEOUT',
+  TRANSPORT: 'fail.TRANSPORT',
+  EMPTY_RESPONSE: 'fail.EMPTY_RESPONSE',
+  QUOTA: 'fail.QUOTA',
+  CONTEXT_WINDOW_EXCEEDED: 'fail.CONTEXT_WINDOW_EXCEEDED',
+  INVALID_CREDENTIAL: 'fail.INVALID_CREDENTIAL',
+  UNKNOWN: 'fail.UNKNOWN',
+} as const satisfies Record<string, TokenUsageKey>
 
 /** One decimal below 10, integer otherwise, trailing `.0` stripped. */
 function scale(value: number): string {
@@ -199,4 +216,36 @@ export function formatTtft(ms: number): string {
 export function formatSpeed(tokensPerSecond: number): string {
   const clamped = Math.max(0, tokensPerSecond)
   return clamped >= 10 ? String(Math.round(clamped)) : String(Math.round(clamped * 10) / 10)
+}
+
+/**
+ * The failure pill's hover tooltip text: one `label ×count` line per failure
+ * class, largest count first (code name ascending breaks ties), newline-joined —
+ * the shell Tooltip renders `pre-line`, so each line lands on its own row.
+ * Known `LlmFailure.code`s map through `fail.*` locale keys (限流 / Rate
+ * limited); an unknown future code renders verbatim. A legacy shape without
+ * the breakdown, or an empty map, yields '' and the caller suppresses the
+ * tooltip.
+ * @param byCode - the per-code failure counts from the totals (may be undefined).
+ * @param t - locale lookup; codes without a `fail.*` key stay verbatim.
+ * @returns the multi-line tooltip label, or '' when there is nothing to show.
+ */
+export function failuresTooltip(
+  byCode: Record<string, number> | undefined,
+  t: TranslateNS<'token-usage'>,
+): string {
+  if (byCode === undefined) return ''
+  return Object.entries(byCode)
+    .filter(([, count]) => count > 0)
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .map(([code, count]) => `${failureCodeLabel(code, t)} ×${count}`)
+    .join('\n')
+}
+
+/** Locale label for one failure code; unknown codes stay verbatim. */
+function failureCodeLabel(code: string, t: TranslateNS<'token-usage'>): string {
+  if (Object.hasOwn(FAILURE_CODE_LABEL_KEYS, code)) {
+    return t(FAILURE_CODE_LABEL_KEYS[code as keyof typeof FAILURE_CODE_LABEL_KEYS])
+  }
+  return code
 }

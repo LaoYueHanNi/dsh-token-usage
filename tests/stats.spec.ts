@@ -10,15 +10,18 @@ import type { PricingTable } from '../src/wire.ts'
 import type { UsageRecord } from '../src/usage-record.ts'
 
 /** One record with the given time and usage buckets (usage optional); pass
- * `kind: 'compaction'` for a compaction summarize row. */
-function record(time: number, model: string, usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number }, kind?: 'compaction'): UsageRecord {
+ * `kind: 'compaction'` for a compaction summarize row, `kind: 'failure'`
+ * for a failed-request row (no usage by construction). */
+function record(time: number, model: string, usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number }, kind?: 'compaction' | 'failure'): UsageRecord {
   return {
-    requestId: kind === 'compaction' ? `compaction-${time}` : `req-${time}-${model}`,
+    requestId: kind === 'compaction' ? `compaction-${time}`
+      : kind === 'failure' ? `failure-${time}-${model}`
+        : `req-${time}-${model}`,
     time,
     sessionId: 's1',
     model,
-    ...(kind === 'compaction' ? { kind } : {}),
-    ...usage === undefined ? {} : {
+    ...(kind !== undefined ? { kind } : {}),
+    ...usage === undefined || kind === 'failure' ? {} : {
       usage: {
         inputTokens: usage.input ?? 0,
         outputTokens: usage.output ?? 0,
@@ -30,6 +33,94 @@ function record(time: number, model: string, usage?: { input?: number; output?: 
 }
 
 describe('summarizeRecords', () => {
+  it('folds a failure record into the failures dimension only, never requests', () => {
+    const summary = summarizeRecords([
+      record(1_700_000_000_000, 'deepseek-chat', { input: 10, output: 5 }),
+      { ...record(1_700_000_000_001, 'deepseek-chat', undefined, 'failure'), failureCode: 'RATE_LIMIT' },
+      record(1_700_000_000_002, 'deepseek-reasoner', { input: 1, output: 1 }),
+    ])
+    // requests stays the successful count; failures counts its own rows.
+    expect(summary.total.requests).toBe(2)
+    expect(summary.total.failures).toBe(1)
+    expect(summary.total.inputTokens).toBe(11)
+    // The failure code folds into the per-code breakdown.
+    expect(summary.total.failuresByCode).toEqual({ RATE_LIMIT: 1 })
+    // Every dimension carries the failure count alongside its rows.
+    expect(summary.byDay[0]!.totals.failures).toBe(1)
+    expect(summary.byHour[0]!.totals.failures).toBe(1)
+    expect(summary.byModel.find(row => row.model === 'deepseek-chat')!.totals.failures).toBe(1)
+    expect(summary.rateRows[0]!.totals.failures).toBe(1)
+    // The recent window carries the failure row verbatim (newest first).
+    expect(summary.recent[1]).toMatchObject({ kind: 'failure', model: 'deepseek-chat' })
+  })
+
+  it('keeps an unattributed failure out of byModel and byHour', () => {
+    const at = new Date(2026, 0, 15, 12).getTime()
+    const summary = summarizeRecords([
+      record(at, 'deepseek-chat', { input: 10, output: 5 }),
+      { ...record(at + 1, '', undefined, 'failure'), failureCode: 'RATE_LIMIT' },
+    ])
+    expect(summary.total.failures).toBe(1)
+    expect(summary.byDay[0]!.totals.failures).toBe(1)
+    expect(summary.byModel.map(row => row.model)).toEqual(['deepseek-chat'])
+    expect(summary.byHour).toHaveLength(1)
+    expect(summary.rateRows.some(row => row.model === '')).toBe(true)
+    // Day-range filter rebuilds totals from rateRows, so the unattributed
+    // failure must still be in rateRows or the count would vanish.
+    const filtered = filterSummary({ dataDir: '/x', ...summary }, '2026-01-15', '2026-01-15')
+    expect(filtered.total.failures).toBe(1)
+    expect(filtered.byModel.map(row => row.model)).toEqual(['deepseek-chat'])
+  })
+
+  it('breaks failures down by code, defaulting a missing code to UNKNOWN', () => {
+    const summary = summarizeRecords([
+      { ...record(1_700_000_000_000, 'deepseek-chat', undefined, 'failure'), failureCode: 'RATE_LIMIT' },
+      { ...record(1_700_000_000_001, 'deepseek-chat', undefined, 'failure'), failureCode: 'RATE_LIMIT' },
+      { ...record(1_700_000_000_002, 'deepseek-chat', undefined, 'failure'), failureCode: 'TRANSPORT' },
+      record(1_700_000_000_003, 'deepseek-chat', undefined, 'failure'),
+    ])
+    expect(summary.total.failures).toBe(4)
+    expect(summary.total.failuresByCode).toEqual({ RATE_LIMIT: 2, TRANSPORT: 1, UNKNOWN: 1 })
+    // The breakdown rides every dimension row, not just the total.
+    expect(summary.byDay[0]!.totals.failuresByCode).toEqual({ RATE_LIMIT: 2, TRANSPORT: 1, UNKNOWN: 1 })
+    expect(summary.byModel[0]!.totals.failuresByCode).toEqual({ RATE_LIMIT: 2, TRANSPORT: 1, UNKNOWN: 1 })
+  })
+
+  it('merges per-code failure maps key-wise across summaries', () => {
+    const at = new Date(2026, 0, 15, 12).getTime()
+    const left = summarizeRecords([
+      { ...record(at, 'deepseek-chat', undefined, 'failure'), failureCode: 'RATE_LIMIT' },
+      { ...record(at + 1, 'deepseek-chat', undefined, 'failure'), failureCode: 'RATE_LIMIT' },
+    ])
+    const right = summarizeRecords([
+      { ...record(at + 2, 'deepseek-chat', undefined, 'failure'), failureCode: 'RATE_LIMIT' },
+      { ...record(at + 3, 'deepseek-chat', undefined, 'failure'), failureCode: 'TRANSPORT' },
+    ])
+    const merged = mergeSummaries(left, right)
+    expect(merged.total.failures).toBe(4)
+    expect(merged.total.failuresByCode).toEqual({ RATE_LIMIT: 3, TRANSPORT: 1 })
+  })
+
+  it('reads a failure-less legacy totals row as zero failures on merge', () => {
+    const withFailures = summarizeRecords([
+      record(1_700_000_000_000, 'deepseek-chat', undefined, 'failure'),
+    ])
+    // A legacy rollup side: totals written before the key existed.
+    const legacyTotals = { requests: 1, inputTokens: 5, outputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 0 }
+    const legacy: Parameters<typeof mergeSummaries>[0] = {
+      total: legacyTotals,
+      byDay: [{ day: '2026-01-14', totals: legacyTotals }],
+      byHour: [],
+      byModel: [{ model: 'deepseek-chat', totals: legacyTotals }],
+      rateRows: [],
+      recent: [],
+    }
+    const merged = mergeSummaries(legacy, withFailures)
+    expect(merged.total.requests).toBe(1)
+    expect(merged.total.failures).toBe(1)
+    expect(Number.isNaN(merged.total.inputTokens)).toBe(false)
+  })
+
   it('folds totals over records, counting requests without usage', () => {
     const summary = summarizeRecords([
       record(1_700_000_000_000, 'deepseek-chat', { input: 10, output: 5, cacheRead: 3 }),
@@ -42,7 +133,7 @@ describe('summarizeRecords', () => {
       outputTokens: 12,
       cacheReadTokens: 3,
       cacheWriteTokens: 2,
-      compactions: 0,
+      compactions: 0, failures: 0,
     })
   })
 
@@ -115,9 +206,9 @@ describe('summarizeRecords', () => {
     // Unresolved records fold into the neutral unpriced rate per (day, model).
     const neutral = { ruleStart: 0, ruleEnd: 0, tier: 0, slot: -1 }
     expect(summary.rateRows).toEqual([
-      { day: '2026-01-15', model: 'deepseek-chat', rate: neutral, totals: { requests: 2, inputTokens: 11, outputTokens: 6, cacheReadTokens: 0, cacheWriteTokens: 0, compactions: 0 } },
-      { day: '2026-01-15', model: 'deepseek-reasoner', rate: neutral, totals: { requests: 1, inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0, compactions: 0 } },
-      { day: '2026-01-16', model: 'deepseek-chat', rate: neutral, totals: { requests: 1, inputTokens: 2, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0, compactions: 0 } },
+      { day: '2026-01-15', model: 'deepseek-chat', rate: neutral, totals: { requests: 2, inputTokens: 11, outputTokens: 6, cacheReadTokens: 0, cacheWriteTokens: 0, compactions: 0, failures: 0 } },
+      { day: '2026-01-15', model: 'deepseek-reasoner', rate: neutral, totals: { requests: 1, inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0, compactions: 0, failures: 0 } },
+      { day: '2026-01-16', model: 'deepseek-chat', rate: neutral, totals: { requests: 1, inputTokens: 2, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0, compactions: 0, failures: 0 } },
     ])
   })
 
@@ -146,9 +237,9 @@ describe('summarizeRecords', () => {
       record(morning, 'deepseek-chat', { input: 10, output: 5 }),
     ])
     expect(summary.byHour).toEqual([
-      { hour: '2026-01-15T09', model: 'deepseek-chat', totals: { requests: 1, inputTokens: 10, outputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 0, compactions: 0 } },
-      { hour: '2026-01-15T09', model: 'deepseek-reasoner', totals: { requests: 1, inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0, compactions: 0 } },
-      { hour: '2026-01-15T12', model: 'deepseek-chat', totals: { requests: 1, inputTokens: 2, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0, compactions: 0 } },
+      { hour: '2026-01-15T09', model: 'deepseek-chat', totals: { requests: 1, inputTokens: 10, outputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 0, compactions: 0, failures: 0 } },
+      { hour: '2026-01-15T09', model: 'deepseek-reasoner', totals: { requests: 1, inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0, compactions: 0, failures: 0 } },
+      { hour: '2026-01-15T12', model: 'deepseek-chat', totals: { requests: 1, inputTokens: 2, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0, compactions: 0, failures: 0 } },
     ])
     // The same record folds into its day bucket as well.
     expect(summary.byDay[0]!.totals.requests).toBe(3)
@@ -174,15 +265,15 @@ describe('mergeSummaries', () => {
       outputTokens: 15,
       cacheReadTokens: 0,
       cacheWriteTokens: 0,
-      compactions: 0,
+      compactions: 0, failures: 0,
     })
     expect(merged.byDay).toEqual([
-      { day: '2026-01-15', totals: { requests: 3, inputTokens: 31, outputTokens: 13, cacheReadTokens: 0, cacheWriteTokens: 0, compactions: 0 } },
-      { day: '2026-01-16', totals: { requests: 1, inputTokens: 2, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0, compactions: 0 } },
+      { day: '2026-01-15', totals: { requests: 3, inputTokens: 31, outputTokens: 13, cacheReadTokens: 0, cacheWriteTokens: 0, compactions: 0, failures: 0 } },
+      { day: '2026-01-16', totals: { requests: 1, inputTokens: 2, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0, compactions: 0, failures: 0 } },
     ])
     expect(merged.byModel).toEqual([
-      { model: 'deepseek-chat', totals: { requests: 3, inputTokens: 32, outputTokens: 14, cacheReadTokens: 0, cacheWriteTokens: 0, compactions: 0 } },
-      { model: 'deepseek-reasoner', totals: { requests: 1, inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0, compactions: 0 } },
+      { model: 'deepseek-chat', totals: { requests: 3, inputTokens: 32, outputTokens: 14, cacheReadTokens: 0, cacheWriteTokens: 0, compactions: 0, failures: 0 } },
+      { model: 'deepseek-reasoner', totals: { requests: 1, inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0, compactions: 0, failures: 0 } },
     ])
   })
 
@@ -254,12 +345,12 @@ describe('filterSummary', () => {
   it('keeps only the requested inclusive day range', () => {
     const filtered = filterSummary(fixture(), '2026-01-15', '2026-01-15')
     expect(filtered.total).toEqual({
-      requests: 2, inputTokens: 30, outputTokens: 30, cacheReadTokens: 0, cacheWriteTokens: 0, compactions: 0,
+      requests: 2, inputTokens: 30, outputTokens: 30, cacheReadTokens: 0, cacheWriteTokens: 0, compactions: 0, failures: 0,
     })
     expect(filtered.byDay.map(row => row.day)).toEqual(['2026-01-15'])
     // Per-model rows re-aggregate from the crossed rows, not copied whole.
     expect(filtered.byModel).toEqual([
-      { model: 'deepseek-chat', totals: { requests: 2, inputTokens: 30, outputTokens: 30, cacheReadTokens: 0, cacheWriteTokens: 0, compactions: 0 } },
+      { model: 'deepseek-chat', totals: { requests: 2, inputTokens: 30, outputTokens: 30, cacheReadTokens: 0, cacheWriteTokens: 0, compactions: 0, failures: 0 } },
     ])
   })
 
@@ -289,8 +380,8 @@ describe('filterSummary', () => {
   it('filters the hour rows by the day range and model', () => {
     const filtered = filterSummary(fixture(), '2026-01-15', '2026-01-15', 'deepseek-chat')
     expect(filtered.byHour).toEqual([
-      { hour: '2026-01-15T10', model: 'deepseek-chat', totals: { requests: 1, inputTokens: 10, outputTokens: 10, cacheReadTokens: 0, cacheWriteTokens: 0, compactions: 0 } },
-      { hour: '2026-01-15T23', model: 'deepseek-chat', totals: { requests: 1, inputTokens: 20, outputTokens: 20, cacheReadTokens: 0, cacheWriteTokens: 0, compactions: 0 } },
+      { hour: '2026-01-15T10', model: 'deepseek-chat', totals: { requests: 1, inputTokens: 10, outputTokens: 10, cacheReadTokens: 0, cacheWriteTokens: 0, compactions: 0, failures: 0 } },
+      { hour: '2026-01-15T23', model: 'deepseek-chat', totals: { requests: 1, inputTokens: 20, outputTokens: 20, cacheReadTokens: 0, cacheWriteTokens: 0, compactions: 0, failures: 0 } },
     ])
     // A model filter drops the other model's hours entirely.
     const reasoner = filterSummary(fixture(), '2026-01-14', '2026-01-16', 'deepseek-reasoner')
@@ -351,6 +442,16 @@ describe('requestSeriesOf', () => {
     expect(series).toEqual([{ time: new Date(2026, 0, 15, 11).getTime(), tokens: 5 }])
     expect(requestSeriesOf(fixture(), '2026-01-16')).toEqual([])
   })
+
+  it('excludes failure rows — a failed request plots no token point', () => {
+    const withFailure = [
+      ...fixture(),
+      record(new Date(2026, 0, 15, 13).getTime(), 'deepseek-chat', undefined, 'failure'),
+    ]
+    const series = requestSeriesOf(withFailure)
+    expect(series).toHaveLength(3)
+    expect(series.some(point => point.time === new Date(2026, 0, 15, 13).getTime())).toBe(false)
+  })
 })
 
 describe('buildSummary rollup (cold/hot split)', () => {
@@ -399,7 +500,7 @@ describe('buildSummary rollup (cold/hot split)', () => {
     await writeDayFile(dir, 'usage-2026-01-16.jsonl', [record(new Date(2026, 0, 15, 23, 59, 59, 999).getTime(), 'deepseek-chat', { input: 1, output: 1 })])
     const summary = await buildSummary(dir, today)
     expect(summary.byDay).toEqual([
-      { day: '2026-01-15', totals: { requests: 2, inputTokens: 2, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0, compactions: 0 } },
+      { day: '2026-01-15', totals: { requests: 2, inputTokens: 2, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0, compactions: 0, failures: 0 } },
     ])
   })
 

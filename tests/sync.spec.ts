@@ -6,7 +6,7 @@ import type { SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
 import type { UsageLog } from '../src/usage-log.ts'
 import { autoSyncIfNeeded, syncHistory, type SyncPersistence } from '../src/sync.ts'
 import { isInitialized } from '../src/sync-state.ts'
-import { compactionEvent, messageEvent } from './helpers.ts'
+import { compactionEvent, messageEvent, retryEvent, turnEndEvent } from './helpers.ts'
 
 function fakePersistence(sessions: Array<{ id: string; events: SessionEvent[] }>): SyncPersistence {
   return {
@@ -84,6 +84,156 @@ describe('syncHistory', () => {
     expect(result).toEqual({ added: 2, skipped: 0 })
     expect(log.rows.map(row => row.requestId)).toEqual(['m1', 'compaction:s1:4'])
     expect(log.rows[1]).toMatchObject({ kind: 'compaction', model: 'deepseek-chat' })
+  })
+
+  it('records errored turn/end events as failure rows attributed to the tracked model', async () => {
+    const log = new FakeLog()
+    const persistence = fakePersistence([
+      {
+        id: 's1',
+        events: [
+          messageEventWith('m1', 1),
+          turnEndEvent({ seq: 5, reason: { kind: 'error', error: { message: 'boom', code: 'UNKNOWN' } } }),
+        ] as SessionEvent[],
+      },
+    ])
+    const result = await syncHistory({ persistence, log })
+    expect(result).toEqual({ added: 2, skipped: 0 })
+    expect(log.rows[1]).toMatchObject({
+      requestId: 'failure:s1:5',
+      kind: 'failure',
+      model: 'deepseek-chat',
+    })
+  })
+
+  it('follows request/context route changes to attribute failure models', async () => {
+    const log = new FakeLog()
+    const routeChange = {
+      type: 'request/context',
+      seq: 3,
+      time: 3,
+      data: { provider: 'kimi', model: 'kimi-k2' },
+    } as SessionEvent
+    const persistence = fakePersistence([
+      {
+        id: 's1',
+        events: [
+          messageEventWith('m1', 1),
+          routeChange,
+          turnEndEvent({ seq: 4 }),
+        ] as SessionEvent[],
+      },
+    ])
+    await syncHistory({ persistence, log })
+    // The failure row names the route's model, not the message's.
+    expect(log.rows[1]).toMatchObject({ kind: 'failure', model: 'kimi-k2' })
+  })
+
+  it('records a failure with an empty model when no route was ever observed', async () => {
+    const log = new FakeLog()
+    const persistence = fakePersistence([
+      { id: 's1', events: [turnEndEvent({ seq: 1 })] as SessionEvent[] },
+    ])
+    await syncHistory({ persistence, log })
+    expect(log.rows[0]).toMatchObject({ requestId: 'failure:s1:1', model: '' })
+  })
+
+  it('records llm/retry events as failure rows attributed to the tracked model', async () => {
+    const log = new FakeLog()
+    const persistence = fakePersistence([
+      {
+        id: 's1',
+        events: [
+          messageEventWith('m1', 1),
+          retryEvent({ seq: 4 }),
+          retryEvent({ seq: 6, retry: 2 }),
+        ] as SessionEvent[],
+      },
+    ])
+    const result = await syncHistory({ persistence, log })
+    expect(result).toEqual({ added: 3, skipped: 0 })
+    expect(log.rows.slice(1)).toEqual([
+      expect.objectContaining({
+        requestId: 'failure:s1:4',
+        kind: 'failure',
+        model: 'deepseek-chat',
+        failureCode: 'RATE_LIMIT',
+      }),
+      expect.objectContaining({
+        requestId: 'failure:s1:6',
+        kind: 'failure',
+        failureCode: 'RATE_LIMIT',
+      }),
+    ])
+  })
+
+  it('records both retried attempts and a terminal turn/end error without colliding', async () => {
+    const log = new FakeLog()
+    const persistence = fakePersistence([
+      {
+        id: 's1',
+        events: [
+          retryEvent({ seq: 4 }),
+          turnEndEvent({ seq: 7 }),
+        ] as SessionEvent[],
+      },
+    ])
+    const result = await syncHistory({ persistence, log })
+    expect(result).toEqual({ added: 2, skipped: 0 })
+    expect(log.rows.map(row => row.requestId)).toEqual(['failure:s1:4', 'failure:s1:7'])
+  })
+
+  it('ignores llm/retry-started wait-complete markers', async () => {
+    const log = new FakeLog()
+    const started = {
+      type: 'llm/retry-started',
+      seq: 5,
+      time: 5,
+      data: { retryId: 'retry-1', turn: 1, step: 1, retry: 1 },
+    } as SessionEvent
+    const persistence = fakePersistence([
+      { id: 's1', events: [retryEvent({ seq: 4 }), started] },
+    ])
+    const result = await syncHistory({ persistence, log })
+    expect(result).toEqual({ added: 1, skipped: 0 })
+    expect(log.rows.map(row => row.requestId)).toEqual(['failure:s1:4'])
+  })
+
+  it('dedupes retry failure rows across repeated syncs', async () => {
+    const log = new FakeLog()
+    const persistence = fakePersistence([
+      { id: 's1', events: [retryEvent({ seq: 4 })] as SessionEvent[] },
+    ])
+    await syncHistory({ persistence, log })
+    const result = await syncHistory({ persistence, log })
+    expect(result).toEqual({ added: 0, skipped: 1 })
+  })
+
+  it('skips turn/end events for non-error endings', async () => {
+    const log = new FakeLog()
+    const persistence = fakePersistence([
+      {
+        id: 's1',
+        events: [
+          turnEndEvent({ seq: 2, reason: { kind: 'completed' } }),
+          turnEndEvent({ seq: 3, reason: { kind: 'aborted', reason: { kind: 'user' } } }),
+          turnEndEvent({ seq: 4, reason: { kind: 'max-tokens' } }),
+        ] as SessionEvent[],
+      },
+    ])
+    const result = await syncHistory({ persistence, log })
+    expect(result).toEqual({ added: 0, skipped: 0 })
+    expect(log.rows).toHaveLength(0)
+  })
+
+  it('dedupes failure rows across repeated syncs', async () => {
+    const log = new FakeLog()
+    const persistence = fakePersistence([
+      { id: 's1', events: [turnEndEvent({ seq: 5 })] as SessionEvent[] },
+    ])
+    await syncHistory({ persistence, log })
+    const result = await syncHistory({ persistence, log })
+    expect(result).toEqual({ added: 0, skipped: 1 })
   })
 
   it('skips compaction/summary events without usable usage', async () => {
