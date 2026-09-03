@@ -26,7 +26,7 @@ Repo: <https://github.com/LaoYueHanNi/dsh-token-usage>
 
 ## Features
 
-- **Live hook**: every provider-billed call is appended to per-day JSONL files (request id, model, input / output / cache-read / cache-write tokens, time, session id).
+- **Live hook**: every provider-billed call is appended to per-day JSONL files (request id, model, input / output / cache-read / cache-write tokens, time, session id). Context-compaction summarize calls are provider-billed calls too — they land as their own rows and count into the requests and cost figures.
 - **Web stats page**: filters (date range + model + `1d`/`7d`/`30d` shortcuts), summary cards, daily trend chart (hover a day for its total), per-model table.
 - **Session usage view tab**: the conversation pane gains a **Usage** view tab (beside Chat / Trajectory) showing the active session's token & cost dashboard — six stat cards (successful requests with a failure-count pill, cost, cache hit rate, average time-to-first-token, generation throughput, total tokens), a 4-bucket token strip, an hourly trend chart, and a per-model table. A **Session / With subagents** scope switch aggregates the whole subagent subtree in one request, and the subagent table lists each child (requests, total tokens, cost, hit rate, TTFT, throughput) with drill-in navigation back to the parent. Token/cost figures come from the plugin's own billing chain (post-install records); TTFT and throughput come from DSH's `sessionStats` session projection (covers pre-install history). Sessions without records degrade to a placeholder, never an error. Failed requests are counted per provider attempt: a `turn/end` that ended in an LLM error (aborted / truncated turns do not count) plus each `llm/retry` scheduled after a failed attempt that the retry plugin then tried again. Failed calls bill no tokens, so the figure is a count, never an amount. Hovering the failure pill on the requests card breaks the count down per failure class (rate limited, server error, context exceeded, …).
 
@@ -34,7 +34,7 @@ Repo: <https://github.com/LaoYueHanNi/dsh-token-usage>
 
 - **Cost figures & model pricing**: per-request cost is computed live from per-model rates (¥ per million tokens) — a highlighted total-cost card, a cost column in the per-model table, and a warning strip for unpriced models (their cost counts as ¥0). Every priced model's name carries a small **rates button** that opens a dialog with that model's full price table: **each row is one billing condition** (default rates, context tiers like `≥ 512K`, peak windows like `09:00-12:00`, grouped under time rules' date windows), with the in/out/cache/write rates as aligned columns — mirroring exactly what the per-record resolver bills. Rates merge from two files: every startup mirrors the cloud model-price-table feed (the same source cc-switch-analyzer pulls) automatically, and `pricing.json` holds manual overrides.
 - **Provider quota**: an input-bar button (left of the model chip) shows the selected provider's remaining quota. Coding plans (Zhipu GLM / Kimi / MiniMax / OpenCode Go) get time-window progress; DeepSeek / OpenRouter get the account balance. See [Provider quota](#provider-quota).
-- **History backfill**: the first startup syncs requests that happened before installation (idempotent).
+- **History backfill**: the first startup syncs requests that happened before installation (idempotent). A stored session whose log cannot be parsed is skipped and counted — one unreadable session never aborts the sync, and the manual full-scan result names how many were skipped.
 
 ## Model pricing
 
@@ -173,11 +173,10 @@ npm install
 npm run build && npm run build:client
 ```
 
-> **No `prepare` script — by design.** The compiled `lib/` output is committed to the repo and ships in the npm tarball. pnpm ≥ 10 refuses to run dependency build scripts unless they are allowlisted, so a `prepare` script would surface as a skipped or failed install step for pnpm users. Shipping prebuilt output instead keeps `dsh plugin add @laoyuehanni/dsh-token-usage` working out of the box. **After changing anything under `src/`, always rebuild and commit the updated `lib/`** (and release a new version), or installs will get stale output:
+> **No `prepare` script — by design.** pnpm ≥ 10 refuses to run dependency build scripts unless they are allowlisted, so a `prepare` script would surface as a skipped or failed install step for pnpm users. Instead the compiled `lib/` output never enters the repo: `npm publish` builds it fresh in `prepublishOnly` and ships it in the tarball, so `dsh plugin add @laoyuehanni/dsh-token-usage` stays zero-config out of the box (see the GitHub-install note at the top). Local development just rebuilds on disk after changes — the `link:` install picks the new output up on the next `dsh web` restart:
 
 ```sh
 npm run build && npm run build:client
-git add lib/
 ```
 
 Temporary mount — effective for this launch only, no profile changes. `cordis.yml` points at the built `lib/index.js`. That file is machine-local (it embeds the absolute path of YOUR checkout) and not tracked by git: copy it from the template first and edit `name` to the absolute `file://` URL of `lib/index.js` on your machine:
