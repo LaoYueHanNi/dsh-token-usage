@@ -84,6 +84,29 @@ export interface QuotaConfig {
   intervalSec?: number
 }
 
+/**
+ * Loading-time schema of the composition config (the official Cordis shape:
+ * a `Config` type plus a same-named standard schema, validated by the loader
+ * before `apply` runs). Keys stay optional — absent keys stay absent, because
+ * the plugin's own resolution (`validateConfig` + section-based defaults)
+ * is where defaults and unknown-key rejection live. Schemastery's object
+ * keeps unknown keys in non-strict mode, so `validateConfig` remains the
+ * loud rejection point for misspelled keys.
+ */
+export const Config: z<Config> = z.object({
+  path: z.string(),
+  pricingUrl: z.string(),
+  pricingUrlDomestic: z.string(),
+  pricingUrlOverseas: z.string(),
+  pricingRegion: z.union([z.const('domestic'), z.const('overseas')]),
+  startupDeferMs: z.number().min(0),
+  startupCapMs: z.number().min(0),
+  quota: z.object({
+    enabled: z.boolean(),
+    intervalSec: z.number().min(15).max(3600),
+  }),
+})
+
 /** Reject stale or misspelled config keys before defaults can hide them. */
 export function validateConfig(config: Config): void {
   const unknown = Object.keys(config).find(key =>
@@ -288,6 +311,9 @@ export function validateSectionChange(value: SectionConfig, guard: SectionGuard)
 
 export function apply(ctx: Context, config: Config = {}) {
   validateConfig(config)
+  // The plugin's named logger: every diagnostic joins the framework's log
+  // pipeline instead of raw console output (the Cordis logging service).
+  const logger = ctx.logger('token-usage')
   // The section source: the composition entry until a settings service
   // attaches, then `setSource` repoints it at the resolved settings scope.
   // A thunk, not a snapshot — reads see the current resolution at call time,
@@ -347,7 +373,7 @@ export function apply(ctx: Context, config: Config = {}) {
     migration = { phase: 'copying', done: 0, total: 0 }
     const report = (progress: MigrationProgress): void => {
       migration = { ...progress }
-      console.log(`[token-usage] moving ${String(progress.done)}/${String(progress.total)} (${progress.phase})`)
+      logger.info(`[token-usage] moving ${String(progress.done)}/${String(progress.total)} (${progress.phase})`)
     }
     // Phase 1: copy everything, verbatim. An existing same-named target file
     // wins (live data or a user placement); a failure aborts before the flip.
@@ -355,18 +381,18 @@ export function apply(ctx: Context, config: Config = {}) {
 
     // Phase 2: flip the running configuration. A fresh log knows the rows the
     // target already holds, so post-flip events dedupe against them.
-    const log = new UsageLog(nextDir)
+    const log = new UsageLog(nextDir, undefined, logger)
     await log.scan()
     current = { dir: nextDir, log }
     clearRecordCache(previous.dir)
-    void warmRecordCache(nextDir)
+    void warmRecordCache(nextDir, undefined, logger)
 
     // Phase 3: remove the source files that verifiably landed, then the
     // emptied directory. Nothing unknown is touched.
     migration = { phase: 'cleaning', done: 0, total: 0 }
-    const result = await cleanSource(previous.dir, nextDir, report)
+    const result = await cleanSource(previous.dir, nextDir, report, logger)
     migration = undefined
-    console.log(`[token-usage] data directory moved to ${nextDir} (${String(result.cleaned)} files relocated)`)
+    logger.info(`[token-usage] data directory moved to ${nextDir} (${String(result.cleaned)} files relocated)`)
   }
 
   // The feed URL the latest dispatch targeted; the startup gate reads only
@@ -415,12 +441,12 @@ export function apply(ctx: Context, config: Config = {}) {
     lastSyncedUrl = url
     void syncCloudPricing(currentDir(), url)
       .then((result) => {
-        console.log(`[token-usage] pricing sync (${url}): version ${result.version} (${result.models} models, ${result.aliases} aliases, USD rate ${result.usdExchangeRate})`)
+        logger.info(`[token-usage] pricing sync (${url}): version ${result.version} (${result.models} models, ${result.aliases} aliases, USD rate ${result.usdExchangeRate})`)
       })
       .catch((error: unknown) => {
         // Offline or a slow network must never break the plugin: the previous
         // mirror (if any) stays active until a later sync retries the fetch.
-        console.warn('[token-usage] pricing sync failed:', error instanceof Error ? error.message : String(error))
+        logger.warn('[token-usage] pricing sync failed:', error instanceof Error ? error.message : String(error))
       })
   }
 
@@ -487,12 +513,12 @@ export function apply(ctx: Context, config: Config = {}) {
           added: result.added,
           skipped: result.skipped,
         }
-        console.log(`[token-usage] full sync done: ${String(result.added)} added, ${String(result.skipped)} skipped`)
+        logger.info(`[token-usage] full sync done: ${String(result.added)} added, ${String(result.skipped)} skipped`)
       })
       .catch((error: unknown) => {
         const message = error instanceof Error ? error.message : String(error)
         fullSyncStatus = { status: 'failed', error: message }
-        console.error('[token-usage] full sync failed:', error)
+        logger.error('[token-usage] full sync failed:', error)
       })
       .finally(() => {
         fullSyncRunning = false
@@ -604,15 +630,15 @@ export function apply(ctx: Context, config: Config = {}) {
       if (resolved !== current.dir) {
         relocating = relocating.then(() => relocateTo(resolved)).catch((error: unknown) => {
           migration = undefined
-          console.error('[token-usage] data directory move failed:', error)
+          logger.error('[token-usage] data directory move failed:', error)
         })
       }
       return
     }
     const dir = resolved
-    const log = new UsageLog(dir)
+    const log = new UsageLog(dir, undefined, logger)
     current = { dir, log }
-    void warmRecordCache(dir)
+    void warmRecordCache(dir, undefined, logger)
 
     ctx.on('session/event', (session: Session, event: SessionEvent) => {
       if (event.type !== 'assistant/message') return
@@ -627,12 +653,12 @@ export function apply(ctx: Context, config: Config = {}) {
     void autoSyncIfNeeded({ persistence: ctx.sessionPersistence, log }, dir)
       .then((result) => {
         if (result !== null) {
-          console.log(`[token-usage] first-run sync: ${result.added} added, ${result.skipped} skipped`)
+          logger.info(`[token-usage] first-run sync: ${result.added} added, ${result.skipped} skipped`)
         }
-        return warmRecordCache(dir)
+        return warmRecordCache(dir, undefined, logger)
       })
       .catch((error: unknown) => {
-        console.error('[token-usage] first-run sync failed:', error)
+        logger.error('[token-usage] first-run sync failed:', error)
       })
 
     // The stats endpoint backing the web settings page. Optional by design:
@@ -646,7 +672,7 @@ export function apply(ctx: Context, config: Config = {}) {
       // settings-resolved section at request time, so a saved region switch
       // re-prices the page's currency on the next fetch without a restart.
       webCtx.effect(() => webCtx.webServer.register(
-        createStatsRoute(currentDir, { currency: () => currencyOfRegion(effectiveInput().pricingRegion) }),
+        createStatsRoute(currentDir, { currency: () => currencyOfRegion(effectiveInput().pricingRegion), logger }),
       ), 'token-usage: stats route')
       webCtx.effect(() => webCtx.webServer.register(
         createMigrationRoute(() => migration),
@@ -678,7 +704,7 @@ export function apply(ctx: Context, config: Config = {}) {
       ), 'token-usage: quota route')
     })
 
-    console.log(`[token-usage] plugin loaded (data dir: ${dir})`)
+    logger.info(`[token-usage] plugin loaded (data dir: ${dir})`)
   }
 
   // A stored section acts on both concerns live: a directory change

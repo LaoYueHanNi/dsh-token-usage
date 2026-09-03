@@ -10,6 +10,7 @@
  *
  * @module token-usage/stats
  */
+import { type LoggerLike } from './log.ts';
 import type { UsageRecord } from './usage-record.ts';
 import type { CostedSummary, PricingTable, RateKey, RequestPoint, TokenSummary, UsageTotals } from './wire.ts';
 /** Bounded recent window length: only the newest records cross the wire. */
@@ -136,7 +137,7 @@ export declare function attachCosts(summary: TokenSummary & {
  * @param dir - the plugin's data directory.
  * @returns parsed records, or [] when the directory does not exist.
  */
-export declare function readAllRecords(dir: string): Promise<UsageRecord[]>;
+export declare function readAllRecords(dir: string, logger?: LoggerLike): Promise<UsageRecord[]>;
 /**
  * Build the full stats payload for one data directory: the rollup over every
  * frozen day file (advanced lazily and rewritten atomically when unabsorbed
@@ -152,7 +153,7 @@ export declare function readAllRecords(dir: string): Promise<UsageRecord[]>;
  * @param resolve - the rate resolver (see {@link RateResolver}).
  * @returns the summary served to the web settings page.
  */
-export declare function buildSummary(dir: string, now?: () => Date, resolve?: RateResolver): Promise<TokenSummary & {
+export declare function buildSummary(dir: string, now?: () => Date, resolve?: RateResolver, logger?: LoggerLike): Promise<TokenSummary & {
     dataDir: string;
 }>;
 //# sourceMappingURL=stats.d.ts.map

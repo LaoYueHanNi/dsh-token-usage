@@ -18,6 +18,7 @@
  *
  * @module token-usage/pricing
  */
+import { type LoggerLike } from './log.ts';
 import type { ModelPricing, ModelRates, PricingTable, RateKey, UsageTotals } from './wire.ts';
 /** The hand-maintained pricing file inside the data directory. */
 export declare const PRICING_FILE = "pricing.json";
@@ -181,9 +182,10 @@ export declare function coercePricingTable(value: unknown): Record<string, Model
  * manual tweaks survive re-syncs. A missing or malformed file contributes
  * nothing, keeping the stats route alive while the user fixes their table.
  * @param dir - the plugin's data directory.
+ * @param logger - diagnostic sink (defaults to console).
  * @returns the validated, merged table (possibly empty).
  */
-export declare function readPricingTable(dir: string): Promise<PricingTable>;
+export declare function readPricingTable(dir: string, logger?: LoggerLike): Promise<PricingTable>;
 /**
  * The effective USD conversion rate (RMB per USD) of one data directory:
  * the cloud feed envelope's `usdExchangeRate` when it carries a usable one,
@@ -191,9 +193,10 @@ export declare function readPricingTable(dir: string): Promise<PricingTable>;
  * mirrors fall back the same way — display conversion never blocks on a
  * broken feed. Hand-edited `pricing.json` carries no rate and never wins.
  * @param dir - the plugin's data directory.
+ * @param logger - diagnostic sink (defaults to console).
  * @returns the positive rate the stats page converts display costs with.
  */
-export declare function readUsdExchangeRate(dir: string): Promise<number>;
+export declare function readUsdExchangeRate(dir: string, logger?: LoggerLike): Promise<number>;
 /** The outcome of one successful cloud sync, for the command's reply. */
 export interface CloudSyncResult {
     version: number;

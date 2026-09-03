@@ -8,6 +8,7 @@
 
 import { readFile, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { consoleLogger, type LoggerLike } from './log.ts'
 
 const STATE_FILE = 'state.json'
 const TMP_FILE = 'state.json.tmp'
@@ -30,13 +31,13 @@ function isSyncState(value: unknown): value is SyncState {
  * dedupe makes the repetition a no-op.
  * @param dir - the data directory holding the marker.
  */
-export async function isInitialized(dir: string): Promise<boolean> {
+export async function isInitialized(dir: string, logger: LoggerLike = consoleLogger): Promise<boolean> {
   let text: string
   try {
     text = await readFile(join(dir, STATE_FILE), 'utf8')
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
-    console.error('[token-usage] cannot read state:', error)
+    logger.error('[token-usage] cannot read state:', error)
     return false
   }
   let value: unknown

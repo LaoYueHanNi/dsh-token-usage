@@ -9,6 +9,7 @@
 import type { IncomingMessage } from 'node:http';
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver';
 import type { MigrationProgress } from './migrate.ts';
+import { type LoggerLike } from './log.ts';
 import type { DirectoryGuardView, DisplayCurrency, FullSyncView } from './wire.ts';
 /** The stats endpoint path, exported for tests and the client half. */
 export { STATS_PATH } from './wire.ts';
@@ -31,6 +32,8 @@ export declare function isSameOriginFetch(req: IncomingMessage): boolean;
  * live settings change (the region pick) lands without rebuilding the route. */
 export interface StatsRouteOptions {
     currency?: () => DisplayCurrency;
+    /** Diagnostic sink for data reads; defaults to console. */
+    logger?: LoggerLike;
 }
 /** Live progress of a data-directory relocation; undefined when none runs. */
 export type MigrationStatus = MigrationProgress | undefined;

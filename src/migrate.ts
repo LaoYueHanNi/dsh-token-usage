@@ -20,6 +20,7 @@
 
 import { access, copyFile, mkdir, readdir, rmdir, stat, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
+import { consoleLogger, type LoggerLike } from './log.ts'
 
 /** Files that belong to this plugin; anything else in the directory stays. */
 const OWNED_PATTERNS = [
@@ -129,6 +130,7 @@ export async function cleanSource(
   oldDir: string,
   newDir: string,
   onProgress?: (progress: MigrationProgress) => void,
+  logger: LoggerLike = consoleLogger,
 ): Promise<MigrationResult> {
   const names = await ownedFiles(oldDir)
   const removable: string[] = []
@@ -141,7 +143,7 @@ export async function cleanSource(
   let cleaned = 0
   for (const name of removable) {
     await unlink(join(oldDir, name)).catch((error: unknown) => {
-      console.error(`[token-usage] cannot remove ${name}:`, error)
+      logger.error(`[token-usage] cannot remove ${name}:`, error)
     })
     cleaned += 1
     onProgress?.({ done: cleaned, total: removable.length, phase: 'cleaning' })

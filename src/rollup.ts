@@ -13,6 +13,7 @@
 
 import { readFile, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { consoleLogger, type LoggerLike } from './log.ts'
 import { coerceRecord } from './usage-record.ts'
 import type { UsageRecord } from './usage-record.ts'
 import type { RateKey, UsageDayRow, UsageHourRow, UsageModelRow, UsageRateRow, UsageTotals } from './wire.ts'
@@ -105,13 +106,13 @@ function isRollupFile(value: unknown): value is RollupFile {
  * rollup, mirroring how malformed JSONL lines are skipped.
  * @param dir - the plugin's data directory.
  */
-export async function readRollup(dir: string): Promise<RollupFile | null> {
+export async function readRollup(dir: string, logger: LoggerLike = consoleLogger): Promise<RollupFile | null> {
   let text: string
   try {
     text = await readFile(join(dir, ROLLUP_FILE), 'utf8')
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
-    console.error('[token-usage] cannot read rollup:', error)
+    logger.error('[token-usage] cannot read rollup:', error)
     return null
   }
   let value: unknown

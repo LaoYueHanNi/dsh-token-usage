@@ -8,6 +8,7 @@
 
 import { appendFile, mkdir, readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { consoleLogger, type LoggerLike } from './log.ts'
 import { parseRecord, serializeRecord, type UsageRecord } from './usage-record.ts'
 
 const DAY_FILE = /^usage-\d{4}-\d{2}-\d{2}\.jsonl$/u
@@ -41,12 +42,14 @@ export class UsageLog {
   private ready: Promise<void> | undefined
 
   /**
-   * @param dir - absolute data directory (created lazily on first write).
-   * @param now - clock source for day-file selection (test seam).
-   */
-  constructor(
+ * @param dir - absolute data directory (created lazily on first write).
+ * @param now - clock source for day-file selection (test seam).
+ * @param logger - diagnostic sink; defaults to console.
+ */
+constructor(
     private readonly dir: string,
     private readonly now: () => Date = () => new Date(),
+    private readonly logger: LoggerLike = consoleLogger,
   ) {}
 
   /** Whether a request id is already known to this log. */
@@ -76,20 +79,20 @@ export class UsageLog {
     try {
       names = await readdir(this.dir)
     } catch (error) {
-      console.error(`[token-usage] cannot list data dir ${this.dir}:`, error)
+      this.logger.error('[token-usage] cannot list data dir ' + this.dir + ':', error)
       return
     }
     for (const name of names) {
       if (!DAY_FILE.test(name)) continue
       const text = await readFile(join(this.dir, name), 'utf8').catch((error: unknown) => {
-        console.error(`[token-usage] cannot read ${name}:`, error)
+        this.logger.error(`[token-usage] cannot read ${name}:`, error)
         return ''
       })
       for (const line of text.split('\n')) {
         if (line === '') continue
         const record = parseRecord(line)
         if (record === null) {
-          console.error(`[token-usage] skipping malformed line in ${name}: ${line.slice(0, 120)}`)
+          this.logger.error(`[token-usage] skipping malformed line in ${name}: ${line.slice(0, 120)}`)
           continue
         }
         this.seen.add(record.requestId)
@@ -116,7 +119,7 @@ export class UsageLog {
       .catch((error: unknown) => {
         // Release the claim so a later sync can retry this row.
         this.seen.delete(record.requestId)
-        console.error('[token-usage] append failed:', error)
+        this.logger.error('[token-usage] append failed:', error)
         return false
       })
   }

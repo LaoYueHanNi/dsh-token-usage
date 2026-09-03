@@ -13,6 +13,7 @@
 
 import { costOf, ratesForKey } from './pricing.ts'
 import { fileDay, listDayFiles, readDayFile } from './record-cache.ts'
+import { consoleLogger, type LoggerLike } from './log.ts'
 import type { UsageFields, UsageRecord } from './usage-record.ts'
 import { readRollup, writeRollup } from './rollup.ts'
 import type { RollupFile } from './rollup.ts'
@@ -443,10 +444,10 @@ export function attachCosts(summary: TokenSummary & { dataDir: string }, pricing
  * @param dir - the plugin's data directory.
  * @returns parsed records, or [] when the directory does not exist.
  */
-export async function readAllRecords(dir: string): Promise<UsageRecord[]> {
+export async function readAllRecords(dir: string, logger: LoggerLike = consoleLogger): Promise<UsageRecord[]> {
   const records: UsageRecord[] = []
   for (const name of await listDayFiles(dir)) {
-    records.push(...await readDayFile(dir, name))
+    records.push(...await readDayFile(dir, name, logger))
   }
   return records
 }
@@ -470,9 +471,10 @@ export async function buildSummary(
   dir: string,
   now: () => Date = () => new Date(),
   resolve: RateResolver = () => UNPRICED_KEY,
+  logger: LoggerLike = consoleLogger,
 ): Promise<TokenSummary & { dataDir: string }> {
   const today = dayKey(now().getTime())
-  const rollup = (await readRollup(dir)) ?? emptyRollup()
+  const rollup = (await readRollup(dir, logger)) ?? emptyRollup()
   const cold: string[] = []
   const hot: string[] = []
   for (const name of await listDayFiles(dir)) {
@@ -485,16 +487,16 @@ export async function buildSummary(
   if (cold.length > 0) {
     // names are date-ascending, so the last cold file carries the new upto
     const records: UsageRecord[] = []
-    for (const name of cold) records.push(...await readDayFile(dir, name))
+    for (const name of cold) records.push(...await readDayFile(dir, name, logger))
     absorbed = {
       upto: fileDay(cold[cold.length - 1]!)!,
       ...mergeSummaries(rollup, summarizeRecords(records, resolve)),
     }
     await writeRollup(dir, absorbed).catch((error: unknown) => {
-      console.error('[token-usage] cannot write rollup:', error)
+      logger.error('[token-usage] cannot write rollup:', error)
     })
   }
   const fresh: UsageRecord[] = []
-  for (const name of hot) fresh.push(...await readDayFile(dir, name))
+  for (const name of hot) fresh.push(...await readDayFile(dir, name, logger))
   return { dataDir: dir, ...mergeSummaries(absorbed, summarizeRecords(fresh, resolve)) }
 }

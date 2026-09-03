@@ -7,6 +7,7 @@
  *
  * @module token-usage/record-cache
  */
+import { type LoggerLike } from './log.ts';
 import type { UsageRecord } from './usage-record.ts';
 /** The date part of a day-file name, or null for a foreign name. */
 export declare function fileDay(name: string): string | null;
@@ -23,7 +24,7 @@ export declare function clearRecordCache(dir?: string): void;
  * @param dir - the plugin's data directory.
  * @param name - the day-file name.
  */
-export declare function readDayFile(dir: string, name: string): Promise<UsageRecord[]>;
+export declare function readDayFile(dir: string, name: string, logger?: LoggerLike): Promise<UsageRecord[]>;
 /** List the data directory's day-file names in ascending date order ([] when absent). */
 export declare function listDayFiles(dir: string): Promise<string[]>;
 /**
@@ -31,8 +32,14 @@ export declare function listDayFiles(dir: string): Promise<string[]>;
  * the first parse. An absent data directory yields an empty list.
  * @param dir - the plugin's data directory.
  * @param now - clock source for the frozen/today boundary (test seam).
+ * @param logger - diagnostic sink (defaults to console).
  */
-export declare function readCachedRecords(dir: string, now?: () => Date): Promise<UsageRecord[]>;
-/** Populate the cache for one directory so the first stats poll is a memory hit. */
-export declare function warmRecordCache(dir: string, now?: () => Date): Promise<void>;
+export declare function readCachedRecords(dir: string, now?: () => Date, logger?: LoggerLike): Promise<UsageRecord[]>;
+/**
+ * Populate the cache for one directory so the first stats poll is a memory hit.
+ * @param dir - the plugin's data directory.
+ * @param now - clock source for the frozen/today boundary (test seam).
+ * @param logger - diagnostic sink (defaults to console).
+ */
+export declare function warmRecordCache(dir: string, now?: () => Date, logger?: LoggerLike): Promise<void>;
 //# sourceMappingURL=record-cache.d.ts.map
