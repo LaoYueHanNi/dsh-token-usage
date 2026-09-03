@@ -5,6 +5,7 @@
  *
  * @module token-usage/usage-log
  */
+import { type LoggerLike } from './log.ts';
 import { type UsageRecord } from './usage-record.ts';
 declare const DAY_FILE: RegExp;
 /** Test for this store's per-day file names; the migration shares the naming contract. */
@@ -22,14 +23,16 @@ export declare function dayFileName(date: Date): string;
 export declare class UsageLog {
     private readonly dir;
     private readonly now;
+    private readonly logger;
     private readonly seen;
     private queue;
     private ready;
     /**
-     * @param dir - absolute data directory (created lazily on first write).
-     * @param now - clock source for day-file selection (test seam).
-     */
-    constructor(dir: string, now?: () => Date);
+   * @param dir - absolute data directory (created lazily on first write).
+   * @param now - clock source for day-file selection (test seam).
+   * @param logger - diagnostic sink; defaults to console.
+   */
+    constructor(dir: string, now?: () => Date, logger?: LoggerLike);
     /** Whether a request id is already known to this log. */
     has(requestId: string): boolean;
     /**

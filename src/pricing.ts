@@ -21,6 +21,7 @@
 
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
+import { consoleLogger, type LoggerLike } from './log.ts'
 import type {
   ContextTier,
   DailySlot,
@@ -488,19 +489,19 @@ export function costOf(totals: UsageTotals, prices: ModelPricing): number {
 // ---------------------------------------------------------------------------
 
 /** Read one JSON file of a data directory, or null when absent/unreadable. */
-async function readJsonFile(dir: string, name: string): Promise<unknown> {
+async function readJsonFile(dir: string, name: string, logger: LoggerLike = consoleLogger): Promise<unknown> {
   let text: string
   try {
     text = await readFile(join(dir, name), 'utf8')
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
-    console.error(`[token-usage] cannot read ${name}:`, error)
+    logger.error(`[token-usage] cannot read ${name}:`, error)
     return null
   }
   try {
     return JSON.parse(text)
   } catch {
-    console.error(`[token-usage] ${name} is not valid JSON; treating as absent`)
+    logger.error(`[token-usage] ${name} is not valid JSON; treating as absent`)
     return null
   }
 }
@@ -530,16 +531,16 @@ export function coercePricingTable(value: unknown): Record<string, ModelPricing>
 }
 
 /** The hand-maintained entries of one data directory ({} when absent/broken). */
-async function readManualPricing(dir: string): Promise<Record<string, ModelPricing>> {
-  return coercePricingTable(await readJsonFile(dir, PRICING_FILE))
+async function readManualPricing(dir: string, logger: LoggerLike = consoleLogger): Promise<Record<string, ModelPricing>> {
+  return coercePricingTable(await readJsonFile(dir, PRICING_FILE, logger))
 }
 
 /**
  * The synced cloud table of one data directory: the coerced feed mirror
  * flattened through {@link cloudToTable} ({} when absent, broken, or non-RMB).
  */
-async function readSyncedPricing(dir: string): Promise<PricingTable> {
-  const feed = coerceCloudPricing(await readJsonFile(dir, PRICING_CCSA_FILE))
+async function readSyncedPricing(dir: string, logger: LoggerLike = consoleLogger): Promise<PricingTable> {
+  const feed = coerceCloudPricing(await readJsonFile(dir, PRICING_CCSA_FILE, logger))
   return feed === null ? {} : cloudToTable(feed)
 }
 
@@ -550,11 +551,12 @@ async function readSyncedPricing(dir: string): Promise<PricingTable> {
  * manual tweaks survive re-syncs. A missing or malformed file contributes
  * nothing, keeping the stats route alive while the user fixes their table.
  * @param dir - the plugin's data directory.
+ * @param logger - diagnostic sink (defaults to console).
  * @returns the validated, merged table (possibly empty).
  */
-export async function readPricingTable(dir: string): Promise<PricingTable> {
-  const merged: PricingTable = { ...await readSyncedPricing(dir) }
-  for (const [model, base] of Object.entries(await readManualPricing(dir))) {
+export async function readPricingTable(dir: string, logger: LoggerLike = consoleLogger): Promise<PricingTable> {
+  const merged: PricingTable = { ...await readSyncedPricing(dir, logger) }
+  for (const [model, base] of Object.entries(await readManualPricing(dir, logger))) {
     merged[model] = { base, contextTiers: [], dailySlots: [], timeRules: [] }
   }
   return merged
@@ -567,10 +569,11 @@ export async function readPricingTable(dir: string): Promise<PricingTable> {
  * mirrors fall back the same way — display conversion never blocks on a
  * broken feed. Hand-edited `pricing.json` carries no rate and never wins.
  * @param dir - the plugin's data directory.
+ * @param logger - diagnostic sink (defaults to console).
  * @returns the positive rate the stats page converts display costs with.
  */
-export async function readUsdExchangeRate(dir: string): Promise<number> {
-  const feed = coerceCloudPricing(await readJsonFile(dir, PRICING_CCSA_FILE))
+export async function readUsdExchangeRate(dir: string, logger: LoggerLike = consoleLogger): Promise<number> {
+  const feed = coerceCloudPricing(await readJsonFile(dir, PRICING_CCSA_FILE, logger))
   return feed?.usdExchangeRate ?? DEFAULT_USD_EXCHANGE_RATE
 }
 

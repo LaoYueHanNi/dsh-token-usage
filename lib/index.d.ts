@@ -47,6 +47,10 @@ export interface Config {
     /** The provider quota feature (the input-bar button): enabled by default,
      * with the poll cadence the host asks the browser to follow. */
     quota?: QuotaConfig;
+    /** Whether compaction summarize requests (`compaction/summary` events)
+     * are recorded and billed like plain requests (default `true`). `false`
+     * skips them in both the live hook and the history sync. */
+    recordCompaction?: boolean;
 }
 /** Composition knobs of the quota feature (cordis.yml level). */
 export interface QuotaConfig {
@@ -55,6 +59,16 @@ export interface QuotaConfig {
     /** Poll cadence the payload stamps (seconds); clamped to 15–3600. */
     intervalSec?: number;
 }
+/**
+ * Loading-time schema of the composition config (the official Cordis shape:
+ * a `Config` type plus a same-named standard schema, validated by the loader
+ * before `apply` runs). Keys stay optional — absent keys stay absent, because
+ * the plugin's own resolution (`validateConfig` + section-based defaults)
+ * is where defaults and unknown-key rejection live. Schemastery's object
+ * keeps unknown keys in non-strict mode, so `validateConfig` remains the
+ * loud rejection point for misspelled keys.
+ */
+export declare const Config: z<Config>;
 /** Reject stale or misspelled config keys before defaults can hide them. */
 export declare function validateConfig(config: Config): void;
 /**

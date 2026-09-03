@@ -17,6 +17,7 @@
  *
  * @module token-usage/migrate
  */
+import { type LoggerLike } from './log.ts';
 /** Progress report of one migration phase. */
 export interface MigrationProgress {
     /** Files finished so far, across copy and cleanup phases. */
@@ -56,5 +57,5 @@ export declare function copyData(oldDir: string, newDir: string, onProgress?: (p
  * @param onProgress - per-file progress callback.
  * @returns what the cleanup did.
  */
-export declare function cleanSource(oldDir: string, newDir: string, onProgress?: (progress: MigrationProgress) => void): Promise<MigrationResult>;
+export declare function cleanSource(oldDir: string, newDir: string, onProgress?: (progress: MigrationProgress) => void, logger?: LoggerLike): Promise<MigrationResult>;
 //# sourceMappingURL=migrate.d.ts.map

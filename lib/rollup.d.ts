@@ -10,8 +10,15 @@
  *
  * @module token-usage/rollup
  */
+import { type LoggerLike } from './log.ts';
 import type { UsageRecord } from './usage-record.ts';
 import type { UsageDayRow, UsageHourRow, UsageModelRow, UsageRateRow, UsageTotals } from './wire.ts';
+declare const ROLLUP_FILE = "rollup.json";
+declare const TMP_FILE = "rollup.json.tmp";
+/** The rollup file name, exported so callers (e.g. the post-sync
+ * invalidation in index.ts) can drop the derived state by one authority. */
+export { ROLLUP_FILE as ROLLUP_FILE_NAME };
+export { TMP_FILE as ROLLUP_TMP_FILE_NAME };
 /** The on-disk rollup: the aggregate of every day file named ≤ {@link RollupFile.upto}. */
 export interface RollupFile {
     /** Inclusive upper date (`YYYY-MM-DD`) of the day files already absorbed. */
@@ -41,7 +48,7 @@ export interface RollupFile {
  * rollup, mirroring how malformed JSONL lines are skipped.
  * @param dir - the plugin's data directory.
  */
-export declare function readRollup(dir: string): Promise<RollupFile | null>;
+export declare function readRollup(dir: string, logger?: LoggerLike): Promise<RollupFile | null>;
 /**
  * Persist the rollup atomically (temp file + rename), so a crash mid-write
  * leaves either the old or the new rollup, never a torn one.

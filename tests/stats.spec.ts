@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from 'node:fs/promises'
+import { mkdtemp, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -9,13 +9,15 @@ import type { RateResolver } from '../src/stats.ts'
 import type { PricingTable } from '../src/wire.ts'
 import type { UsageRecord } from '../src/usage-record.ts'
 
-/** One record with the given time and usage buckets (usage optional). */
-function record(time: number, model: string, usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number }): UsageRecord {
+/** One record with the given time and usage buckets (usage optional); pass
+ * `kind: 'compaction'` for a compaction summarize row. */
+function record(time: number, model: string, usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number }, kind?: 'compaction'): UsageRecord {
   return {
-    requestId: `req-${time}-${model}`,
+    requestId: kind === 'compaction' ? `compaction-${time}` : `req-${time}-${model}`,
     time,
     sessionId: 's1',
     model,
+    ...(kind === 'compaction' ? { kind } : {}),
     ...usage === undefined ? {} : {
       usage: {
         inputTokens: usage.input ?? 0,
@@ -40,7 +42,41 @@ describe('summarizeRecords', () => {
       outputTokens: 12,
       cacheReadTokens: 3,
       cacheWriteTokens: 2,
+      compactions: 0,
     })
+  })
+
+  it('folds a compaction record into every dimension and counts it', () => {
+    const summary = summarizeRecords([
+      record(1_700_000_000_000, 'deepseek-chat', { input: 10, output: 5 }),
+      record(1_700_000_000_001, 'deepseek-chat', { input: 280_000, output: 400, cacheRead: 274_000 }, 'compaction'),
+      record(1_700_000_000_002, 'deepseek-reasoner', { input: 1, output: 1 }),
+    ])
+    // requests counts every provider-billed call; compactions singles out the
+    // summarize calls (plain requests = 2 here).
+    expect(summary.total.requests).toBe(3)
+    expect(summary.total.compactions).toBe(1)
+    expect(summary.total.inputTokens).toBe(280_011)
+    expect(summary.total.outputTokens).toBe(406)
+    expect(summary.total.cacheReadTokens).toBe(274_000)
+    expect(summary.byModel[0]!.totals.compactions).toBe(1)
+    expect(summary.byModel[1]!.totals.compactions).toBe(0)
+    expect(summary.rateRows[0]!.totals.compactions).toBe(1)
+    // The recent window carries the compaction row verbatim (newest first).
+    expect(summary.recent[1]).toMatchObject({ kind: 'compaction', model: 'deepseek-chat' })
+  })
+
+  it('bills a compaction record through the same rate chain by its input-side tokens', () => {
+    const at = new Date(2026, 0, 15, 10).getTime()
+    const summary = summarizeRecords([
+      record(at, 'deepseek-chat', { input: 10, output: 5 }),
+      record(at, 'deepseek-chat', { input: 540_000, output: 400 }, 'compaction'),
+    ], rec => (rec.usage?.inputTokens ?? 0) > 500_000
+      ? { ruleStart: 0, ruleEnd: 0, tier: 512_000, slot: -1 }
+      : { ruleStart: 0, ruleEnd: 0, tier: 0, slot: -1 })
+    // The compaction's huge input lands in the high tier, the plain one does not.
+    expect(summary.rateRows.map(row => row.rate.tier)).toEqual([0, 512_000])
+    expect(summary.rateRows[1]!.totals.compactions).toBe(1)
   })
 
   it('groups by local day ascending and by model descending on requests', () => {
@@ -79,9 +115,9 @@ describe('summarizeRecords', () => {
     // Unresolved records fold into the neutral unpriced rate per (day, model).
     const neutral = { ruleStart: 0, ruleEnd: 0, tier: 0, slot: -1 }
     expect(summary.rateRows).toEqual([
-      { day: '2026-01-15', model: 'deepseek-chat', rate: neutral, totals: { requests: 2, inputTokens: 11, outputTokens: 6, cacheReadTokens: 0, cacheWriteTokens: 0 } },
-      { day: '2026-01-15', model: 'deepseek-reasoner', rate: neutral, totals: { requests: 1, inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 } },
-      { day: '2026-01-16', model: 'deepseek-chat', rate: neutral, totals: { requests: 1, inputTokens: 2, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0 } },
+      { day: '2026-01-15', model: 'deepseek-chat', rate: neutral, totals: { requests: 2, inputTokens: 11, outputTokens: 6, cacheReadTokens: 0, cacheWriteTokens: 0, compactions: 0 } },
+      { day: '2026-01-15', model: 'deepseek-reasoner', rate: neutral, totals: { requests: 1, inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0, compactions: 0 } },
+      { day: '2026-01-16', model: 'deepseek-chat', rate: neutral, totals: { requests: 1, inputTokens: 2, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0, compactions: 0 } },
     ])
   })
 
@@ -110,9 +146,9 @@ describe('summarizeRecords', () => {
       record(morning, 'deepseek-chat', { input: 10, output: 5 }),
     ])
     expect(summary.byHour).toEqual([
-      { hour: '2026-01-15T09', model: 'deepseek-chat', totals: { requests: 1, inputTokens: 10, outputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 0 } },
-      { hour: '2026-01-15T09', model: 'deepseek-reasoner', totals: { requests: 1, inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 } },
-      { hour: '2026-01-15T12', model: 'deepseek-chat', totals: { requests: 1, inputTokens: 2, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0 } },
+      { hour: '2026-01-15T09', model: 'deepseek-chat', totals: { requests: 1, inputTokens: 10, outputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 0, compactions: 0 } },
+      { hour: '2026-01-15T09', model: 'deepseek-reasoner', totals: { requests: 1, inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0, compactions: 0 } },
+      { hour: '2026-01-15T12', model: 'deepseek-chat', totals: { requests: 1, inputTokens: 2, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0, compactions: 0 } },
     ])
     // The same record folds into its day bucket as well.
     expect(summary.byDay[0]!.totals.requests).toBe(3)
@@ -138,15 +174,39 @@ describe('mergeSummaries', () => {
       outputTokens: 15,
       cacheReadTokens: 0,
       cacheWriteTokens: 0,
+      compactions: 0,
     })
     expect(merged.byDay).toEqual([
-      { day: '2026-01-15', totals: { requests: 3, inputTokens: 31, outputTokens: 13, cacheReadTokens: 0, cacheWriteTokens: 0 } },
-      { day: '2026-01-16', totals: { requests: 1, inputTokens: 2, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0 } },
+      { day: '2026-01-15', totals: { requests: 3, inputTokens: 31, outputTokens: 13, cacheReadTokens: 0, cacheWriteTokens: 0, compactions: 0 } },
+      { day: '2026-01-16', totals: { requests: 1, inputTokens: 2, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0, compactions: 0 } },
     ])
     expect(merged.byModel).toEqual([
-      { model: 'deepseek-chat', totals: { requests: 3, inputTokens: 32, outputTokens: 14, cacheReadTokens: 0, cacheWriteTokens: 0 } },
-      { model: 'deepseek-reasoner', totals: { requests: 1, inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 } },
+      { model: 'deepseek-chat', totals: { requests: 3, inputTokens: 32, outputTokens: 14, cacheReadTokens: 0, cacheWriteTokens: 0, compactions: 0 } },
+      { model: 'deepseek-reasoner', totals: { requests: 1, inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0, compactions: 0 } },
     ])
+  })
+
+  it('merges a compaction-carrying side with a legacy side missing the key', () => {
+    const at = new Date(2026, 0, 15, 12).getTime()
+    const withCompactions = summarizeRecords([
+      record(at, 'deepseek-chat', { input: 280_000, output: 400 }, 'compaction'),
+    ])
+    // A legacy rollup side: totals written before the key existed.
+    const legacyTotals = { requests: 1, inputTokens: 5, outputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 0 }
+    const legacy: Parameters<typeof mergeSummaries>[0] = {
+      total: legacyTotals,
+      byDay: [{ day: '2026-01-14', totals: legacyTotals }],
+      byHour: [{ hour: '2026-01-14T12', model: 'deepseek-chat', totals: legacyTotals }],
+      byModel: [{ model: 'deepseek-chat', totals: legacyTotals }],
+      rateRows: [{ day: '2026-01-14', model: 'deepseek-chat', rate: { ruleStart: 0, ruleEnd: 0, tier: 0, slot: -1 }, totals: legacyTotals }],
+      recent: [],
+    }
+    const merged = mergeSummaries(legacy, withCompactions)
+    expect(merged.total.requests).toBe(2)
+    expect(merged.total.compactions).toBe(1)
+    expect(Number.isNaN(merged.total.inputTokens)).toBe(false)
+    expect(merged.total.inputTokens).toBe(280_005)
+    expect(merged.byModel[0]!.totals.compactions).toBe(1)
   })
 
   it('keeps only the newest records across both recent windows', () => {
@@ -194,12 +254,12 @@ describe('filterSummary', () => {
   it('keeps only the requested inclusive day range', () => {
     const filtered = filterSummary(fixture(), '2026-01-15', '2026-01-15')
     expect(filtered.total).toEqual({
-      requests: 2, inputTokens: 30, outputTokens: 30, cacheReadTokens: 0, cacheWriteTokens: 0,
+      requests: 2, inputTokens: 30, outputTokens: 30, cacheReadTokens: 0, cacheWriteTokens: 0, compactions: 0,
     })
     expect(filtered.byDay.map(row => row.day)).toEqual(['2026-01-15'])
     // Per-model rows re-aggregate from the crossed rows, not copied whole.
     expect(filtered.byModel).toEqual([
-      { model: 'deepseek-chat', totals: { requests: 2, inputTokens: 30, outputTokens: 30, cacheReadTokens: 0, cacheWriteTokens: 0 } },
+      { model: 'deepseek-chat', totals: { requests: 2, inputTokens: 30, outputTokens: 30, cacheReadTokens: 0, cacheWriteTokens: 0, compactions: 0 } },
     ])
   })
 
@@ -229,8 +289,8 @@ describe('filterSummary', () => {
   it('filters the hour rows by the day range and model', () => {
     const filtered = filterSummary(fixture(), '2026-01-15', '2026-01-15', 'deepseek-chat')
     expect(filtered.byHour).toEqual([
-      { hour: '2026-01-15T10', model: 'deepseek-chat', totals: { requests: 1, inputTokens: 10, outputTokens: 10, cacheReadTokens: 0, cacheWriteTokens: 0 } },
-      { hour: '2026-01-15T23', model: 'deepseek-chat', totals: { requests: 1, inputTokens: 20, outputTokens: 20, cacheReadTokens: 0, cacheWriteTokens: 0 } },
+      { hour: '2026-01-15T10', model: 'deepseek-chat', totals: { requests: 1, inputTokens: 10, outputTokens: 10, cacheReadTokens: 0, cacheWriteTokens: 0, compactions: 0 } },
+      { hour: '2026-01-15T23', model: 'deepseek-chat', totals: { requests: 1, inputTokens: 20, outputTokens: 20, cacheReadTokens: 0, cacheWriteTokens: 0, compactions: 0 } },
     ])
     // A model filter drops the other model's hours entirely.
     const reasoner = filterSummary(fixture(), '2026-01-14', '2026-01-16', 'deepseek-reasoner')
@@ -339,7 +399,7 @@ describe('buildSummary rollup (cold/hot split)', () => {
     await writeDayFile(dir, 'usage-2026-01-16.jsonl', [record(new Date(2026, 0, 15, 23, 59, 59, 999).getTime(), 'deepseek-chat', { input: 1, output: 1 })])
     const summary = await buildSummary(dir, today)
     expect(summary.byDay).toEqual([
-      { day: '2026-01-15', totals: { requests: 2, inputTokens: 2, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0 } },
+      { day: '2026-01-15', totals: { requests: 2, inputTokens: 2, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0, compactions: 0 } },
     ])
   })
 
@@ -368,6 +428,31 @@ describe('buildSummary rollup (cold/hot split)', () => {
     await writeRollup(dir, { upto: '2026-01-18', ...summarizeRecords([absorbed]) })
     const summary = await buildSummary(dir, today)
     expect(summary.total.requests).toBe(1)
+  })
+
+  it('skips rows appended to an already-absorbed frozen file until the rollup is dropped', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'token-usage-split-'))
+    await writeDayFile(dir, 'usage-2026-01-14.jsonl', [record(new Date(2026, 0, 14, 12).getTime(), 'deepseek-chat', { input: 1, output: 1 })])
+    // Absorb the frozen file: the rollup now covers 2026-01-14.
+    await buildSummary(dir, today)
+    // A sync backfills another row into that same frozen file — the
+    // cross-midnight shape: the sync's clock still names an absorbed day.
+    await writeDayFile(dir, 'usage-2026-01-14.jsonl', [
+      record(new Date(2026, 0, 14, 12).getTime(), 'deepseek-chat', { input: 1, output: 1 }),
+      record(new Date(2026, 0, 14, 13).getTime(), 'deepseek-chat', { input: 280_000, output: 400 }, 'compaction'),
+    ])
+    // The absorbed file is not re-read, so the appended row is invisible…
+    const stale = await buildSummary(dir, today)
+    expect(stale.total.requests).toBe(1)
+    // …until the derived rollup is dropped — what the post-sync invalidation
+    // does. The rebuild reads every day file again and the backfilled
+    // compaction lands in the totals.
+    await unlink(join(dir, 'rollup.json'))
+    clearRecordCache(dir)
+    const rebuilt = await buildSummary(dir, today)
+    expect(rebuilt.total.requests).toBe(2)
+    expect(rebuilt.total.compactions).toBe(1)
+    expect(rebuilt.total.inputTokens).toBe(280_001)
   })
 })
 

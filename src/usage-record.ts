@@ -1,15 +1,20 @@
 /**
  * Pure record vocabulary of the token-usage plugin: the JSONL row type, its
- * projection from a session event, and lenient line parsing for the dedupe
- * scan. No I/O and no runtime imports, so every consumer shares one wire
- * format. Rows stay minimal: request id, model, the four base token buckets,
- * time, and session id — absent optional buckets are omitted, never null.
+ * projections from session events (assistant messages and compaction
+ * summaries), and lenient line parsing for the dedupe scan. No I/O and no
+ * runtime imports, so every consumer shares one wire format. Rows stay
+ * minimal: request id, model, the four base token buckets, time, session id,
+ * and the optional origin kind — absent optional buckets are omitted, never
+ * null.
  *
  * @module token-usage/usage-record
  */
 
 import type { TokenUsage } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
+// Type-only: pulls the declaration-merged `compaction/*` event payloads into
+// this program, so `SessionEvent<'compaction/summary'>` below is nameable.
+import type {} from '@deepseek-ai/dsh-compaction/types'
 
 /** Provider-reported token buckets; absent optional buckets are omitted. */
 export interface UsageFields {
@@ -23,6 +28,12 @@ export interface UsageFields {
   cacheWriteTokens?: number
 }
 
+/**
+ * Where a record came from: a plain model request (the default) or a
+ * compaction summarize request (a provider-billed call of its own).
+ */
+export type UsageRecordKind = 'request' | 'compaction'
+
 /** One JSONL row: one successful model request. */
 export interface UsageRecord {
   /** Stable request identity: the assistant message id (dedupe key). */
@@ -35,6 +46,9 @@ export interface UsageRecord {
   model: string
   /** Token buckets; omitted when the provider reported no usage at all. */
   usage?: UsageFields
+  /** Record origin; absent means a plain request (legacy rows predate the
+   * key, so the on-disk default is omission, never `'request'`). */
+  kind?: UsageRecordKind
 }
 
 function isCount(value: unknown): value is number {
@@ -69,6 +83,38 @@ export function recordFromEvent(
     sessionId,
     model: event.data.message.source.model,
     ...(usage !== undefined ? { usage } : {}),
+  }
+}
+
+/**
+ * Build the log row for one `compaction/summary` session event — the
+ * summarize provider call that reads the compacted history and writes the
+ * summary. The row is billed exactly like a plain request: `model` is the
+ * event's summarize model, and the usage buckets are the provider-reported
+ * figures for the call. A missing or invalid usage renders the record null:
+ * an unusage compaction cannot be priced, and `shadowedTokenCount` (the
+ * shadow price of the replaced context) is not a billing figure, so the
+ * event is skipped rather than recorded unpriced.
+ *
+ * The request id is `compaction:<sessionId>:<seq>` — the event's persistent
+ * seq is monotonic and unique within the session (the compactionId is an
+ * opaque, unvalidated string), so one row lands per compaction and repeated
+ * syncs dedupe.
+ * @returns the record, or null when the event carries no usable usage.
+ */
+export function recordFromCompaction(
+  event: SessionEvent<'compaction/summary'>,
+  sessionId: string,
+): UsageRecord | null {
+  const usage = projectUsage(event.data.usage)
+  if (usage === undefined) return null
+  return {
+    requestId: `compaction:${sessionId}:${String(event.seq)}`,
+    time: event.time,
+    sessionId,
+    model: event.data.model,
+    usage,
+    kind: 'compaction',
   }
 }
 
@@ -107,12 +153,16 @@ export function coerceRecord(value: unknown): UsageRecord | null {
   if (!isRecord(value)) return null
   // The guard already validated the structure; this cast only enables field access.
   const record = value as unknown as Record<string, unknown>
+  // Kind normalization: only a compaction row keeps the key — plain rows (and
+  // unknown future kinds) read as requests, so a newer row set never drops.
+  const kind = record.kind === 'compaction' ? { kind: 'compaction' as const } : {}
   if (record.usage === undefined || record.usage === null) {
     return {
       requestId: record.requestId as string,
       time: record.time as number,
       sessionId: record.sessionId as string,
       model: record.model as string,
+      ...kind,
     }
   }
   const fields = record.usage as Record<string, unknown>
@@ -123,6 +173,7 @@ export function coerceRecord(value: unknown): UsageRecord | null {
     time: record.time as number,
     sessionId: record.sessionId as string,
     model: record.model as string,
+    ...kind,
     usage: {
       inputTokens: fields.inputTokens as number,
       outputTokens: fields.outputTokens as number,

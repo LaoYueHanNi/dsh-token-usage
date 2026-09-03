@@ -13,7 +13,8 @@
 
 import { costOf, ratesForKey } from './pricing.ts'
 import { fileDay, listDayFiles, readDayFile } from './record-cache.ts'
-import type { UsageFields, UsageRecord } from './usage-record.ts'
+import { consoleLogger, type LoggerLike } from './log.ts'
+import type { UsageRecord } from './usage-record.ts'
 import { readRollup, writeRollup } from './rollup.ts'
 import type { RollupFile } from './rollup.ts'
 import type {
@@ -54,16 +55,22 @@ export function emptyTotals(): UsageTotals {
     outputTokens: 0,
     cacheReadTokens: 0,
     cacheWriteTokens: 0,
+    compactions: 0,
   }
 }
 
-/** Add one totals row into another, field by field. */
+/**
+ * Add one totals row into another, field by field. `compactions` merges with
+ * a `?? 0` fallback so a legacy rollup (no key) folds into new aggregates
+ * without NaN.
+ */
 function addTotals(target: UsageTotals, source: UsageTotals): void {
   target.requests += source.requests
   target.inputTokens += source.inputTokens
   target.outputTokens += source.outputTokens
   target.cacheReadTokens += source.cacheReadTokens
   target.cacheWriteTokens += source.cacheWriteTokens
+  target.compactions = (target.compactions ?? 0) + (source.compactions ?? 0)
 }
 
 /** Sort a day row map ascending by day, matching {@link summarizeRecords}. */
@@ -101,9 +108,16 @@ function rateRowKey(day: string, model: string, rate: RateKey): string {
 }
 
 /**
- * Fold one record into totals; a record without provider usage still counts a request. */
-function addUsage(totals: UsageTotals, usage: UsageFields | undefined): void {
+ * Fold one record into totals; a record without provider usage still counts a
+ * request, and a compaction record additionally counts the `compactions`
+ * dimension (absent kind reads as a plain request).
+ */
+function addUsage(totals: UsageTotals, record: UsageRecord): void {
   totals.requests += 1
+  if (record.kind === 'compaction') {
+    totals.compactions = (totals.compactions ?? 0) + 1
+  }
+  const usage = record.usage
   if (usage === undefined) return
   totals.inputTokens += usage.inputTokens
   totals.outputTokens += usage.outputTokens
@@ -161,23 +175,23 @@ export function summarizeRecords(records: readonly UsageRecord[], resolve: RateR
   const rated = new Map<string, UsageRateRow>()
   const recent: UsageRecord[] = []
   for (const record of records) {
-    addUsage(total, record.usage)
+    addUsage(total, record)
     const day = dayKey(record.time)
     const dayTotals = days.get(day) ?? emptyTotals()
-    addUsage(dayTotals, record.usage)
+    addUsage(dayTotals, record)
     days.set(day, dayTotals)
     const hour = hourKey(record.time)
     const hourTotals = hours.get(hourRowKey(hour, record.model)) ?? emptyTotals()
-    addUsage(hourTotals, record.usage)
+    addUsage(hourTotals, record)
     hours.set(hourRowKey(hour, record.model), hourTotals)
     const modelTotals = models.get(record.model) ?? emptyTotals()
-    addUsage(modelTotals, record.usage)
+    addUsage(modelTotals, record)
     models.set(record.model, modelTotals)
     const rate = resolve(record)
     const rowKey = rateRowKey(day, record.model, rate)
     const cell = rated.get(rowKey)
       ?? { day, model: record.model, rate, totals: emptyTotals() }
-    addUsage(cell.totals, record.usage)
+    addUsage(cell.totals, record)
     rated.set(rowKey, cell)
     if (recent.length === RECENT_LIMIT) recent.shift()
     recent.push(record)
@@ -443,10 +457,10 @@ export function attachCosts(summary: TokenSummary & { dataDir: string }, pricing
  * @param dir - the plugin's data directory.
  * @returns parsed records, or [] when the directory does not exist.
  */
-export async function readAllRecords(dir: string): Promise<UsageRecord[]> {
+export async function readAllRecords(dir: string, logger: LoggerLike = consoleLogger): Promise<UsageRecord[]> {
   const records: UsageRecord[] = []
   for (const name of await listDayFiles(dir)) {
-    records.push(...await readDayFile(dir, name))
+    records.push(...await readDayFile(dir, name, logger))
   }
   return records
 }
@@ -470,9 +484,10 @@ export async function buildSummary(
   dir: string,
   now: () => Date = () => new Date(),
   resolve: RateResolver = () => UNPRICED_KEY,
+  logger: LoggerLike = consoleLogger,
 ): Promise<TokenSummary & { dataDir: string }> {
   const today = dayKey(now().getTime())
-  const rollup = (await readRollup(dir)) ?? emptyRollup()
+  const rollup = (await readRollup(dir, logger)) ?? emptyRollup()
   const cold: string[] = []
   const hot: string[] = []
   for (const name of await listDayFiles(dir)) {
@@ -485,16 +500,16 @@ export async function buildSummary(
   if (cold.length > 0) {
     // names are date-ascending, so the last cold file carries the new upto
     const records: UsageRecord[] = []
-    for (const name of cold) records.push(...await readDayFile(dir, name))
+    for (const name of cold) records.push(...await readDayFile(dir, name, logger))
     absorbed = {
       upto: fileDay(cold[cold.length - 1]!)!,
       ...mergeSummaries(rollup, summarizeRecords(records, resolve)),
     }
     await writeRollup(dir, absorbed).catch((error: unknown) => {
-      console.error('[token-usage] cannot write rollup:', error)
+      logger.error('[token-usage] cannot write rollup:', error)
     })
   }
   const fresh: UsageRecord[] = []
-  for (const name of hot) fresh.push(...await readDayFile(dir, name))
+  for (const name of hot) fresh.push(...await readDayFile(dir, name, logger))
   return { dataDir: dir, ...mergeSummaries(absorbed, summarizeRecords(fresh, resolve)) }
 }

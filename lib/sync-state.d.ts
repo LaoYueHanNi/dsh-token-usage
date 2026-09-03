@@ -5,6 +5,7 @@
  *
  * @module token-usage/sync-state
  */
+import { type LoggerLike } from './log.ts';
 /** Contents of the initialized marker. */
 export interface SyncState {
     /** Epoch milliseconds when the first automatic sync completed. */
@@ -16,7 +17,7 @@ export interface SyncState {
  * dedupe makes the repetition a no-op.
  * @param dir - the data directory holding the marker.
  */
-export declare function isInitialized(dir: string): Promise<boolean>;
+export declare function isInitialized(dir: string, logger?: LoggerLike): Promise<boolean>;
 /**
  * Persist the initialized marker atomically (temp file + rename), so a crash
  * mid-write never leaves a torn marker that would misread as initialized.

@@ -10,6 +10,7 @@
 
 import { readdir, readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
+import { consoleLogger, type LoggerLike } from './log.ts'
 import { parseRecord } from './usage-record.ts'
 import type { UsageRecord } from './usage-record.ts'
 
@@ -67,9 +68,9 @@ export function clearRecordCache(dir?: string): void {
  * @param dir - the plugin's data directory.
  * @param name - the day-file name.
  */
-export async function readDayFile(dir: string, name: string): Promise<UsageRecord[]> {
+export async function readDayFile(dir: string, name: string, logger: LoggerLike = consoleLogger): Promise<UsageRecord[]> {
   const text = await readFile(join(dir, name), 'utf8').catch((error: unknown) => {
-    console.error(`[token-usage] cannot read ${name}:`, error)
+    logger.error(`[token-usage] cannot read ${name}:`, error)
     return ''
   })
   const records: UsageRecord[] = []
@@ -102,7 +103,7 @@ async function fileStamp(dir: string, name: string): Promise<{ size: number; mti
   }
 }
 
-async function loadDir(dir: string, cache: DirCache, now: () => Date): Promise<UsageRecord[]> {
+async function loadDir(dir: string, cache: DirCache, now: () => Date, logger: LoggerLike = consoleLogger): Promise<UsageRecord[]> {
   const today = dayKey(now().getTime())
   const names = await listDayFiles(dir)
   const live = new Set(names)
@@ -128,7 +129,7 @@ async function loadDir(dir: string, cache: DirCache, now: () => Date): Promise<U
       out.push(...cached.records)
       continue
     }
-    const records = await readDayFile(dir, name)
+    const records = await readDayFile(dir, name, logger)
     cache.files.set(name, { records, size: stamp.size, mtimeMs: stamp.mtimeMs })
     out.push(...records)
   }
@@ -140,18 +141,24 @@ async function loadDir(dir: string, cache: DirCache, now: () => Date): Promise<U
  * the first parse. An absent data directory yields an empty list.
  * @param dir - the plugin's data directory.
  * @param now - clock source for the frozen/today boundary (test seam).
+ * @param logger - diagnostic sink (defaults to console).
  */
-export async function readCachedRecords(dir: string, now: () => Date = () => new Date()): Promise<UsageRecord[]> {
+export async function readCachedRecords(dir: string, now: () => Date = () => new Date(), logger: LoggerLike = consoleLogger): Promise<UsageRecord[]> {
   const cache = stateOf(dir)
   if (cache.inflight !== undefined) return cache.inflight
-  const pending = loadDir(dir, cache, now).finally(() => {
+  const pending = loadDir(dir, cache, now, logger).finally(() => {
     if (cache.inflight === pending) cache.inflight = undefined
   })
   cache.inflight = pending
   return pending
 }
 
-/** Populate the cache for one directory so the first stats poll is a memory hit. */
-export async function warmRecordCache(dir: string, now?: () => Date): Promise<void> {
-  await readCachedRecords(dir, now)
+/**
+ * Populate the cache for one directory so the first stats poll is a memory hit.
+ * @param dir - the plugin's data directory.
+ * @param now - clock source for the frozen/today boundary (test seam).
+ * @param logger - diagnostic sink (defaults to console).
+ */
+export async function warmRecordCache(dir: string, now?: () => Date, logger: LoggerLike = consoleLogger): Promise<void> {
+  await readCachedRecords(dir, now, logger)
 }

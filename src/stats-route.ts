@@ -10,6 +10,7 @@
 import type { IncomingMessage } from 'node:http'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type { MigrationProgress } from './migrate.ts'
+import { consoleLogger, type LoggerLike } from './log.ts'
 import { readPricingTable, readUsdExchangeRate, resolveRate } from './pricing.ts'
 import { attachCosts, buildSummary, filterRecordsBySessions, filterSummary, requestSeriesOf, summarizeRecords } from './stats.ts'
 import type { RateResolver } from './stats.ts'
@@ -93,6 +94,8 @@ export function isSameOriginFetch(req: IncomingMessage): boolean {
  * live settings change (the region pick) lands without rebuilding the route. */
 export interface StatsRouteOptions {
   currency?: () => DisplayCurrency
+  /** Diagnostic sink for data reads; defaults to console. */
+  logger?: LoggerLike
 }
 
 /** Live progress of a data-directory relocation; undefined when none runs. */
@@ -314,10 +317,11 @@ export function createStatsRoute(dir: () => string, options: StatsRouteOptions =
       }
       try {
         const dataDir = dir()
+        const logger = options.logger ?? consoleLogger
         // The pricing table is user-maintained and may change between
         // requests; reading it per request keeps the page honest without
         // any caching (the file is small and the route is not hot).
-        const pricing = await readPricingTable(dataDir)
+        const pricing = await readPricingTable(dataDir, logger)
         // Per-record pricing: each record resolves through the rule chain at
         // its own timestamp (tier approximated by its input-side tokens).
         const resolve: RateResolver = record => {
@@ -333,7 +337,7 @@ export function createStatsRoute(dir: () => string, options: StatsRouteOptions =
         // process cache so chip polls and the usage tab do not re-parse
         // history; today's file re-reads when its stamp changes.
         const allRecords = filter.sessionIds.length > 0 || filter.childGroups.length > 0
-          ? await readCachedRecords(dataDir)
+          ? await readCachedRecords(dataDir, undefined, logger)
           : undefined
         const scoped = filter.sessionIds.length > 0 && allRecords !== undefined
           ? filterRecordsBySessions(allRecords, filter.sessionIds)
@@ -342,14 +346,14 @@ export function createStatsRoute(dir: () => string, options: StatsRouteOptions =
           filterSummary(
             scoped !== undefined
               ? { dataDir, ...summarizeRecords(scoped, resolve) }
-              : await buildSummary(dataDir, undefined, resolve),
+              : await buildSummary(dataDir, undefined, resolve, logger),
             filter.from, filter.to, filter.model),
           pricing,
         )
         // Display-currency metadata: amounts stay RMB on the wire; the
         // page converts (÷ usdExchangeRate) when the region pick says USD.
         const currency = options.currency?.() ?? 'CNY'
-        const usdExchangeRate = await readUsdExchangeRate(dataDir)
+        const usdExchangeRate = await readUsdExchangeRate(dataDir, logger)
         const children = allRecords !== undefined && filter.childGroups.length > 0
           ? childBreakdown(allRecords, filter, dataDir, resolve, pricing)
           : undefined

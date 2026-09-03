@@ -13,12 +13,18 @@
 
 import { readFile, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { consoleLogger, type LoggerLike } from './log.ts'
 import { coerceRecord } from './usage-record.ts'
 import type { UsageRecord } from './usage-record.ts'
 import type { RateKey, UsageDayRow, UsageHourRow, UsageModelRow, UsageRateRow, UsageTotals } from './wire.ts'
 
 const ROLLUP_FILE = 'rollup.json'
 const TMP_FILE = 'rollup.json.tmp'
+
+/** The rollup file name, exported so callers (e.g. the post-sync
+ * invalidation in index.ts) can drop the derived state by one authority. */
+export { ROLLUP_FILE as ROLLUP_FILE_NAME }
+export { TMP_FILE as ROLLUP_TMP_FILE_NAME }
 
 /** The on-disk rollup: the aggregate of every day file named ≤ {@link RollupFile.upto}. */
 export interface RollupFile {
@@ -105,13 +111,13 @@ function isRollupFile(value: unknown): value is RollupFile {
  * rollup, mirroring how malformed JSONL lines are skipped.
  * @param dir - the plugin's data directory.
  */
-export async function readRollup(dir: string): Promise<RollupFile | null> {
+export async function readRollup(dir: string, logger: LoggerLike = consoleLogger): Promise<RollupFile | null> {
   let text: string
   try {
     text = await readFile(join(dir, ROLLUP_FILE), 'utf8')
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
-    console.error('[token-usage] cannot read rollup:', error)
+    logger.error('[token-usage] cannot read rollup:', error)
     return null
   }
   let value: unknown

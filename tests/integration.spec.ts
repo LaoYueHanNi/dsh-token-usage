@@ -7,7 +7,7 @@ import { Context, Service } from '@deepseek-ai/cordis'
 import SettingsProvider, { type SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import * as plugin from '../src/index.ts'
 import { DEFAULT_PRICING_URL_OVERSEAS } from '../src/pricing.ts'
-import { messageEvent } from './helpers.ts'
+import { compactionEvent, messageEvent } from './helpers.ts'
 
 /** Returns persisted sessions from a shared mutable list. */
 function persistenceService(sessions: Array<{ id: string; events: unknown[] }>) {
@@ -124,6 +124,37 @@ async function pollLogFile(dir: string): Promise<string> {
   throw new Error('no log file appeared')
 }
 
+/** Wait until the day file holds at least `count` rows and return them all. */
+async function pollRows(dir: string, count: number): Promise<Array<Record<string, unknown>>> {
+  const deadline = Date.now() + 2_000
+  while (Date.now() < deadline) {
+    const names = (await readdir(dir).catch(() => [] as string[]))
+      .filter(name => name.endsWith('.jsonl'))
+    for (const name of names) {
+      const text = await readFile(join(dir, name), 'utf8').catch(() => '')
+      const rows = text.split('\n').filter(line => line !== '')
+        .map(line => JSON.parse(line) as Record<string, unknown>)
+      if (rows.length >= count) return rows
+    }
+    await new Promise(resolve => setTimeout(resolve, 20))
+  }
+  throw new Error(`no log file with ${String(count)} rows appeared`)
+}
+
+/** Read every JSONL row currently in the directory's day files. */
+async function readAllRows(dir: string): Promise<Array<Record<string, unknown>>> {
+  const names = (await readdir(dir).catch(() => [] as string[]))
+    .filter(name => name.endsWith('.jsonl')).sort()
+  const rows: Array<Record<string, unknown>> = []
+  for (const name of names) {
+    const text = await readFile(join(dir, name), 'utf8').catch(() => '')
+    for (const line of text.split('\n')) {
+      if (line !== '') rows.push(JSON.parse(line) as Record<string, unknown>)
+    }
+  }
+  return rows
+}
+
 /** Wait until the first-run auto sync wrote its initialized marker. */
 async function waitForState(dir: string): Promise<void> {
   const deadline = Date.now() + 2_000
@@ -212,6 +243,58 @@ describe('plugin integration', () => {
       model: 'deepseek-chat',
     })
     expect(row.usage.inputTokens).toBe(10)
+  })
+
+  it('writes one live row per compaction/summary event', async () => {
+    const mounted = await mount()
+    await waitForState(mounted.dir)
+    ctx!.emit('session/event', { id: 's1' }, messageEvent({ messageId: 'm1' }))
+    await pollLogFile(mounted.dir)
+    ctx!.emit('session/event', { id: 's1' }, compactionEvent({ seq: 9 }))
+    // The compaction row lands as its own line, keyed on the event seq.
+    const rows = await pollRows(mounted.dir, 2)
+    expect(rows).toHaveLength(2)
+    expect(rows[1]).toMatchObject({
+      requestId: 'compaction:s1:9',
+      sessionId: 's1',
+      model: 'deepseek-chat',
+      kind: 'compaction',
+    })
+    expect((rows[1]!.usage as { inputTokens: number }).inputTokens).toBe(100_000)
+  })
+
+  it('skips compaction/summary events when recordCompaction is false', async () => {
+    const next = new Context()
+    await next.plugin(MockSessions)
+    await next.plugin(persistenceService(sessions))
+    await next.plugin(plugin, { startupDeferMs: 0, startupCapMs: 0, recordCompaction: false })
+    ctx = next
+    const dir = join(home, 'token-usage')
+    await waitForState(dir)
+    ctx.emit('session/event', { id: 's1' }, messageEvent({ messageId: 'm1' }))
+    await pollRows(dir, 1)
+    ctx.emit('session/event', { id: 's1' }, compactionEvent({ seq: 9 }))
+    // The compaction never lands: only the message row stays.
+    await new Promise(resolve => setTimeout(resolve, 150))
+    const rows = await readAllRows(dir)
+    expect(rows.map(row => row.requestId)).toEqual(['m1'])
+  })
+
+  it('backfills compaction/summary events on the first-run sync', async () => {
+    sessions.push({
+      id: 's1',
+      events: [
+        messageEvent({ messageId: 'm1', seq: 1 }),
+        compactionEvent({ seq: 4 }),
+        messageEvent({ messageId: 'm2', seq: 6 }),
+      ],
+    })
+    const mounted = await mount()
+    await waitForState(mounted.dir)
+    // The first-run sync walks every persisted session: both messages and the
+    // compaction land, in event order.
+    const rows = await pollRows(mounted.dir, 3)
+    expect(rows.map(row => row.requestId)).toEqual(['m1', 'compaction:s1:4', 'm2'])
   })
 
   it('ignores non-assistant/message events', async () => {
