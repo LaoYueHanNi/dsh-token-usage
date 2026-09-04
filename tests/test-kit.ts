@@ -6,11 +6,11 @@
  * @module token-usage/test-kit
  */
 
-import type { ConversationSnapshot, SessionListState } from '@deepseek-ai/dsh-client-runtime/client'
-import type { SnapshotSelectorHook, UseProjection } from '@deepseek-ai/dsh-client-runtime/client'
+import type { SessionListState, UseProjection } from '@deepseek-ai/dsh-api-session-controller/client'
+import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SessionStatsProjection } from '@deepseek-ai/dsh-session-stats/client'
 
-/** A `useSession` / `useSessions` fake: holds a snapshot in closure and
+/** A `useSessions` fake: holds a snapshot in closure and
  * runs each selector through it. Tests can pass an initial snapshot and
  * swap it via the returned setter to simulate framework mirror churn. */
 export function makeSessionStateHook<T>(
@@ -33,18 +33,6 @@ export function useSessionsFromState(
   state: SessionListState,
 ): SnapshotSelectorHook<SessionListState> {
   return selector => selector(state)
-}
-
-/**
- * Build a `useSession` hook from a `ConversationSnapshot` value. Tests
- * that don't care about the conversation's session-state shape still
- * need a real hook to satisfy the UsageView props; this fakes one with
- * a constant snapshot.
- */
-export function useSessionFromSnapshot(
-  snapshot: ConversationSnapshot,
-): SnapshotSelectorHook<ConversationSnapshot> {
-  return selector => selector(snapshot)
 }
 
 /**

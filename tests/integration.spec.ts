@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Context, Service } from '@deepseek-ai/cordis'
 import SettingsProvider, { type SettingsNamespace } from '@deepseek-ai/dsh-settings'
+import { SessionSeq } from '@deepseek-ai/dsh-session'
 import * as plugin from '../src/index.ts'
 import { DEFAULT_PRICING_URL_OVERSEAS } from '../src/pricing.ts'
 import { compactionEvent, messageEvent, retryEvent } from './helpers.ts'
@@ -38,11 +39,11 @@ class MockSessions extends Service {
     super(ctx, 'sessions')
   }
 
-  list(): Array<{ events: unknown[] }> {
+  list(): Array<{ snapshotEvents(): unknown[] }> {
     return [
       // Idle first is immaterial; an open turn is the only thing that counts.
-      ...Array.from({ length: this.idle }, () => ({ events: [{ type: 'turn/end' }] })),
-      ...Array.from({ length: this.interacting }, () => ({ events: [{ type: 'turn/start' }] })),
+      ...Array.from({ length: this.idle }, () => ({ snapshotEvents: () => [{ type: 'turn/end' }] })),
+      ...Array.from({ length: this.interacting }, () => ({ snapshotEvents: () => [{ type: 'turn/start' }] })),
     ]
   }
 }
@@ -85,6 +86,20 @@ class FakeSettings extends Service {
     if (validate !== undefined) validate({ ...this.bases.get(ns), ...section })
     this.sections.set(ns, section)
     for (const watcher of this.watchers) watcher()
+  }
+
+  /** dsh 0.1.2 shape: register + source sink + change notification. */
+  installSection(
+    _owner: unknown,
+    ns: string,
+    _schema: unknown,
+    entry: Record<string, unknown>,
+    hooks: { setSource: (source: () => unknown) => void, onChange: () => void, validate?: (value: Record<string, unknown>) => void },
+  ): void {
+    const scope = this.register(ns, undefined, { base: entry, validate: hooks.validate })
+    hooks.setSource(() => scope.get())
+    hooks.onChange()
+    scope.watch(() => hooks.onChange())
   }
 }
 
@@ -337,7 +352,7 @@ describe('plugin integration', () => {
     await waitForState(mounted.dir)
     ctx!.emit('session/event', { id: 's1' }, {
       type: 'turn/start',
-      seq: 0,
+      seq: SessionSeq(0),
       time: 1,
       data: { turn: 1 },
     })

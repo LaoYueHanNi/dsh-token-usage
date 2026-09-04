@@ -13,7 +13,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Context, Service } from '@deepseek-ai/cordis'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
-import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import { SessionSeq, type SessionEvent } from '@deepseek-ai/dsh-session'
 import * as plugin from '../src/index.ts'
 import type { QuotaPayload } from '../src/wire.ts'
 
@@ -41,7 +41,7 @@ class MockSessions extends Service {
     super(ctx, 'sessions')
   }
 
-  list(): Array<{ events: readonly { type: string }[] }> {
+  list(): Array<{ snapshotEvents(): readonly { type: string }[] }> {
     return []
   }
 }
@@ -73,6 +73,20 @@ class FakeSettings extends Service {
 
   get(ns: string): unknown {
     return structuredClone(this.bases.get(ns))
+  }
+
+  /** dsh 0.1.2 shape: register + source sink + change notification. */
+  installSection(
+    _owner: unknown,
+    ns: string,
+    _schema: unknown,
+    entry: Record<string, unknown>,
+    hooks: { setSource: (source: () => unknown) => void, onChange: () => void },
+  ): void {
+    const scope = this.register(ns, undefined, { base: entry })
+    hooks.setSource(() => scope.get())
+    hooks.onChange()
+    scope.watch(() => hooks.onChange())
   }
 }
 
@@ -155,7 +169,7 @@ function fakeResponse(): { res: ServerResponse; captured: Captured } {
 function contextEvent(provider: string, model: string): SessionEvent<'request/context'> {
   return {
     type: 'request/context',
-    seq: 1,
+    seq: SessionSeq(1),
     time: Date.now(),
     data: { provider, model },
   } as SessionEvent<'request/context'>

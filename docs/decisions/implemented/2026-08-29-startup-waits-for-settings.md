@@ -4,7 +4,7 @@ Status: implemented
 
 ## Problem
 
-插件首次启动以 500ms 短窗（`startupDeferMs`）等待 settings 服务（`installSettingsSection` 的 `ctx.inject(['settings'])`）附着，超时即兜底在组合默认目录（`$DSH_HOME/token-usage`）上启动。宿主 base bundle 在 0.1.2-alpha.1 中于 settings-file 行之前插入了一整组新服务（storage 存储 hub/json/domain、session-projection-cache、deepseek-llm-api-extensions 等，`cordis.patch.yml` 中该行从 79 移到 91），这些行的启动期异步工作把 settings 附着稳定推过 500ms。于是每次启动：兜底先在默认目录启动并写入 pricing/state 文件，settings 附着后再 relocate default → stored，日志打印一串 moving/cleaning，默认目录被无意义地写入又清空。实测仅与宿主版本相关（0.1.1-rc.2 不复现），与插件构建渠道无关（服务端代码相同）。本修复独立于宿主迁移工作（`feat/dsh-0.1.2-alpha.1` 分支的适配，含其自身的决策记录）先行落地。
+插件首次启动以 500ms 短窗（`startupDeferMs`）等待 settings 服务（`installSection` 的 `ctx.inject(['settings'])`）附着，超时即兜底在组合默认目录（`$DSH_HOME/token-usage`）上启动。宿主 base bundle 在 0.1.2-alpha.1 中于 settings-file 行之前插入了一整组新服务（storage 存储 hub/json/domain、session-projection-cache、deepseek-llm-api-extensions 等，`cordis.patch.yml` 中该行从 79 移到 91），这些行的启动期异步工作把 settings 附着稳定推过 500ms。于是每次启动：兜底先在默认目录启动并写入 pricing/state 文件，settings 附着后再 relocate default → stored，日志打印一串 moving/cleaning，默认目录被无意义地写入又清空。实测仅与宿主版本相关（0.1.1-rc.2 不复现），与插件构建渠道无关（服务端代码相同）。本修复独立于宿主迁移工作（`feat/dsh-0.1.2-alpha.1` 分支的适配，含其自身的决策记录）先行落地。
 
 ## Decision
 

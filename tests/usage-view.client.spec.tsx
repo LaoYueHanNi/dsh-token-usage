@@ -8,13 +8,13 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
-import type { ConversationSnapshot, SessionListState } from '@deepseek-ai/dsh-client-runtime/client'
+import type { SessionListState } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { SessionStatsProjection } from '@deepseek-ai/dsh-session-stats/client'
 import { UsageView } from '../src/client/UsageView.tsx'
 import { zh } from '../src/client/locales.ts'
 import type { UsageSummary } from '../src/wire.ts'
 import {
-  makeSessionStateHook, makeUseProjection, useSessionFromSnapshot,
+  makeSessionStateHook, makeUseProjection,
 } from './test-kit.ts'
 
 // The shell Tooltip ships inside the primitives package whose CSS imports the
@@ -200,7 +200,6 @@ function renderView(overrides: {
   // by `noSnapshot` so the per-test fakes set up only what the test cares
   // about (the session-list mirror + the live projection).
   render(<UsageView
-    useSession={useSessionFromSnapshot(noSnapshot)}
     useSessions={kit.hook}
     useProjection={makeUseProjection(overrides.liveStats)}
     sessionId={overrides.sessionId ?? 'root'}
@@ -208,16 +207,6 @@ function renderView(overrides: {
   />)
   return { setMirror: kit.setState }
 }
-
-/** A dummy conversation snapshot for the props the UsageView never reads
- * in a render-only test. The view tab pulls everything through `useSessions`
- * + `useProjection` + `sessionId`; `useSession` is here only because the
- * standard runtime kit binds all four. */
-const noSnapshot: ConversationSnapshot = {
-  session: { id: '', messages: [], status: 'idle' },
-  transcript: { entries: [] },
-  draft: { text: '' },
-} as unknown as ConversationSnapshot
 
 /** Whether a stubbed fetch received a call with exactly the given session ids
  * and optional childId groups. */

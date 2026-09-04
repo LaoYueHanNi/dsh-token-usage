@@ -28,8 +28,10 @@ import { useEffect, useMemo, useRef } from 'react'
 import type { ReactNode } from 'react'
 import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 // Type-only: merges SessionStandardProps / GlobalStandardProps (`sessionId`,
-// `useSessions`, `useProjection`) into the header-utilities runtime kit.
-import type {} from '@deepseek-ai/dsh-client-runtime/client'
+// `useSessions`, `useProjection`) into the header-utilities runtime kit
+// (the kit's declaration lives in ui-session since dsh-client-runtime was
+// removed).
+import type {} from '@deepseek-ai/dsh-client-ui-session/client'
 // Type-only: merges the sessionStats key into SessionProjectionMap.
 import type {} from '@deepseek-ai/dsh-session-stats/client'
 // Type-only: pulls the `conversation.session.header.utilities` SlotMap key.

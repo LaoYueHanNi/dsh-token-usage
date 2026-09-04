@@ -5,8 +5,8 @@
  * installed). When a webServer exists, the plugin also serves the stats
  * route backing the web settings page (browser half in `src/client`).
  *
- * The settings namespace `token-usage` registers through
- * `installSettingsSection` with the composition entry as its base layer, and
+ * The settings namespace `token-usage` registers through the settings
+ * service's `installSection` (the composition entry as its base layer), and
  * both of its fields take effect live. A stored region pick (or a mirror
  * override) re-resolves the feed URL and re-syncs the mirror; a stored data
  * directory switches writes to the new location and migrates every row and
@@ -21,7 +21,11 @@ import { unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
-import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
+// Type-only: pulls the ctx.settings declaration merge into the program.
+// dsh 0.1.2 removed the installSettingsSection/settingsNamespace value
+// helpers; the service's own installSection/get methods with plain-string
+// namespaces replace them.
+import type {} from '@deepseek-ai/dsh-settings'
 import z from '@deepseek-ai/schemastery'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 // Type-only: pulls the ctx.sessionPersistence declaration merge into the program.
@@ -212,7 +216,7 @@ const PRICING_SYNC_COALESCE_MS = 250
 const PRICING_SYNC_STARTUP_GRACE_MS = 5_000
 
 /** The settings namespace this plugin serves; its browser card spells the same string. */
-export const TOKEN_USAGE_NS = settingsNamespace('token-usage')
+export const TOKEN_USAGE_NS = 'token-usage'
 
 /**
  * The settings-facing subset of the config: the data directory and the mirror
@@ -268,14 +272,15 @@ export interface SectionGuard {
  * `turn/end`). Existence alone must not count — an idle open tab stays in the
  * store while its conversation ended, and events only append while a turn is
  * open, which is exactly the window that makes a migration unsafe.
- * @param sessions - the store's live sessions (creation order; irrelevant here).
+ * dsh 0.1.2 made `Session.events` private behind `snapshotEvents()`;
+ * callers pass each session's snapshot so this stays a plain duck type.
+ * @param eventLogs - each live session's event snapshot (order irrelevant).
  * @returns how many of them are mid-conversation right now.
  */
-export function countInteractingSessions(sessions: readonly { events: readonly { type: string }[] }[]): number {
+export function countInteractingSessions(eventLogs: readonly (readonly { type: string }[])[]): number {
   let interacting = 0
-  for (const session of sessions) {
+  for (const events of eventLogs) {
     // The turn a log ends in is the one that matters; scan back to its edge.
-    const events = session.events
     for (let i = events.length - 1; i >= 0; i--) {
       const type = events[i]?.type
       if (type === 'turn/start') {
@@ -377,7 +382,7 @@ export function apply(ctx: Context, config: Config = {}) {
     // runs; a copied file would then be stale the moment it lands. Refuse the
     // move and keep the current directory — the user lets the conversation
     // finish and retries.
-    const interacting = countInteractingSessions(ctx.sessions.list())
+    const interacting = countInteractingSessions(ctx.sessions.list().map(session => session.snapshotEvents()))
     if (interacting > 0) {
       throw new Error(`cannot move the data directory while ${String(interacting)} session(s) are mid-conversation; let them finish and save again`)
     }
@@ -597,7 +602,7 @@ export function apply(ctx: Context, config: Config = {}) {
   })
   ctx.inject(['settings'], (settingsCtx) => {
     settingsCtx.effect(() => {
-      quotaReadSettings = (ns) => settingsCtx.settings.get(settingsNamespace(ns))
+      quotaReadSettings = (ns) => settingsCtx.settings.get(ns)
       return () => { quotaReadSettings = () => undefined }
     }, 'token-usage: quota settings reader')
   })
@@ -755,7 +760,7 @@ export function apply(ctx: Context, config: Config = {}) {
       webCtx.effect(() => webCtx.webServer.register(
         createDirectoryGuardRoute((proposed): DirectoryGuardView => directoryGuard(proposed, {
           runningDir: current?.dir,
-          interactingSessions: countInteractingSessions(ctx.sessions.list()),
+          interactingSessions: countInteractingSessions(ctx.sessions.list().map(session => session.snapshotEvents())),
         })),
       ), 'token-usage: directory guard route')
       // The card's manual "scan again" affordance: `POST` kicks off a run,
@@ -784,13 +789,20 @@ export function apply(ctx: Context, config: Config = {}) {
   // startup below): the settings inject's onChange fires after setSource and
   // opens the plugin on the settings-resolved directory; with no settings
   // service the long cap opens the default directory instead.
-  installSettingsSection(ctx, TOKEN_USAGE_NS, sectionSchema, sectionOf(config), {
-    validate: (value) => validateSectionChange(value, {
-      runningDir: current?.dir,
-      interactingSessions: countInteractingSessions(ctx.sessions.list()),
-    }),
-    setSource: (source) => { sectionSource = source },
-    onChange: () => { start(); requestSync() },
+  // dsh 0.1.2 folded installSettingsSection into the settings service
+  // itself (installSection takes the consumer context as its first
+  // argument); the wiring semantics — inject-time registration, entry
+  // fallback when the provider detaches, onChange after setSource — are the
+  // ones the old helper performed around register().
+  ctx.inject(['settings'], (settingsCtx) => {
+    settingsCtx.settings.installSection(ctx, TOKEN_USAGE_NS, sectionSchema, sectionOf(config), {
+      validate: (value) => validateSectionChange(value, {
+        runningDir: current?.dir,
+        interactingSessions: countInteractingSessions(ctx.sessions.list().map(session => session.snapshotEvents())),
+      }),
+      setSource: (source) => { sectionSource = source },
+      onChange: () => { start(); requestSync() },
+    })
   })
   // The bootstrap defers the first start. The dsh Loader mounts every profile
   // entry CONCURRENTLY, so this plugin's apply() runs in no guaranteed order

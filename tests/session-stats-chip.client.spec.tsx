@@ -16,7 +16,7 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
-import type { SessionListState } from '@deepseek-ai/dsh-client-runtime/client'
+import type { SessionListState } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { SessionStatsProjection } from '@deepseek-ai/dsh-session-stats/client'
 import { SessionStatsChip, FETCH_FAILURE_RETRY_MS, type SessionStatsChipProps } from '../src/client/SessionStatsChip.tsx'
 import { zh } from '../src/client/locales.ts'

@@ -674,7 +674,9 @@ describe('plugin webServer wiring', () => {
     await next.plugin(MockWebServer)
     await next.plugin(class extends Service {
       constructor(context: Context) { super(context, 'sessions') }
-      list(): Array<{ id: string; events: unknown[] }> { return sessions.map(session => ({ id: session.id, events: session.events })) }
+      list(): Array<{ id: string; snapshotEvents(): unknown[] }> {
+        return sessions.map(session => ({ id: session.id, snapshotEvents: () => session.events }))
+      }
     })
     await next.plugin(class extends Service {
       constructor(context: Context) { super(context, 'sessionPersistence') }

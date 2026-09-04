@@ -18,7 +18,7 @@
  * @module token-usage/client/card-form
  */
 
-import type { SettingsScope, SettingsScopeSnapshot } from '@deepseek-ai/dsh-client-runtime/client'
+import type { SettingsScope, SettingsScopeSnapshot } from '@deepseek-ai/dsh-client-ui-settings/client'
 import type { DirectoryGuardView } from '../wire.ts'
 import { DIR_GUARD_PATH, MIGRATION_PATH } from '../wire.ts'
 

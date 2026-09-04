@@ -1,4 +1,4 @@
-import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import { SessionSeq, type SessionEvent } from '@deepseek-ai/dsh-session'
 // Type-only: pulls the merged `compaction/*` payload types into the program.
 import type {} from '@deepseek-ai/dsh-compaction/types'
 // Type-only: pulls the merged `llm/retry` payload types into the program.
@@ -17,7 +17,7 @@ export function messageEvent(overrides: {
 } = {}): SessionEvent<'assistant/message'> {
   return {
     type: 'assistant/message',
-    seq: overrides.seq ?? 1,
+    seq: SessionSeq(overrides.seq ?? 1),
     time: overrides.time ?? 1_700_000_000_000,
     data: {
       turn: overrides.turn ?? 1,
@@ -51,7 +51,7 @@ export function compactionEvent(overrides: {
 } = {}): SessionEvent<'compaction/summary'> {
   return {
     type: 'compaction/summary',
-    seq: overrides.seq ?? 7,
+    seq: SessionSeq(overrides.seq ?? 7),
     time: overrides.time ?? 1_700_000_000_000,
     data: {
       compactionId: overrides.compactionId ?? 'cmp-1',
@@ -81,7 +81,7 @@ export function turnEndEvent(overrides: {
 } = {}): SessionEvent<'turn/end'> {
   return {
     type: 'turn/end',
-    seq: overrides.seq ?? 9,
+    seq: SessionSeq(overrides.seq ?? 9),
     time: overrides.time ?? 1_700_000_000_000,
     data: {
       turn: overrides.turn ?? 1,
@@ -105,7 +105,7 @@ export function retryEvent(overrides: {
 } = {}): SessionEvent<'llm/retry'> {
   return {
     type: 'llm/retry',
-    seq: overrides.seq ?? 8,
+    seq: SessionSeq(overrides.seq ?? 8),
     time: overrides.time ?? 1_700_000_000_000,
     data: {
       retryId: 'retry-1',

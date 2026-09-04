@@ -6,14 +6,21 @@
  * namespace — the data directory and the pricing region — edited through
  * the settings scope, with the relocation progress polled from
  * `/token-usage/migration`). The card's browse button rides the shell's
- * workspace service (`ctx.workspaces.pickDirectory`), the same native
- * directory picker the workspace flows use. Export discipline: the /client
- * entry exposes only what cordis loading needs.
+ * workspace navigation service (`ctx.uiWorkspace.pickDirectory`), the same
+ * native directory picker the workspace flows use. Export discipline: the
+ * /client entry exposes only what cordis loading needs.
  *
  * @module token-usage/client
  */
 
-import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
+// dsh 0.1.2 removed dsh-client-runtime; its ClientContext was a plain alias
+// of the cordis Context, so the type now comes from cordis directly.
+// Type-only: pulls the ctx.slots declaration merge (owned by ui-renderer,
+// whose published types no longer re-declare it through ui-session).
+import type { Context as ClientContext } from '@deepseek-ai/cordis'
+import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
+// Type-only: pulls ctx.uiWorkspace (directory picker) into this program.
+import type {} from '@deepseek-ai/dsh-client-ui-workspace/client'
 // Type-only: pulls the ui-settings SlotMap merge ('settings.section') and the
 // owner-share type into this program.
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
@@ -44,9 +51,9 @@ import { en, NS, zh } from './locales.ts'
 const TOKEN_USAGE_NS = 'token-usage'
 
 /** Required services: the slot registry, the locale dictionaries, the
- * settings scope, and the workspace service (its native directory picker
- * backs the card's browse button). */
-export const inject = ['slots', 'locale', 'connection', 'remote', 'settingsScope', 'workspaces']
+ * settings scope, and the workspace navigation service (its native
+ * directory picker backs the card's browse button). */
+export const inject = ['slots', 'locale', 'connection', 'remote', 'settingsScope', 'uiWorkspace']
 
 /**
  * Register the dictionary pair, then the settings page and the plugin
@@ -148,7 +155,7 @@ export function apply(ctx: ClientContext): void {
       ...form.actions(),
       // The shell's own directory picker (the workspace flows' chooser):
       // resolves the chosen absolute path, or null when the user dismisses.
-      pickDirectory: () => ctx.workspaces.pickDirectory(),
+      pickDirectory: () => ctx.uiWorkspace.pickDirectory(),
     }),
   }, TokenUsageCard))
 }

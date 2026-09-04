@@ -14,7 +14,7 @@ import { cleanup, fireEvent, render, screen, within } from '@testing-library/rea
 import { useEffect, useState } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
-import type { SettingsScope, SettingsScopeSnapshot } from '@deepseek-ai/dsh-client-runtime/client'
+import type { SettingsScope, SettingsScopeSnapshot } from '@deepseek-ai/dsh-client-ui-settings/client'
 import type { CardState, CardStore, SectionValue } from '../src/client/card-form.ts'
 import { CardForm } from '../src/client/card-form.ts'
 import { TokenUsageCard, type TokenUsageCardProps } from '../src/client/TokenUsageCard.tsx'
