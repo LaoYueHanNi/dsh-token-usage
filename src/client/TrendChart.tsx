@@ -25,14 +25,15 @@ import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { RequestPoint, UsageDayRow, UsageHourRow } from '../wire.ts'
 import { formatTokens } from './format.ts'
 import { tickValues } from './trend-chart/axis.ts'
+import { gapAfter, seriesPath } from './trend-chart/path.ts'
 import { buildChartPoints, cumulateSeries } from './trend-chart/points.ts'
 import { dotRadius, labelIndices, scaleSeries } from './trend-chart/scale.ts'
 import styles from './TrendChart.module.css'
 
 /** Re-export the chart's pure helpers for the test suite. */
 export {
-  MAX_BUCKETS, bucketSeries, bucketWidth, buildChartPoints, cumulateSeries, dotRadius, labelIndices,
-  niceStep, scaleSeries, scaleToSpan, tickValues,
+  MAX_BUCKETS, bucketSeries, bucketWidth, buildChartPoints, cumulateSeries, dotRadius, gapAfter,
+  labelIndices, niceStep, scaleSeries, scaleToSpan, seriesPath, tickValues,
 } from './trend-chart/index.ts'
 export type { TrendBucket } from './trend-chart/bucket.ts'
 export type { ChartSeries, ScaleResult } from './trend-chart/index.ts'
@@ -141,14 +142,21 @@ export function TrendChart({ rows, hours, requests, from, to, mode = 'interval',
   // scaleSeries returns absolute viewBox coordinates already offset by LEFT,
   // so the dots / path / x-axis labels can plug xs[i] straight into the
   // SVG `cx`/`x` attributes without re-adding the y-axis margin.
-  const { xs, innerWidth } = scaleSeries(series, LEFT, WIDTH - RIGHT)
+  const { xs, xEnds, innerWidth } = scaleSeries(series, LEFT, WIDTH - RIGHT)
   const radius = dotRadius(points.length)
   const [active, setActive] = useState<number | null>(null)
   const activePoint = active === null ? null : points[active] ?? null
   const y = (tokens: number): number => TOP + innerHeight - (tokens / top) * innerHeight
-  const path = points
-    .map((point, index) => `${index === 0 ? 'M' : 'L'}${xs[index]!.toFixed(1)},${y(point.tokens).toFixed(1)}`)
-    .join(' ')
+  // Gap-patched polyline lives in trend-chart/path.ts; the renderer picks the style.
+  const path = seriesPath({
+    xs,
+    ys: points.map(point => y(point.tokens)),
+    yZero: y(0),
+    style: series.mode === 'temporal' ? 'gap' : 'polyline',
+    ...series.mode === 'temporal'
+      ? { gaps: gapAfter(series.points), xEnds: xEnds ?? xs, hold: mode === 'cumulative' ? 'previous' : 'zero' }
+      : {},
+  })
 
   // Cumulative reads one aria regardless of granularity: the per-mode
   // phrasing ("daily" / "hourly" / "request-bucketed") describes interval

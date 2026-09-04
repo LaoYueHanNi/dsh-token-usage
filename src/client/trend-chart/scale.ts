@@ -16,9 +16,18 @@ export interface ScaleResult {
   /** The x offset of every point in SVG viewBox coordinates (range
    * `[leftEdge, rightEdge]`). */
   xs: number[]
+  /** Temporal only: each bucket's exclusive `end` on the same scale as
+   * `xs`, clamped to `[leftEdge, rightEdge]`. Gap paths use
+   * `xEnds[i] − xs[i]` as the bucket width so the hold ends one bucket
+   * before the next cluster. */
+  xEnds?: number[]
   /** The plottable width (rightEdge − leftEdge); the renderer can use it
    * for hit-target extents and label clamps. */
   innerWidth: number
+}
+
+function clampX(value: number, leftEdge: number, rightEdge: number): number {
+  return Math.min(Math.max(value, leftEdge), rightEdge)
 }
 
 /**
@@ -26,9 +35,9 @@ export interface ScaleResult {
  * per-point offsets in absolute viewBox coordinates. Equidistant modes
  * lay points one stride apart across the `[leftEdge, rightEdge]` span;
  * temporal mode uses each point's wall time against the series' own
- * first-to-last span and adds `leftEdge` to the result. Single-point
- * series pin to the centerline of the span (a zero stride would not
- * scale, and temporal scale would divide by zero).
+ * first-start to last-start span and adds `leftEdge` to the result.
+ * A zero span (one point, or every start equal) pins to the centerline.
+ * Temporal results include `xEnds` for the gap-path bucket width.
  *
  * @param series - the discriminated-union series from {@link buildChartPoints}.
  * @param leftEdge - the absolute SVG x of the chart's left edge (the
@@ -50,18 +59,25 @@ export function scaleSeries(series: ChartSeries, leftEdge: number, rightEdge: nu
     }
     return { xs, innerWidth }
   }
-  // Temporal: each point's wall time scaled into the first-to-last span,
-  // then anchored to the chart's left edge.
-  const temporal = points as { time: number; key: string }[]
+  // Temporal: wall time into the first-start to last-start span. `end`
+  // uses the same domain; an end past the last start clamps to the right edge.
+  const temporal = series.points
   const first = temporal[0]!.time
-  const last = temporal[temporal.length - 1]!.time
-  const xs: number[] = []
-  if (temporal.length === 1 || first === last) {
-    xs.push((leftEdge + rightEdge) / 2)
-  } else {
-    for (const point of temporal) xs.push(leftEdge + scaleToSpan(first, last, point.time, innerWidth))
+  const lastStart = temporal[temporal.length - 1]!.time
+  if (temporal.length === 1 || first === lastStart) {
+    const mid = (leftEdge + rightEdge) / 2
+    const xs = temporal.map(() => mid)
+    return { xs, xEnds: [...xs], innerWidth }
   }
-  return { xs, innerWidth }
+  const xs: number[] = []
+  const xEnds: number[] = []
+  for (const point of temporal) {
+    const x = clampX(leftEdge + scaleToSpan(first, lastStart, point.time, innerWidth), leftEdge, rightEdge)
+    const xEnd = clampX(leftEdge + scaleToSpan(first, lastStart, point.end, innerWidth), leftEdge, rightEdge)
+    xs.push(x)
+    xEnds.push(Math.max(x, xEnd))
+  }
+  return { xs, xEnds, innerWidth }
 }
 
 /**

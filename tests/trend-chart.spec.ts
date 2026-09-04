@@ -1,13 +1,12 @@
 // @vitest-environment node
 /**
- * Trend-chart pure helpers: the temporal x scaling, the time-bucket
- * folding of the request-mode chart (points land at their real proportion
- * of the session's first-to-last time span, folded into a bounded number
- * of uniformly sized buckets), and the absolute-coordinate x scale.
+ * Trend-chart pure helpers: temporal x scaling, request-series time
+ * buckets, absolute-coordinate x scale, and gap-patched SVG paths.
  */
 import { describe, expect, it } from 'vitest'
 import {
-  MAX_BUCKETS, bucketSeries, bucketWidth, buildChartPoints, cumulateSeries, scaleSeries, scaleToSpan,
+  MAX_BUCKETS, bucketSeries, bucketWidth, buildChartPoints, cumulateSeries, gapAfter, scaleSeries,
+  scaleToSpan, seriesPath,
 } from '../src/client/TrendChart.tsx'
 import type { ChartSeries } from '../src/client/TrendChart.tsx'
 import type { RequestPoint } from '../src/wire.ts'
@@ -15,7 +14,9 @@ import type { RequestPoint } from '../src/wire.ts'
 function reqSeries(times: number[]): ChartSeries {
   return {
     mode: 'temporal',
-    points: times.map((time, index) => ({ key: `b${index}`, label: '', full: '', tokens: 0, time })),
+    points: times.map((time, index) => ({
+      key: `b${index}`, label: '', full: '', tokens: 0, time, end: time, count: 1,
+    })),
   }
 }
 
@@ -130,6 +131,8 @@ describe('buildChartPoints', () => {
     expect(series?.points[1]?.tokens).toBe(80)
     if (series?.mode === 'temporal') {
       expect(series.points[0]?.count).toBe(10)
+      expect(series.points[0]?.end).toBe(6_000)
+      expect(series.points[1]?.end).toBe(11_000)
       expect(series.points[0]?.full).toContain('–')
     }
   })
@@ -140,9 +143,9 @@ describe('cumulateSeries', () => {
     const series: ChartSeries = {
       mode: 'temporal',
       points: [
-        { key: 'b0', label: '10:00', full: '10:00', tokens: 50, time: 1_000, count: 3 },
-        { key: 'b1', label: '10:05', full: '10:05', tokens: 80, time: 6_000, count: 5 },
-        { key: 'b2', label: '10:10', full: '10:10', tokens: 20, time: 11_000, count: 1 },
+        { key: 'b0', label: '10:00', full: '10:00', tokens: 50, time: 1_000, end: 6_000, count: 3 },
+        { key: 'b1', label: '10:05', full: '10:05', tokens: 80, time: 6_000, end: 11_000, count: 5 },
+        { key: 'b2', label: '10:10', full: '10:10', tokens: 20, time: 11_000, end: 16_000, count: 1 },
       ],
     }
     const cumulative = cumulateSeries(series)
@@ -151,8 +154,8 @@ describe('cumulateSeries', () => {
     if (cumulative.mode === 'temporal') {
       // The x-axis inputs (time / count) ride along untouched, so the
       // renderer's temporal scale and the bucket tooltip stay correct.
-      expect(cumulative.points[0]).toMatchObject({ time: 1_000, count: 3 })
-      expect(cumulative.points[2]).toMatchObject({ time: 11_000, count: 1 })
+      expect(cumulative.points[0]).toMatchObject({ time: 1_000, end: 6_000, count: 3 })
+      expect(cumulative.points[2]).toMatchObject({ time: 11_000, end: 16_000, count: 1 })
     }
   })
 
@@ -217,7 +220,8 @@ describe('scaleSeries', () => {
     const FIRST = 1_700_000_000_000
     const LAST = FIRST + 3_600_000
     // 5 points across one hour, anchored at the chart's edges (not at 0).
-    const { xs } = scaleSeries(
+    // reqSeries uses end === time, so xEnds coincide with xs.
+    const { xs, xEnds } = scaleSeries(
       reqSeries([FIRST, FIRST + 900_000, FIRST + 1_800_000, FIRST + 2_700_000, LAST]),
       LEFT, WIDTH - RIGHT,
     )
@@ -226,6 +230,26 @@ describe('scaleSeries', () => {
     // The 15-minute midpoint lands at the centre of the plottable span,
     // not at the centre of the viewBox.
     expect(xs[2]).toBeCloseTo(LEFT + (WIDTH - LEFT - RIGHT) / 2)
+    expect(xEnds).toEqual(xs)
+  })
+
+  it('places a bucket end at its real duration on the same domain', () => {
+    const FIRST = 1_700_000_000_000
+    const LAST = FIRST + 3_600_000
+    const series: ChartSeries = {
+      mode: 'temporal',
+      points: [
+        { key: 'b0', label: '', full: '', tokens: 1, time: FIRST, end: FIRST + 900_000, count: 1 },
+        { key: 'b1', label: '', full: '', tokens: 1, time: LAST, end: LAST + 900_000, count: 1 },
+      ],
+    }
+    const { xs, xEnds, innerWidth } = scaleSeries(series, LEFT, WIDTH - RIGHT)
+    expect(xs[0]).toBe(LEFT)
+    expect(xs[1]).toBe(WIDTH - RIGHT)
+    // First bucket is 15 minutes of a 60-minute start-to-start span → 25%.
+    expect(xEnds![0]).toBeCloseTo(LEFT + innerWidth / 4)
+    // Last end is past last start; clamp to the right edge, do not overflow.
+    expect(xEnds![1]).toBe(WIDTH - RIGHT)
   })
 
   it('centres a single point in the plottable span (not the viewBox)', () => {
@@ -242,5 +266,52 @@ describe('scaleSeries', () => {
     expect(xs[0]).toBe(12)
     expect(xs[2]).toBe(36)
     expect(xs[1]).toBe(24)
+  })
+})
+
+describe('gapAfter', () => {
+  it('flags a skipped span and not an exclusive-boundary neighbour', () => {
+    expect(gapAfter([
+      { time: 0, end: 5 },
+      { time: 5, end: 10 },
+      { time: 20, end: 25 },
+    ])).toEqual([false, true])
+    expect(gapAfter([])).toEqual([])
+    expect(gapAfter([{ time: 0, end: 5 }])).toEqual([])
+  })
+})
+
+describe('seriesPath', () => {
+  const yZero = 90
+  const gapped = { xs: [0, 80], ys: [10, 50], xEnds: [20, 100], yZero, gaps: [true] as const }
+
+  it('keeps a straight polyline between adjacent buckets', () => {
+    expect(seriesPath({
+      xs: [0, 50], ys: [10, 50], xEnds: [50, 100], yZero, style: 'gap', hold: 'zero', gaps: [false],
+    })).toBe('M0.0,10.0 L50.0,50.0')
+  })
+
+  it('holds a gap at zero, then slants into the next cluster', () => {
+    // Idle 20→80; next bucket is 20 wide, so the hold ends at 60 and 60→80 is the 折线.
+    expect(seriesPath({ ...gapped, style: 'gap', hold: 'zero' })).toBe(
+      'M0.0,10.0 L20.0,90.0 L60.0,90.0 L80.0,50.0',
+    )
+  })
+
+  it('holds a cumulative gap at the previous total, then slants in', () => {
+    expect(seriesPath({ ...gapped, style: 'gap', hold: 'previous' })).toBe(
+      'M0.0,10.0 L20.0,10.0 L60.0,10.0 L80.0,50.0',
+    )
+  })
+
+  it('draws an equidistant interval as a polyline through zero-filled points', () => {
+    expect(seriesPath({
+      xs: [0, 50, 100], ys: [10, 90, 20], yZero, style: 'polyline',
+    })).toBe('M0.0,10.0 L50.0,90.0 L100.0,20.0')
+  })
+
+  it('emits a lone M for a single point and an empty string for none', () => {
+    expect(seriesPath({ xs: [40], ys: [12], yZero, style: 'gap' })).toBe('M40.0,12.0')
+    expect(seriesPath({ xs: [], ys: [], yZero, style: 'polyline' })).toBe('')
   })
 })

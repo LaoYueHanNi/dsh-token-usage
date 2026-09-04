@@ -20,7 +20,7 @@ import type { TrendBucket } from './bucket.ts'
  */
 export type ChartSeries =
   | { mode: 'equidistant'; points: { key: string; label: string; full: string; tokens: number }[] }
-  | { mode: 'temporal'; points: { key: string; label: string; full: string; tokens: number; time: number; count: number }[] }
+  | { mode: 'temporal'; points: { key: string; label: string; full: string; tokens: number; time: number; end: number; count: number }[] }
 
 interface BuildPointsInput {
   rows: readonly UsageDayRow[]
@@ -48,6 +48,7 @@ export function buildChartPoints(input: BuildPointsInput): ChartSeries | null {
           full: `${bucketLabel(bucket.start, crossDay)}–${bucketLabel(bucket.end, crossDay)}`,
           tokens: bucket.tokens,
           time: bucket.start,
+          end: bucket.end,
           count: bucket.count,
         })),
       }
