@@ -238,6 +238,14 @@ afterEach(() => {
 })
 
 describe('UsageView', () => {
+  it('opts into the host composer overlay so conversation width handles hide', () => {
+    stubFetch()
+    renderView()
+    // ConversationRoot hides [data-width-handle] when a view declares this
+    // (Trajectory does the same). Loading / error / ready all share the root.
+    expect(document.querySelector('[data-conversation-composer-overlay]')).toBeTruthy()
+  })
+
   it('renders the six stat cards, the token strip, and the model table', async () => {
     const fetch = stubFetch()
     renderView({ liveStats: LIVE_STATS })

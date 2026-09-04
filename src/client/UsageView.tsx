@@ -16,6 +16,11 @@
  * the whole log including history written before this plugin was installed.
  * A footnote states the two scopes so the difference is not a surprise.
  *
+ * The root declares `data-conversation-composer-overlay` — the same host
+ * opt-in Trajectory uses. ConversationRoot hides the chat-column width
+ * handles when that attribute is present, and the view owns its own
+ * scroller instead of sharing the transcript's constrained column.
+ *
  * @module token-usage/client/UsageView
  */
 
@@ -48,6 +53,11 @@ export type UsageScope = 'session' | 'tree'
  * collapse into a single fetch, so the dashboard refreshes at REQUEST
  * granularity instead of per event or per turn. */
 const REFRESH_DEBOUNCE_MS = 250
+
+/** Host contract (ui-conversation ConversationRoot): views that own a
+ * full-bleed scroller set this so the chat-column width handles hide and
+ * the composer seat overlays instead of stealing clicks over the dashboard. */
+const COMPOSER_OVERLAY = { 'data-conversation-composer-overlay': '' } as const
 
 /** Props: the conversation-view runtime seat (standard kit) plus the locale seat.
  * dsh 0.1.2 narrowed the kit's `useSession` to the Session lifecycle
@@ -181,7 +191,7 @@ export function UsageView({ useSessions, useProjection, sessionId, t }: UsageVie
 
   if (summaryState.status === 'loading') {
     return (
-      <div ref={rootRef} className={styles['root']}>
+      <div ref={rootRef} className={styles['root']} {...COMPOSER_OVERLAY}>
         {header}
         <p className={styles['muted']}>{t('loading')}</p>
       </div>
@@ -189,7 +199,7 @@ export function UsageView({ useSessions, useProjection, sessionId, t }: UsageVie
   }
   if (summaryState.status === 'error') {
     return (
-      <div ref={rootRef} className={styles['root']}>
+      <div ref={rootRef} className={styles['root']} {...COMPOSER_OVERLAY}>
         {header}
         <p className={styles['error']}>{t('loadFailed', { message: summaryState.message })}</p>
         <button type="button" className={styles['button']} onClick={retry}>{t('retry')}</button>
@@ -201,7 +211,7 @@ export function UsageView({ useSessions, useProjection, sessionId, t }: UsageVie
   const view = currencyViewOf(summary)
   const { total } = summary
   return (
-    <div ref={rootRef} className={styles['root']}>
+    <div ref={rootRef} className={styles['root']} {...COMPOSER_OVERLAY}>
       {header}
       {total.requests === 0 && (total.failures ?? 0) === 0
         // The session has no recorded requests (successful or failed); the

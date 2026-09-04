@@ -2,7 +2,12 @@
  * web theme), no literal colors. Wide-panel layout — the view body spans
  * the conversation pane, so the dashboard lays out in three bands: a
  * six-card stat row, a chart + model table column pair, and a full-width
- * subagent table. */
+ * subagent table.
+ *
+ * The root opts into ConversationRoot's composer-overlay branch (see
+ * `data-conversation-composer-overlay` on UsageView): the view owns this
+ * scroller, and the floating composer needs bottom clearance so the last
+ * band is not covered. ConversationRoot publishes --dsh-composer-height. */
 
 .root {
   display: flex;
@@ -11,9 +16,11 @@
   width: 100%;
   box-sizing: border-box;
   padding: 12px calc(var(--dsh-composer-side-clearance, 16px) + 16px);
+  padding-bottom: calc(var(--dsh-composer-height, 152px) + 16px);
   max-width: 1400px;
   margin: 0 auto;
   height: 100%;
+  min-height: 0;
   overflow-y: auto;
 }
 
