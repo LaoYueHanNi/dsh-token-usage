@@ -6,7 +6,7 @@
 
 [简体中文](./README.zh.md) | English
 
-A dsh usage plugin that displays model token usage right in the Web UI. After installation, open **Settings** (the gear icon in the sidebar) and you'll find the **Token Usage** page — summary cards (with cost), a daily total-token line chart, a per-model breakdown, and per-model pricing dialogs, all filterable by date range and model, exactly as shown in the screenshot above.
+A dsh usage plugin that displays model token usage right in the Web UI. After installation, open **Settings** (the gear icon in the sidebar) and you'll find the **Token Usage** page — summary cards (with cost), a daily total-token line chart, a per-model / per-session breakdown, and per-model pricing dialogs, all filterable by date range and model, exactly as shown in the screenshot above.
 
 [dsh]: https://github.com/cordiverse/dsh
 
@@ -24,18 +24,18 @@ Repo: <https://github.com/LaoYueHanNi/dsh-token-usage>
 ## Features
 
 - **Live recording**: every provider-billed model call is recorded as it happens — tokens, cost, model, session — context-compaction calls included.
-- **Web stats page**: filters (date range + model + `1d`/`7d`/`30d` shortcuts), summary cards, daily trend chart (hover a day for its total), per-model table.
+- **Web stats page**: filters (date range + model + `1d`/`7d`/`30d` shortcuts), summary cards, daily trend chart (hover a day for its total), per-model table. The table block toggles between **per-model / per-session**: the session table groups by working directory (switchable to a flat list), sorts by total tokens / cost / recent activity on header click, and **Ctrl+click** on a session row jumps straight to that session's usage tab.
 - **Session usage tab**: the conversation pane gains a **Usage** view tab (beside Chat / Trajectory) with the active session's dashboard — six stat cards (successful requests with a failure pill, cost, cache hit rate, average time-to-first-token, generation throughput, total tokens), a 4-bucket token strip, an hourly trend chart, and a per-model table. A scope switch toggles **Session / With subagents**, and the subagent table drills into each child and back. Hovering the failure pill breaks failures down per class (rate limited, server error, context exceeded, …).
 
 ![Session Usage tab](docs/images/usage-tab.png)
 
-- **Cost figures & model pricing**: per-request cost is computed live from per-model rates (¥ per million tokens); unpriced models warn and count as ¥0. Every priced model's name carries a **rates button** opening its full price table. Rates sync from the cloud feed on every startup — see [Model pricing](#model-pricing).
+- **Cost figures & model pricing**: per-request cost is computed live from per-model rates (¥ per million tokens); unpriced models warn and count as ¥0. Every priced model's name carries a **rates button** opening its full price table, and the filter row carries a **pricing table** entry opening an overview of every model in the cloud feed — searchable, with simulated billing and expandable effective rates. Rates sync from the cloud feed on every startup — see [Model pricing](#model-pricing).
 - **Provider quota**: an input-bar button (left of the model chip) shows the selected provider's remaining quota. See [Provider quota](#provider-quota).
 - **History backfill**: the first startup syncs requests that happened before installation (idempotent); unreadable session logs are skipped and counted, never fatal to the sync.
 
 ## Model pricing
 
-Costs are billed per record at its own timestamp, and a rates update re-prices the whole history instantly. The single source is a cloud mirror auto-synced on every startup — pricing corrections belong upstream in the [model-price-table](https://github.com/LaoYueHanNi/model-price-table) feed, so every user benefits at once. A hand-edited `pricing.json` is no longer read; if you maintain one it is silently ignored after upgrading (the file is left on disk). Broken mirrors degrade the affected models to unpriced without breaking the stats page. Default location: `~/.dsh/token-usage/`. Billing rule chain, cloud feed format, and self-hosted mirror URLs: [docs/pricing.md](./docs/pricing.md).
+Costs are billed per record at its own timestamp, and a rates update re-prices the whole history instantly. The single source is a cloud mirror auto-synced on every startup — pricing corrections belong upstream in the [model-price-table](https://github.com/LaoYueHanNi/model-price-table) feed, so every user benefits at once. A hand-edited `pricing.json` is no longer read; if you maintain one it is silently ignored after upgrading (the file is left on disk). Upgrading from 0.4.1 or earlier to 0.4.2 triggers a one-time full rebuild of the usage rollup the first time the stats page is read — the larger the history, the longer it takes; this is expected. Broken mirrors degrade the affected models to unpriced without breaking the stats page. Default location: `~/.dsh/token-usage/`. Billing rule chain, cloud feed format, and self-hosted mirror URLs: [docs/pricing.md](./docs/pricing.md).
 
 ## Configuration
 
