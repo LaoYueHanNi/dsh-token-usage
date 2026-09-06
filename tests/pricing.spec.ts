@@ -10,6 +10,7 @@ import {
   DEFAULT_PRICING_URL_DOMESTIC,
   DEFAULT_PRICING_URL_OVERSEAS,
   ratesForKey,
+  readPricingOverview,
   readPricingTable,
   readUsdExchangeRate,
   resolvePricingUrl,
@@ -290,6 +291,51 @@ describe('readPricingTable', () => {
   })
 })
 
+describe('readPricingOverview', () => {
+  it('keeps the model-row shape: one row per model, aliases and family intact', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'token-usage-overview-'))
+    await writeFile(join(dir, 'pricing.ccsa.json'), JSON.stringify({
+      version: 76,
+      updatedAt: 1,
+      currency: 'RMB',
+      models: [{
+        modelId: 'deepseek-v4-flash',
+        family: 'deepseek',
+        aliases: ['deepseek-flash', 'dsv4-flash'],
+        inputCostPerMillion: 1.5,
+        outputCostPerMillion: 4.5,
+        contextTiers: [{ threshold: 512000, inputCostPerMillion: 3, outputCostPerMillion: 9 }],
+      }],
+    }))
+    const rows = await readPricingOverview(dir)
+    expect(rows).toHaveLength(1)
+    // The row carries the model-row shape the overview serves — not the
+    // alias-keyed flat table, which would repeat the model per alias.
+    expect(rows[0]).toEqual({
+      modelId: 'deepseek-v4-flash',
+      aliases: ['deepseek-flash', 'dsv4-flash'],
+      family: 'deepseek',
+      rules: {
+        base: { inputPerMillion: 1.5, outputPerMillion: 4.5 },
+        contextTiers: [{ threshold: 512000, rates: { inputPerMillion: 3, outputPerMillion: 9 } }],
+        dailySlots: [],
+        timeRules: [],
+      },
+    })
+  })
+
+  it('reads an empty list for absent, malformed, or non-RMB mirrors', async () => {
+    const absent = await mkdtemp(join(tmpdir(), 'token-usage-overview-'))
+    expect(await readPricingOverview(absent)).toEqual([])
+    const broken = await mkdtemp(join(tmpdir(), 'token-usage-overview-'))
+    await writeFile(join(broken, 'pricing.ccsa.json'), '{not json')
+    expect(await readPricingOverview(broken)).toEqual([])
+    const usd = await mkdtemp(join(tmpdir(), 'token-usage-overview-'))
+    await writeFile(join(usd, 'pricing.ccsa.json'), JSON.stringify({ version: 1, currency: 'USD', models: [] }))
+    expect(await readPricingOverview(usd)).toEqual([])
+  })
+})
+
 describe('coerceCloudPricing', () => {
   it('accepts an RMB feed and drops invalid model rows', () => {
     const feed = coerceCloudPricing({
@@ -328,6 +374,20 @@ describe('coerceCloudPricing', () => {
     expect(envelope(NaN)!.usdExchangeRate).toBeUndefined()
     expect(envelope(Infinity)!.usdExchangeRate).toBeUndefined()
     expect(envelope('7')!.usdExchangeRate).toBeUndefined()
+  })
+
+  it('keeps a string family per model row and drops non-string or empty ones', () => {
+    const feed = coerceCloudPricing({
+      version: 76,
+      currency: 'RMB',
+      models: [
+        { modelId: 'deepseek-chat', family: 'deepseek', inputCostPerMillion: 2, outputCostPerMillion: 8 },
+        { modelId: 'glm-4.7', family: 'glm', inputCostPerMillion: 1, outputCostPerMillion: 2 },
+        { modelId: 'weird-family', family: 7, inputCostPerMillion: 1, outputCostPerMillion: 2 },
+        { modelId: 'empty-family', family: '', inputCostPerMillion: 1, outputCostPerMillion: 2 },
+      ],
+    })
+    expect(feed!.models.map(model => model.family)).toEqual(['deepseek', 'glm', undefined, undefined])
   })
 })
 

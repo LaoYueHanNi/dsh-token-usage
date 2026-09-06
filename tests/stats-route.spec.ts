@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Context, Service } from '@deepseek-ai/cordis'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import * as plugin from '../src/index.ts'
-import { createDirectoryGuardRoute, createFullSyncRoute, createMigrationRoute, createStatsRoute, DIR_GUARD_PATH, FULL_SYNC_PATH, isSameOriginFetch, MIGRATION_PATH, STATS_PATH } from '../src/stats-route.ts'
+import { createDirectoryGuardRoute, createFullSyncRoute, createMigrationRoute, createPricingRoute, createStatsRoute, DIR_GUARD_PATH, FULL_SYNC_PATH, isSameOriginFetch, MIGRATION_PATH, PRICING_PATH, STATS_PATH } from '../src/stats-route.ts'
 import { currencyOfRegion } from '../src/wire.ts'
 import type { UsageRecord } from '../src/usage-record.ts'
 import { messageEvent } from './helpers.ts'
@@ -644,6 +644,77 @@ describe('createStatsRoute relocation', () => {
   })
 })
 
+describe('createPricingRoute', () => {
+  it('serves the model-row overview on GET with the currency stamps', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'token-usage-pricing-route-'))
+    await writeFile(join(dir, 'pricing.ccsa.json'), JSON.stringify({
+      version: 76,
+      updatedAt: 1,
+      currency: 'RMB',
+      usdExchangeRate: 7.25,
+      models: [{
+        modelId: 'deepseek-chat',
+        family: 'deepseek',
+        aliases: ['deepseek-v3'],
+        inputCostPerMillion: 2,
+        outputCostPerMillion: 8,
+        cacheReadCostPerMillion: 1,
+        cacheCreationCostPerMillion: 4,
+      }],
+    }))
+    const route = createPricingRoute(() => dir, { currency: () => 'USD' })
+    const { res, captured } = fakeResponse()
+    await route.handler(fakeRequest(), res)
+    expect(captured.status).toBe(200)
+    expect(captured.headers['content-type']).toBe('application/json; charset=utf-8')
+    expect(captured.headers['cache-control']).toBe('no-store')
+    const body = JSON.parse(captured.body) as {
+      currency: string
+      usdExchangeRate: number
+      models: Array<{ modelId: string; family: string; aliases: string[]; rules: { base: Record<string, number> } }>
+    }
+    // The display stamps follow the region thunk; the wire rates stay RMB.
+    expect(body.currency).toBe('USD')
+    expect(body.usdExchangeRate).toBe(7.25)
+    expect(body.models).toHaveLength(1)
+    expect(body.models[0]).toMatchObject({ modelId: 'deepseek-chat', family: 'deepseek', aliases: ['deepseek-v3'] })
+    expect(body.models[0]!.rules.base).toEqual({ inputPerMillion: 2, outputPerMillion: 8, cacheReadPerMillion: 1, cacheWritePerMillion: 4 })
+  })
+
+  it('rejects non-GET methods with 405', async () => {
+    const route = createPricingRoute(() => '/')
+    const { res, captured } = fakeResponse()
+    await route.handler(fakeRequest({ method: 'POST' }), res)
+    expect(captured.status).toBe(405)
+  })
+
+  it('refuses cross-site browser fetches with 403', async () => {
+    const route = createPricingRoute(() => '/')
+    const { res, captured } = fakeResponse()
+    await route.handler(fakeRequest({ headers: { 'sec-fetch-site': 'cross-site' } }), res)
+    expect(captured.status).toBe(403)
+  })
+
+  it('answers an absent mirror with an empty model list and the defaults', async () => {
+    const dir = join(tmpdir(), `token-usage-pricing-absent-${Date.now()}`)
+    const route = createPricingRoute(() => dir)
+    const { res, captured } = fakeResponse()
+    await route.handler(fakeRequest(), res)
+    expect(captured.status).toBe(200)
+    // Without a currency thunk the display defaults to CNY and the rate to
+    // the built-in 7 — the overview stays servable, just empty.
+    expect(JSON.parse(captured.body)).toEqual({ models: [], currency: 'CNY', usdExchangeRate: 7 })
+  })
+
+  it('maps a read failure to a 500 error JSON', async () => {
+    const route = createPricingRoute(() => { throw new Error('boom') })
+    const { res, captured } = fakeResponse()
+    await route.handler(fakeRequest(), res)
+    expect(captured.status).toBe(500)
+    expect(JSON.parse(captured.body)).toEqual({ error: 'boom' })
+  })
+})
+
 describe('currencyOfRegion', () => {
   it('maps overseas to USD and everything else to CNY', () => {
     expect(currencyOfRegion('overseas')).toBe('USD')
@@ -709,6 +780,8 @@ describe('plugin webServer wiring', () => {
     expect(route!.kind).toBe('exact')
     // The relocation progress route registers alongside the stats route.
     expect(routes.some(candidate => candidate.path === MIGRATION_PATH && candidate.kind === 'exact')).toBe(true)
+    // The pricing-overview route registers alongside too.
+    expect(routes.some(candidate => candidate.path === PRICING_PATH && candidate.kind === 'exact')).toBe(true)
 
     // The directory-guard route registers too and answers the live verdict:
     // no session is mid-conversation here, so a proposed move is not blocked.

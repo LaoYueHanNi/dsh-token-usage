@@ -14,6 +14,10 @@ export type { UsageFields, UsageRecord } from './usage-record.ts'
 /** The stats endpoint path, served by the host half's webServer route. */
 export const STATS_PATH = '/token-usage/stats'
 
+/** The pricing-overview endpoint path: the full cloud-mirror model list,
+ * filter-free by design — the overview is not a filtered usage view. */
+export const PRICING_PATH = '/token-usage/pricing'
+
 /** How much of the stats payload a consumer asked for. `full` is the
  * settings page's whole CostedSummary; `session` is the usage tab; `chip`
  * is the header strip (totals only). */
@@ -339,6 +343,35 @@ export function isUnpricedKey(key: RateKey): boolean {
  * surface in {@link UsageSummary.unpricedModels}.
  */
 export type PricingTable = Record<string, ModelRates>
+
+/**
+ * One model row of the pricing overview: the shape the cloud feed carries
+ * (modelId + its aliases + its upstream family) plus the full rule set —
+ * deliberately NOT flattened through {@link PricingTable}, so the overview
+ * shows one row per model with aliases as a footnote instead of one row per
+ * alias-key.
+ */
+export interface PricingOverviewModel {
+  modelId: string
+  /** The feed's alias list for this model (empty when it carries none). */
+  aliases: readonly string[]
+  /** The feed's upstream family grouping; absent rows group under `other`. */
+  family?: string
+  rules: ModelRates
+}
+
+/** The payload served at {@link PRICING_PATH}: every cloud-mirror model row
+ * plus the display-currency stamps the settings page converts with (same
+ * region source as the stats payload). */
+export interface PricingOverviewPayload {
+  models: readonly PricingOverviewModel[]
+  /** The display currency the page converts rate figures into. Amounts on
+   * the wire (rules rates) remain RMB. */
+  currency: DisplayCurrency
+  /** Effective RMB-per-USD rate (feed value, else the built-in default);
+   * the divisor when `currency` is USD. */
+  usdExchangeRate: number
+}
 
 /** One per-day × per-model × per-rate aggregation row. */
 export interface UsageRateRow {

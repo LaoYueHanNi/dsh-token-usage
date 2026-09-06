@@ -12,7 +12,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import { formatHitRate, formatTokens, TokenUsageSection, totalTokens } from '../src/client/TokenUsageSection.tsx'
 import { zh } from '../src/client/locales.ts'
-import type { UsageSummary } from '../src/wire.ts'
+import type { PricingOverviewPayload, UsageSummary } from '../src/wire.ts'
 
 // The shell Tooltip ships inside the primitives package whose CSS imports the
 // Node test runtime cannot load (quota-button.client.spec mocks it for the
@@ -110,6 +110,17 @@ function stubFetch(impl: () => Promise<unknown>): ReturnType<typeof vi.fn> {
   const mock = vi.fn(impl)
   vi.stubGlobal('fetch', mock)
   return mock
+}
+
+/** A pricing-overview fixture: two families (deepseek < glm), the used
+ * model in the first one. */
+const OVERVIEW: PricingOverviewPayload = {
+  models: [
+    { modelId: 'deepseek-reasoner', aliases: ['deepseek-think'], family: 'deepseek', rules: SUMMARY.pricing['deepseek-reasoner']! },
+    { modelId: 'glm-4.7', aliases: [], family: 'glm', rules: SUMMARY.pricing['deepseek-reasoner']! },
+  ],
+  currency: 'CNY',
+  usdExchangeRate: 7,
 }
 
 // jsdom ships no dialog methods; stub the pair showModal/close so the
@@ -249,8 +260,9 @@ describe('TokenUsageSection', () => {
     }))
     render(<TokenUsageSection close={() => {}} t={t} />)
     expect(await screen.findByText(/暂无数据/)).toBeTruthy()
-    // No model rows without a selection, so no pricing affordance either.
-    expect(screen.queryByRole('button', { name: /定价/ })).toBeNull()
+    // No model rows without a selection, so no pricing affordance either
+    // (the filter row's pricing-table link is an action, not an affordance).
+    expect(screen.queryByRole('button', { name: '定价' })).toBeNull()
   })
 
   it('warns about unpriced models and dashes their cost', async () => {
@@ -333,6 +345,29 @@ describe('TokenUsageSection', () => {
     fireEvent.click(screen.getByText('重试'))
     expect(await screen.findAllByText('总 token')).toHaveLength(2)
     expect(fetch).toHaveBeenCalledTimes(2)
+  })
+
+  it('opens the pricing overview from the filter row tail link, filter-free', async () => {
+    const urls: string[] = []
+    stubFetch(async (input: string | URL | Request) => {
+      const url = String(input)
+      urls.push(url)
+      return { ok: true, json: async () => (url.startsWith('/token-usage/pricing') ? OVERVIEW : SUMMARY) }
+    })
+    render(<TokenUsageSection close={() => {}} t={t} />)
+    // The tail link sits in the filter row; opening the overview fetches
+    // the pricing route with no filter parameters at all.
+    fireEvent.click(await screen.findByRole('button', { name: '定价表' }))
+    const dialog = await screen.findByRole('dialog', { name: '定价表' })
+    expect((dialog as HTMLDialogElement).open).toBe(true)
+    // A flat family-sorted list: both models' rows visible (no folding),
+    // the page's used model tagged.
+    expect(within(dialog).getByText('deepseek-reasoner')).toBeTruthy()
+    expect(within(dialog).getByText('已用')).toBeTruthy()
+    expect(within(dialog).getByText('glm-4.7')).toBeTruthy()
+    // Exactly one overview fetch, carrying no query string.
+    const pricingCalls = urls.filter(url => url.startsWith('/token-usage/pricing'))
+    expect(pricingCalls).toEqual(['/token-usage/pricing'])
   })
 })
 

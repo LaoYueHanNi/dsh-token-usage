@@ -2,12 +2,13 @@
  * Token-usage settings page (browser half): fetches the stats summary from
  * the host route and renders the filter bar (inclusive day range, model
  * select, 1d/7d/30d quick ranges where 1d spans today 00:00–23:59), the
- * total-usage strip, the daily-token trend chart, the per-model detail
- * table with the hit rate last, and — opened by each priced model row's
- * “定价” affordance — a dialog with that model's full price table — all
- * following the active filters. There is no refresh button: entering the
- * page or changing a filter refetches (the route answers no-store); only
- * the error state keeps a retry.
+ * total-usage strip, the daily-token trend chart, and the per-model detail
+ * table with the hit rate last — all following the active filters. Each
+ * priced model row's “定价” affordance opens that model's price dialog
+ * (PricingDialog.tsx); the filter row's tail link opens the filter-free
+ * pricing-overview dialog (PricingOverviewDialog.tsx). There is no refresh
+ * button: entering the page or changing a filter refetches (the route
+ * answers no-store); only the error state keeps a retry.
  *
  * @module token-usage/client/TokenUsageSection
  */
@@ -16,15 +17,16 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SettingsSectionOwnerProps } from '@deepseek-ai/dsh-client-ui-settings/client'
-import type { ContextTier, DailySlot, ModelPricing, ModelRates, RateWindow, UsageSummary } from '../wire.ts'
+import type { UsageSummary } from '../wire.ts'
 import { STATS_PATH } from '../wire.ts'
 import { useAsyncResource } from './async-resource.ts'
 import { DateRangePicker } from './DateRangePicker.tsx'
-import { dayKeyOf, shiftedDayKey, totalTokens } from './day.ts'
-import { currencyViewOf, formatCost, formatRate, formatRateWithSymbol, formatTokens } from './format.ts'
-import type { CurrencyView } from './format.ts'
+import { shiftedDayKey, totalTokens } from './day.ts'
+import { currencyViewOf, formatCost, formatTokens } from './format.ts'
 import { HitRateText } from './HitRateText.tsx'
 import { MenuSelect } from './MenuSelect.tsx'
+import { PricingDialog } from './PricingDialog.tsx'
+import { PricingOverviewDialog } from './PricingOverviewDialog.tsx'
 import { RequestsCell, RequestsSplitHead, RequestsStatCard, StatCard } from './StatCard.tsx'
 import { TrendChart } from './TrendChart.tsx'
 import { useColorSchemeMirror } from './use-color-scheme.ts'
@@ -90,180 +92,6 @@ function isQuickActive(days: number, filters: Filters): boolean {
   return filters.from === range.from && filters.to === range.to
 }
 
-/** The four base rates of one model as display text (symbol included,
- * converted for a USD view); a missing cache rate bills at the input rate. */
-function billedRates(rates: ModelPricing, view: CurrencyView): { input: string; output: string; cacheRead: string; cacheWrite: string } {
-  return {
-    input: formatRateWithSymbol(rates.inputPerMillion, view),
-    output: formatRateWithSymbol(rates.outputPerMillion, view),
-    cacheRead: formatRateWithSymbol(rates.cacheReadPerMillion ?? rates.inputPerMillion, view),
-    cacheWrite: formatRateWithSymbol(rates.cacheWritePerMillion ?? rates.inputPerMillion, view),
-  }
-}
-
-/** `HH:MM-HH:MM` of one peak window (half-open, local minutes). */
-function windowText(window: RateWindow): string {
-  const clock = (minute: number): string =>
-    `${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`
-  return `${clock(window.startMinute)}-${clock(window.endMinute)}`
-}
-
-/** The when-it-applies text of one peak slot: its label plus its windows. */
-function slotCondition(slot: DailySlot, t: TranslateNS<'token-usage'>): string {
-  return `${slot.label ?? t('pricing.peak')} ${slot.windows.map(windowText).join(t('pricing.windowSep'))}`
-}
-
-/**
- * One price row of the pricing table: the condition that bills at these
- * rates, and the four rates themselves. The condition text is complete —
- * a peak row inside a tier carries both the threshold and the windows —
- * so the row order never carries meaning on its own.
- */
-interface PriceRow {
-  condition: string
-  rates: ModelPricing
-}
-
-/**
- * The price rows of one rate node (a time rule's or the model root's): the
- * node's own base rates, then its peak slots, then its context tiers
- * (ascending), each tier followed by the peak slots hanging on that tier —
- * mirroring {@link resolveRate}'s node chain, where a matching tier's slots
- * replace the node's and peak rates replace the node's rates wholesale.
- */
-function nodePriceRows(node: { rates: ModelPricing; tiers?: ContextTier[] | undefined; slots?: DailySlot[] | undefined }, t: TranslateNS<'token-usage'>): PriceRow[] {
-  const rows: PriceRow[] = [{ condition: t('pricing.default'), rates: node.rates }]
-  const tiers = [...node.tiers ?? []].sort((a, b) => a.threshold - b.threshold)
-  for (const tier of tiers) {
-    const tierCondition = t('pricing.tier', { threshold: formatTokens(tier.threshold) })
-    rows.push({ condition: tierCondition, rates: tier.rates })
-    for (const slot of tier.dailySlots ?? []) {
-      rows.push({ condition: `${tierCondition} · ${slotCondition(slot, t)}`, rates: slot.rates })
-    }
-  }
-  for (const slot of node.slots ?? []) {
-    rows.push({ condition: slotCondition(slot, t), rates: slot.rates })
-  }
-  return rows
-}
-
-/**
- * One model's price table: rows are billing conditions — grouped into the
- * model root (“常规”, omitted when it is the only group) and one group per
- * time rule with its date window — so tier, peak, and time-rule pricing
- * each show when they apply and what they bill. Shared by the pricing
- * dialog; the structure mirrors {@link resolveRate}'s node chain.
- */
-function ModelPriceTable({ rules, view, t }: {
-  rules: ModelRates
-  view: CurrencyView
-  t: TranslateNS<'token-usage'>
-}): ReactNode {
-  // Groups follow resolveRate's chain: the model root (the current era)
-  // first, then each time rule as an isolated price world, newest era
-  // first (descending rule end), regardless of the feed's listing order.
-  const groups = [
-    {
-      title: rules.timeRules.length > 0 ? t('pricing.regular') : null,
-      rows: nodePriceRows({ rates: rules.base, tiers: rules.contextTiers, slots: rules.dailySlots }, t),
-    },
-    ...[...rules.timeRules]
-      .sort((a, b) => b.endTime - a.endTime)
-      .map(rule => ({
-      // A zero start (the “since forever” rules some feeds carry) drops
-      // the bogus 1970 date and reads as “through <end>”.
-      title: `${rule.label !== undefined ? `${rule.label} ` : ''}${rule.startTime > 0 ? `${dayKeyOf(new Date(rule.startTime * 1000))} ~ ` : '~ '}${dayKeyOf(new Date(rule.endTime * 1000))}`,
-      rows: nodePriceRows({ rates: rule.rates, tiers: rule.contextTiers, slots: rule.dailySlots }, t),
-    })),
-  ]
-  return (
-    <div className={styles['tableWrap']}>
-      <table className={styles['table']} aria-label={t('pricing.title')}>
-        <thead>
-          <tr>
-            <th className={styles['conditionHead']}>{t('pricing.condition')}</th>
-            <th>{t('pricing.input')}{t('pricing.perMillion')}</th>
-            <th>{t('pricing.output')}{t('pricing.perMillion')}</th>
-            <th>{t('pricing.cacheRead')}{t('pricing.perMillion')}</th>
-            <th>{t('pricing.cacheWrite')}{t('pricing.perMillion')}</th>
-          </tr>
-        </thead>
-        <tbody>
-          {groups.flatMap(group => [
-            ...(group.title !== null
-              ? [
-                <tr key={group.title} className={styles['groupRow']}>
-                  <td colSpan={5}>{group.title}</td>
-                </tr>,
-              ]
-              : []),
-            ...group.rows.map((row, index) => {
-              const billed = billedRates(row.rates, view)
-              return (
-                <tr key={`${group.title ?? ''}-${index}-${row.condition}`}>
-                  <td className={styles['conditionCell']}>{row.condition}</td>
-                  <td>{billed.input}</td>
-                  <td>{billed.output}</td>
-                  <td>{billed.cacheRead}</td>
-                  <td>{billed.cacheWrite}</td>
-                </tr>
-              )
-            }),
-          ])}
-        </tbody>
-      </table>
-      {view.symbol === '$'
-        ? <p className={styles['rateNote']}>{t('pricing.exchangeRateNote', { rate: formatRate(view.rate) })}</p>
-        : null}
-    </div>
-  )
-}
-
-/**
- * The pricing dialog of one model: a native `<dialog>` (Esc closes, focus
- * is trapped, the backdrop dims, and the top layer renders it above the
- * table's scroll shell) opened by the “定价” affordance in a model row.
- * Mounts only while a model is selected; every close path funnels through
- * the dialog's `close` event, which clears the selection and unmounts it.
- */
-function PricingDialog({ model, rules, view, onClose, t }: {
-  model: string
-  rules: ModelRates
-  view: CurrencyView
-  onClose: () => void
-  t: TranslateNS<'token-usage'>
-}): ReactNode {
-  const dialogRef = useRef<HTMLDialogElement>(null)
-  useEffect(() => {
-    const dialog = dialogRef.current
-    if (dialog !== null && !dialog.open) dialog.showModal()
-  }, [])
-  return (
-    <dialog
-      ref={dialogRef}
-      className={styles['dialog']}
-      aria-label={t('pricing.title')}
-      onClose={onClose}
-      // A click that landed on the dialog element itself hit the backdrop
-      // (the content sits in child elements), which closes like Esc does.
-      onClick={event => { if (event.target === dialogRef.current) dialogRef.current?.close() }}
-    >
-      <div className={styles['dialogHead']}>
-        <span className={styles['dialogTitle']}>{model}</span>
-        <button
-          type="button"
-          className={styles['dialogClose']}
-          aria-label={t('pricing.close')}
-          onClick={() => dialogRef.current?.close()}
-        >
-          ✕
-        </button>
-      </div>
-      <ModelPriceTable rules={rules} view={view} t={t} />
-    </dialog>
-  )
-}
-
 /** Quick-range menu entries (labels are locale-free day counts). */
 const QUICK_OPTIONS = [
   { value: '1', label: '1d' },
@@ -272,11 +100,13 @@ const QUICK_OPTIONS = [
 ] as const
 
 /** The filter bar: quick range menu, day-range picker popover, model
- * menu — one row, one popover language. */
-function FilterBar({ filters, models, onChange, t }: {
+ * menu — one row, one popover language. The row's tail link is an action,
+ * not a selector: it opens the filter-free pricing overview. */
+function FilterBar({ filters, models, onChange, onPricingTable, t }: {
   filters: Filters
   models: readonly string[]
   onChange: (next: Filters) => void
+  onPricingTable: () => void
   t: TranslateNS<'token-usage'>
 }): ReactNode {
   // 'all' when the range is unconstrained, 'custom' when it no longer
@@ -315,6 +145,13 @@ function FilterBar({ filters, models, onChange, t }: {
         options={[{ value: '', label: t('filter.allModels') }, ...models.map(model => ({ value: model, label: model }))]}
         onChange={model => onChange({ ...filters, model })}
       />
+      {/* The tail action of the tool row: opens the pricing overview, a
+       * view independent of the three selectors (it never takes filters).
+       * A link-styled label, not a bordered button — bordered reads as a
+       * fourth selector of the same family. */}
+      <button type="button" className={styles['pricingLink']} onClick={onPricingTable}>
+        {t('pricing.table')}
+      </button>
     </div>
   )
 }
@@ -335,6 +172,13 @@ export function TokenUsageSection({ t }: SettingsSectionOwnerProps & { t: Transl
   // The model whose pricing dialog is open (null = none). Refetched
   // summaries keep the dialog's rules in sync with the latest pricing.
   const [detailModel, setDetailModel] = useState<string | null>(null)
+  // The pricing-overview dialog (opened by the filter row's tail link).
+  // `usedSnapshot` is taken at open time: the modal's backdrop covers the
+  // filter row, so the filters cannot change while it is open and the
+  // snapshot stays stable for the whole dialog session. The link renders
+  // only in the ready branch, so the summary is always at hand here.
+  const [pricingTableOpen, setPricingTableOpen] = useState(false)
+  const [usedSnapshot, setUsedSnapshot] = useState<ReadonlySet<string>>(() => new Set())
   const [retryToken, setRetryToken] = useState(0)
   const retry = useCallback(() => { setRetryToken(previous => previous + 1) }, [])
 
@@ -390,7 +234,29 @@ export function TokenUsageSection({ t }: SettingsSectionOwnerProps & { t: Transl
     <div ref={rootRef} className={styles['section']}>
       <h2 className={styles['title']}>{t('nav.label')}</h2>
       <p className={styles['muted']}>{t('dataDir', { path: state.value.dataDir })}</p>
-      <FilterBar filters={filters} models={models} onChange={setFilters} t={t} />
+      <FilterBar
+        filters={filters}
+        models={models}
+        onChange={setFilters}
+        onPricingTable={() => {
+          setUsedSnapshot(new Set(state.value.byModel.map(row => row.model)))
+          setPricingTableOpen(true)
+        }}
+        t={t}
+      />
+      {pricingTableOpen
+        ? (
+          // The overview is independent of the filters and of the empty-
+          // state branch below: even a day with no usage still has a full
+          // pricing table worth browsing.
+          <PricingOverviewDialog
+            usedModels={usedSnapshot}
+            view={view}
+            onClose={() => setPricingTableOpen(false)}
+            t={t}
+          />
+        )
+        : null}
       {total.requests === 0 && (total.failures ?? 0) === 0
         ? (
           // One hint covers both an empty log and an empty filtered window:

@@ -45,7 +45,7 @@ import { modelOfEvent, recordOfEvent } from './usage-record.ts'
 import { autoSyncIfNeeded, syncHistory } from './sync.ts'
 import { clearRecordCache, warmRecordCache } from './record-cache.ts'
 import { ROLLUP_FILE_NAME, ROLLUP_TMP_FILE_NAME } from './rollup.ts'
-import { createDirectoryGuardRoute, createFullSyncRoute, createMigrationRoute, createStatsRoute, type FullSyncTrigger } from './stats-route.ts'
+import { createDirectoryGuardRoute, createFullSyncRoute, createMigrationRoute, createPricingRoute, createStatsRoute, type FullSyncTrigger } from './stats-route.ts'
 import { currencyOfRegion, type DirectoryGuardView, type FullSyncView, type QuotaPayload } from './wire.ts'
 import { createQuotaRoute } from './quota/quota-route.ts'
 import { QuotaService } from './quota/quota-service.ts'
@@ -769,6 +769,12 @@ export function apply(ctx: Context, config: Config = {}) {
       webCtx.effect(() => webCtx.webServer.register(
         createFullSyncRoute(() => fullSyncStatus, triggerFullSync),
       ), 'token-usage: full sync route')
+      // The settings page's pricing-overview dialog: the full cloud-mirror
+      // model list in model-row shape, filter-free by design (the overview is
+      // not a filtered usage view, so it never rides the stats response).
+      webCtx.effect(() => webCtx.webServer.register(
+        createPricingRoute(currentDir, { currency: () => currencyOfRegion(effectiveInput().pricingRegion), logger }),
+      ), 'token-usage: pricing route')
       // The input-bar quota button's data channel: the current provider's
       // quota snapshot (rate-limit windows / balance), served by the quota
       // service. A disabled feature still answers — with the `disabled`

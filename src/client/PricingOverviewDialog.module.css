@@ -1,0 +1,392 @@
+/* Pricing-overview dialog: tokens only (--dsw-* alias tokens from the web
+ * theme), no literal colors. The dialog shell, close button, and rate note
+ * come from PricingDialog.module.css (shared); this module owns the wider
+ * width, the search field, and the flat family-sorted model table. */
+
+/* The overview is a wide browsing table: model + 4 rate columns. */
+.overview {
+  width: min(720px, calc(100vw - 48px));
+}
+
+.note {
+  margin: 0;
+  font-size: 13px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+/* Loading / failure line with its inline retry. */
+.failRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.retryButton {
+  flex: none;
+  padding: 2px 12px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-bg-layer-2);
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.retryButton:hover {
+  background: var(--dsw-interactive-bg-hover);
+}
+
+/* The search field sits above the scroll shell, so it never scrolls away
+ * while the family table moves under the sticky header. */
+.search {
+  width: 100%;
+  margin-bottom: 8px;
+  padding: 4px 8px;
+  font-size: 13px;
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-bg-layer-2);
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 6px;
+}
+
+/* The four raw token buckets driving the simulated cost — flat one-row
+ * capsule: 12 controls (4 × {label, amount, K/M/B}) live on a single
+ * visual line inside the dialog, divided into four sections by 1px
+ * vertical seams. The whole row shares one bordered / rounded container
+ * painted by `.buckets`; each section is a `.bucket` flex item with its
+ * own label + amount input + unit picker. The amount input goes
+ * borderless on the capsule (the capsule IS the chrome) and keeps a
+ * permanent inset outline so the editable area stays visible. `flex-wrap:
+ * nowrap` + every `min-width: 0` keeps all four sections in the row no
+ * matter how the dialog narrows, absorbing slack into the amount input —
+ * labels and unit buttons stay their natural width and never break. */
+.buckets {
+  display: flex;
+  align-items: stretch;
+  flex-wrap: nowrap;
+  margin-bottom: 8px;
+  padding: 4px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-layer-2);
+}
+
+.bucket {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 10px;
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.bucket + .bucket {
+  border-left: 1px solid var(--dsw-alias-border-l1);
+}
+
+.bucketLabel {
+  flex: none;
+  font-size: 11px;
+  line-height: 14px;
+  color: var(--dsw-alias-label-secondary);
+  white-space: nowrap;
+}
+
+/* The K/M/B segment: fused small buttons, the picked one plated. Sits at
+ * the right edge of an inline bucket, never shrinking (the picked button
+ * would lose its plate otherwise). */
+.unitGroup {
+  display: flex;
+  flex: none;
+}
+
+.unit {
+  padding: 0 5px;
+  font-size: 10px;
+  line-height: 14px;
+  color: var(--dsw-alias-label-secondary);
+  background: transparent;
+  border: 1px solid var(--dsw-alias-border-l2);
+  cursor: pointer;
+}
+
+.unit:first-child {
+  border-radius: 3px 0 0 3px;
+}
+
+.unit:last-child {
+  border-radius: 0 3px 3px 0;
+}
+
+.unit + .unit {
+  border-left: none;
+}
+
+.unit:hover {
+  background: var(--dsw-interactive-bg-hover);
+}
+
+/* Selected reads at a glance: the UsageView segmented control's fill — a
+ * 16% mix of label-primary that lifts in both themes — plus primary ink
+ * and a weight step. */
+.unit[aria-pressed='true'] {
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary);
+  background: color-mix(in srgb, var(--dsw-alias-label-primary) 16%, transparent);
+}
+
+.bucketInput {
+  flex: 1 1 0;
+  min-width: 0;
+  width: 100%;
+  /* Padding-right leaves room for the always-visible native spinner (the
+   * UA allocates ~16px to it; reducing it below that clips the spinner to
+   * zero width even with `opacity: 1` on the pseudo-element). The
+   * spinner shares the input's chrome, so we don't paint our own chrome
+   * behind it. */
+  padding: 2px 18px 2px 6px;
+  font-size: 12px;
+  color: var(--dsw-alias-label-primary);
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  /* The editable area's outline is permanent — an outline shown only on
+   * focus reads as a dead slot until clicked; focus only adds the plated
+   * background on top of it. */
+  box-shadow: inset 0 0 0 1px var(--dsw-alias-border-l2);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Keep the native number-input spinner always visible — Chromium hides
+ * it by default until the input is hovered or focused, but the four
+ * simulated-cost buckets are equal peers in a row and users expect every
+ * one to expose its +/- affordance at all times. `opacity: 1` overrides
+ * the UA's hover-gated opacity rule; the explicit `height` keeps the
+ * buttons flush with the row instead of the UA's narrower default. */
+.bucketInput::-webkit-outer-spin-button,
+.bucketInput::-webkit-inner-spin-button {
+  opacity: 1;
+  height: 100%;
+  cursor: pointer;
+}
+
+.bucketInput:focus {
+  outline: none;
+  background: var(--dsw-alias-bg-layer-3);
+}
+
+/* Preset usage cases filling the buckets: one compact button per case,
+ * its hover title carrying the workload picture, pressed while the
+ * buckets' tokens exactly match it. */
+.scenarios {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.scenario {
+  padding: 4px 12px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-bg-layer-2);
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.scenario:hover {
+  background: var(--dsw-interactive-bg-hover);
+}
+
+.scenario[aria-pressed='true'] {
+  border-color: var(--dsw-alias-label-primary);
+}
+
+/* Scroll shell: a fixed height (not a cap), so the sticky header and the
+ * dialog's footprint stay put while search filters the rows beneath.
+ * Tall enough for browsing the full 166-model mirror without filling
+ * the viewport. */
+.tableWrap {
+  overflow: auto;
+  height: min(60vh, 520px);
+}
+
+.table {
+  width: 100%;
+  /* Six columns now (model + 4 rates + simulated cost); the floor grows
+   * so the rate figures keep their room. */
+  min-width: 560px;
+  /* Fixed layout: column widths come from the header row and never move
+   * with cell content, search, or the cost sort. */
+  table-layout: fixed;
+  border-collapse: collapse;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.table th,
+.table td {
+  padding: 4px 6px;
+  text-align: right;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+  white-space: nowrap;
+}
+
+.table th {
+  font-weight: 500;
+  color: var(--dsw-alias-label-secondary);
+  /* Sticky header: an opaque plate so scrolled rows pass under it. */
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--dsw-alias-bg-layer-2);
+}
+
+.table td {
+  color: var(--dsw-alias-label-primary);
+}
+
+/* The model column: left-aligned, a fixed share of the table so the five
+ * numeric columns divide the rest evenly. */
+th.modelHead,
+td.modelCell {
+  text-align: left;
+}
+
+th.modelHead {
+  width: 40%;
+}
+
+/* The simulated-cost header doubles as the sort trigger: transparent over
+ * the sticky th plate, underlined on hover, its direction glyph always
+ * present. */
+.sortHead {
+  padding: 0;
+  font: inherit;
+  font-weight: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.sortHead:hover {
+  text-decoration: underline;
+}
+
+.sortArrow {
+  font-size: 10px;
+}
+
+/* The idle glyph (family order, ⇅): dimmed so the active directions read
+ * louder while the affordance stays visible. */
+.sortArrowIdle {
+  opacity: 0.5;
+}
+
+/* A model row doubles as the drill-in trigger for its full price table:
+ * the hover plate says so. The fixed table layout caps the cell, so the
+ * name ellipsizes instead of pushing the rate columns. */
+.modelRow {
+  cursor: pointer;
+}
+
+.modelRow:hover > td {
+  background: var(--dsw-interactive-bg-hover);
+}
+
+.cellInner {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+}
+
+.modelName {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+/* The used-in-page tag: the unpriced tag's pill specs in a neutral palette
+ * — it marks relevance (the fold default followed this row), not a warning. */
+.usedTag {
+  flex: none;
+  padding: 0 6px;
+  font-size: 10px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-secondary);
+  background: var(--dsw-alias-bg-layer-3);
+  border-radius: 8px;
+}
+
+/* The expand arrow in front of models that carry special-rate rows: a bare
+ * glyph button (the row's hover plate is the affordance). Models without
+ * specials get an equally wide gap so names align in one column. */
+.expandArrow {
+  flex: none;
+  width: 16px;
+  padding: 0;
+  font-size: 10px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-secondary);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.expandArrow:hover {
+  color: var(--dsw-alias-label-primary);
+}
+
+.arrowGap {
+  flex: none;
+  width: 16px;
+}
+
+/* The special-rate rows under an expanded model: one grid line per
+ * condition, columns matching the main table's 40% / five equal shares so
+ * prices sit under their headers. */
+.expansionRow > td {
+  padding: 0 6px 4px;
+}
+
+.specialRows {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.specialRow {
+  display: grid;
+  grid-template-columns: 3.2fr 1fr 1fr 1fr 1fr 1fr;
+  gap: 4px;
+  /* The label starts where the model name does (arrow column + gap),
+   * left-aligned — a right-aligned long label read as a deep indent. */
+  padding: 1px 0 1px 28px;
+  font-size: 11px;
+  color: var(--dsw-alias-label-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.specialLabel {
+  overflow: hidden;
+  color: var(--dsw-alias-label-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+
+.specialRate {
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

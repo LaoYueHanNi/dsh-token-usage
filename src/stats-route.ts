@@ -11,13 +11,13 @@ import type { IncomingMessage } from 'node:http'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type { MigrationProgress } from './migrate.ts'
 import { consoleLogger, type LoggerLike } from './log.ts'
-import { readPricingTable, readUsdExchangeRate, resolveRate } from './pricing.ts'
+import { readPricingOverview, readPricingTable, readUsdExchangeRate, resolveRate } from './pricing.ts'
 import { attachCosts, buildSummary, filterRecordsBySessions, filterSummary, requestSeriesOf, summarizeRecords } from './stats.ts'
 import type { RateResolver } from './stats.ts'
 import { readCachedRecords } from './record-cache.ts'
 import { bucketSeries, pointsOfBuckets } from './trend-bucket.ts'
-import { decodeChildGroups, decodeSessionScope, DIR_GUARD_PATH, FULL_SYNC_PATH, MIGRATION_PATH, STATS_PATH, UNPRICED_KEY } from './wire.ts'
-import type { ChildGroup, ChildUsageSummary, CostedSummary, DirectoryGuardView, DisplayCurrency, FullSyncView, PricingTable, RequestPoint, StatsFields, StatsPayload } from './wire.ts'
+import { decodeChildGroups, decodeSessionScope, DIR_GUARD_PATH, FULL_SYNC_PATH, MIGRATION_PATH, PRICING_PATH, STATS_PATH, UNPRICED_KEY } from './wire.ts'
+import type { ChildGroup, ChildUsageSummary, CostedSummary, DirectoryGuardView, DisplayCurrency, FullSyncView, PricingOverviewPayload, PricingTable, RequestPoint, StatsFields, StatsPayload } from './wire.ts'
 import type { UsageRecord } from './usage-record.ts'
 
 /** The stats endpoint path, exported for tests and the client half. */
@@ -31,6 +31,9 @@ export { DIR_GUARD_PATH } from './wire.ts'
 
 /** The full-sync endpoint path, exported for the client half. */
 export { FULL_SYNC_PATH } from './wire.ts'
+
+/** The pricing-overview endpoint path, exported for the client half. */
+export { PRICING_PATH } from './wire.ts'
 
 /** A day query key must be exactly `YYYY-MM-DD`. */
 const DAY_KEY = /^\d{4}-\d{2}-\d{2}$/u
@@ -160,6 +163,62 @@ export function createDirectoryGuardRoute(judge: (proposed: string | undefined) 
       const proposed = raw === null || raw === '' ? undefined : raw
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
       res.end(JSON.stringify(judge(proposed)))
+    },
+  }
+}
+
+/** How the pricing-overview route resolves the display currency per
+ * request; a thunk so a live settings change (the region pick) lands without
+ * rebuilding the route — same contract as {@link StatsRouteOptions}. */
+export interface PricingRouteOptions {
+  currency?: () => DisplayCurrency
+  /** Diagnostic sink for data reads; defaults to console. */
+  logger?: LoggerLike
+}
+
+/**
+ * Build the pricing-overview route the settings page's overview dialog reads:
+ * the full cloud-mirror model list in its model-row shape (modelId + aliases
+ * + family + rules, never flattened into the alias-keyed table). The overview
+ * is deliberately filter-free — it serves every model the mirror carries, so
+ * it takes no query parameters and stays independent of the stats filters.
+ * @param dir - reads the directory currently in force (per request, so a
+ * settings-driven move starts answering from the new location at once).
+ * @param options - the currency thunk; defaults to CNY (the domestic default).
+ * @returns the exact GET route serving the overview JSON.
+ */
+export function createPricingRoute(dir: () => string, options: PricingRouteOptions = {}): WebRoute {
+  const logger = options.logger ?? consoleLogger
+  return {
+    kind: 'exact',
+    path: PRICING_PATH,
+    handler: async (req, res) => {
+      if (req.method !== 'GET') {
+        res.writeHead(405, { 'content-type': 'text/plain; charset=utf-8' })
+        res.end('method not allowed')
+        return
+      }
+      if (!isSameOriginFetch(req)) {
+        res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' })
+        res.end('forbidden')
+        return
+      }
+      try {
+        const dataDir = dir()
+        const [models, usdExchangeRate] = await Promise.all([
+          readPricingOverview(dataDir, logger),
+          readUsdExchangeRate(dataDir, logger),
+        ])
+        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+        res.end(JSON.stringify({
+          models,
+          currency: options.currency?.() ?? 'CNY',
+          usdExchangeRate,
+        } satisfies PricingOverviewPayload))
+      } catch (error) {
+        res.writeHead(500, { 'content-type': 'application/json; charset=utf-8' })
+        res.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }))
+      }
     },
   }
 }

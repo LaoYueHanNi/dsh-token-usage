@@ -8,7 +8,7 @@ Status: implemented
 
 - 合并语义复杂且有破坏性：手工条目**整模型覆盖**，云端该模型的 `timeRules`/`contextTiers`/`dailySlots` 全部丢弃、只剩 base 价——用户想改一个数字却悄悄关掉了峰谷与档位计费。
 - 双来源贯穿全部定价代码与文档：`readPricingTable` 的合并段、migrate 的自有文件模式、两组测试、docs/pricing.md 与双语 README 的专门章节。
-- [定价表总览提案](../proposed/2026-09-05-pricing-table-overview.md)还要再兼容它一处：后端返回「云端模型 ∪ 手工条目」、空态文案指路 `pricing.json`。
+- [定价表总览提案](2026-09-05-pricing-table-overview.md)还要再兼容它一处：后端返回「云端模型 ∪ 手工条目」、空态文案指路 `pricing.json`。
 - 模型价格缺失或错误的正确修法是向上游 feed 仓库提 PR（全部同源用户受益），而不是每个用户本地养一份私有价。
 
 ## Decision
@@ -19,7 +19,7 @@ Status: implemented
 2. **迁移不删用户文件**（`src/migrate.ts`）：`OWNED_PATTERNS` 保留 `/^pricing\.json$/`——遗留文件照常随数据目录搬迁，只是从此被忽略。`tests/migrate.spec.ts` 的迁移用例保持原状（迁文件而非读文件）。
 3. **测试清理**（`tests/pricing.spec.ts`、`tests/stats-route.spec.ts`）：删除 `coercePricingTable` describe 块与 `readPricingTable` 下手工路径用例；stats 路由的两条「手工定价表」用例改为云端镜像路径。
 4. **文档清理**（`docs/pricing.md`、双语 README）：删除「两个文件来源」表、`pricing.json` 扁平格式小节、双语 README「模型定价」节的手工文件部分；每处补一句升级说明——已维护 `pricing.json` 的用户升级后该文件被忽略、不被删除；定价修订请走上游 model-price-table。
-5. **联动修订**（`docs/decisions/proposed/2026-09-05-pricing-table-overview.md`）：该提案原依赖「手工覆盖机制已列入废弃计划」的措辞，本决策落地后事实已成立——把那句改为「本地 `pricing.json` 手工覆盖机制已废弃」，alternatives 一段同步改为「现已落地」，与本决策同一提交完成。
+5. **联动修订**（[定价表总览提案](2026-09-05-pricing-table-overview.md)，当时尚在 proposed）：该提案原依赖「手工覆盖机制已列入废弃计划」的措辞，本决策落地后事实已成立——把那句改为「本地 `pricing.json` 手工覆盖机制已废弃」，alternatives 一段同步改为「现已落地」，与本决策同一提交完成。
 
 ## Alternatives considered
 

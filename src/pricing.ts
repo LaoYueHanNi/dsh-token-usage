@@ -29,6 +29,7 @@ import type {
   DailySlot,
   ModelPricing,
   ModelRates,
+  PricingOverviewModel,
   PricingTable,
   RateKey,
   TimeRule,
@@ -139,6 +140,9 @@ interface CloudSlot {
 /** One raw model row of the cloud feed. */
 export interface CloudPricingModel extends CloudRates {
   modelId: string
+  /** Upstream family grouping (the feed's authoritative classification);
+   * absent when the feed row carries none or a non-string value. */
+  family?: string
   contextTiers?: CloudTier[]
   timeRules?: CloudTimeRule[]
   aliases?: string[]
@@ -251,6 +255,7 @@ export function coerceCloudPricing(value: unknown): CloudPricingData | null {
     models.push({
       ...rates,
       modelId: row.modelId,
+      ...(typeof row.family === 'string' && row.family !== '' ? { family: row.family } : {}),
       ...(Array.isArray(row.contextTiers)
         ? {
           contextTiers: (row.contextTiers as unknown[]).map(coerceTier)
@@ -539,6 +544,28 @@ export async function readPricingTable(dir: string, logger: LoggerLike = console
 export async function readUsdExchangeRate(dir: string, logger: LoggerLike = consoleLogger): Promise<number> {
   const feed = coerceCloudPricing(await readJsonFile(dir, PRICING_CCSA_FILE, logger))
   return feed?.usdExchangeRate ?? DEFAULT_USD_EXCHANGE_RATE
+}
+
+/**
+ * The cloud feed of one data directory in its model-row shape (not flattened
+ * through {@link cloudToTable}): one row per model carrying the modelId, the
+ * alias list, the upstream family, and the full rule set — what the pricing
+ * overview route serves so the page can show aliases as footnotes instead of
+ * one row per alias-key. Absent, malformed, or non-RMB mirrors read as an
+ * empty list, matching {@link readPricingTable}'s stay-alive semantics.
+ * @param dir - the plugin's data directory.
+ * @param logger - diagnostic sink (defaults to console).
+ * @returns the model rows (possibly empty).
+ */
+export async function readPricingOverview(dir: string, logger: LoggerLike = consoleLogger): Promise<PricingOverviewModel[]> {
+  const feed = coerceCloudPricing(await readJsonFile(dir, PRICING_CCSA_FILE, logger))
+  if (feed === null) return []
+  return feed.models.map(model => ({
+    modelId: model.modelId,
+    aliases: [...model.aliases ?? []],
+    ...(model.family !== undefined ? { family: model.family } : {}),
+    rules: cloudModelRates(model),
+  }))
 }
 
 /** The outcome of one successful cloud sync, for the command's reply. */
