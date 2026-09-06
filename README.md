@@ -29,21 +29,13 @@ Repo: <https://github.com/LaoYueHanNi/dsh-token-usage>
 
 ![Session Usage tab](docs/images/usage-tab.png)
 
-- **Cost figures & model pricing**: per-request cost is computed live from per-model rates (¥ per million tokens); unpriced models warn and count as ¥0. Every priced model's name carries a **rates button** opening its full price table. Rates sync from the cloud feed on every startup; `pricing.json` holds manual overrides — see [Model pricing](#model-pricing).
+- **Cost figures & model pricing**: per-request cost is computed live from per-model rates (¥ per million tokens); unpriced models warn and count as ¥0. Every priced model's name carries a **rates button** opening its full price table. Rates sync from the cloud feed on every startup — see [Model pricing](#model-pricing).
 - **Provider quota**: an input-bar button (left of the model chip) shows the selected provider's remaining quota. See [Provider quota](#provider-quota).
 - **History backfill**: the first startup syncs requests that happened before installation (idempotent); unreadable session logs are skipped and counted, never fatal to the sync.
 
 ## Model pricing
 
-Costs are billed per record at its own timestamp, and a rates update re-prices the whole history instantly. Rates come from two files merged on read — a cloud mirror auto-synced on every startup, and a hand-edited `pricing.json` whose entries always win (per model, wholesale):
-
-```json
-{
-  "deepseek-chat": { "inputPerMillion": 2, "outputPerMillion": 8, "cacheReadPerMillion": 0.5 }
-}
-```
-
-Broken files degrade the affected models to unpriced without breaking the stats page. Default location: `~/.dsh/token-usage/`. Billing rule chain, cloud feed format, and self-hosted mirror URLs: [docs/pricing.md](./docs/pricing.md).
+Costs are billed per record at its own timestamp, and a rates update re-prices the whole history instantly. The single source is a cloud mirror auto-synced on every startup — pricing corrections belong upstream in the [model-price-table](https://github.com/LaoYueHanNi/model-price-table) feed, so every user benefits at once. A hand-edited `pricing.json` is no longer read; if you maintain one it is silently ignored after upgrading (the file is left on disk). Broken mirrors degrade the affected models to unpriced without breaking the stats page. Default location: `~/.dsh/token-usage/`. Billing rule chain, cloud feed format, and self-hosted mirror URLs: [docs/pricing.md](./docs/pricing.md).
 
 ## Configuration
 

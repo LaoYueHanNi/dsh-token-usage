@@ -1,12 +1,14 @@
 /**
  * Pricing vocabulary and store of the token-usage plugin: the per-model
  * price rules (¥ per million tokens) backing the cost figures of the stats
- * page. Two sources merge on read — the cloud feed mirrored on every dsh
- * startup into `<data dir>/pricing.ccsa.json` (the same model-price-table
- * source cc-switch-analyzer pulls), and the hand-edited `<data
- * dir>/pricing.json`, whose entries always win and replace a model's cloud
- * rules wholesale. Absent files mean no pricing; a malformed file logs once
- * and reads as empty, so a broken table never blocks the stats route.
+ * page. The single source is the cloud feed mirrored on every dsh startup
+ * into `<data dir>/pricing.ccsa.json` (the same model-price-table source
+ * cc-switch-analyzer pulls); an absent or malformed mirror logs once and
+ * reads as empty, so a broken table never blocks the stats route. Pricing
+ * data used to layer a hand-edited `pricing.json` on top, but that path was
+ * removed (see docs/decisions/implemented/2026-09-05-abolish-manual-pricing-json.md):
+ * no UI entry point, wholesale-replace semantics silently drop time rules
+ * and tiers, and corrections belong upstream in the model-price-table feed.
  *
  * Every record is priced individually through the analyzer's rule chain —
  * time-rule container first, then context tier, then peak slot (a slot may be
@@ -32,9 +34,6 @@ import type {
   TimeRule,
   UsageTotals,
 } from './wire.ts'
-
-/** The hand-maintained pricing file inside the data directory. */
-export const PRICING_FILE = 'pricing.json'
 
 /** The cloud-feed mirror written on every startup. */
 export const PRICING_CCSA_FILE = 'pricing.ccsa.json'
@@ -485,7 +484,7 @@ export function costOf(totals: UsageTotals, prices: ModelPricing): number {
 }
 
 // ---------------------------------------------------------------------------
-// File store: cloud mirror + manual overrides
+// File store: cloud mirror
 // ---------------------------------------------------------------------------
 
 /** Read one JSON file of a data directory, or null when absent/unreadable. */
@@ -506,35 +505,6 @@ async function readJsonFile(dir: string, name: string, logger: LoggerLike = cons
   }
 }
 
-function isModelPricing(value: unknown): value is ModelPricing {
-  if (typeof value !== 'object' || value === null) return false
-  const pricing = value as Record<string, unknown>
-  return isRate(pricing.inputPerMillion) && isRate(pricing.outputPerMillion)
-    && (pricing.cacheReadPerMillion === undefined || isRate(pricing.cacheReadPerMillion))
-    && (pricing.cacheWritePerMillion === undefined || isRate(pricing.cacheWritePerMillion))
-}
-
-/**
- * Coerce a hand-edited file body into flat table entries (base rates only):
- * non-object values read as empty, invalid entries drop.
- * @param value - the parsed `pricing.json` content.
- * @returns model id → base rates.
- */
-export function coercePricingTable(value: unknown): Record<string, ModelPricing> {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return {}
-  const table: Record<string, ModelPricing> = {}
-  for (const [model, entry] of Object.entries(value)) {
-    if (model === '' || !isModelPricing(entry)) continue
-    table[model] = entry
-  }
-  return table
-}
-
-/** The hand-maintained entries of one data directory ({} when absent/broken). */
-async function readManualPricing(dir: string, logger: LoggerLike = consoleLogger): Promise<Record<string, ModelPricing>> {
-  return coercePricingTable(await readJsonFile(dir, PRICING_FILE, logger))
-}
-
 /**
  * The synced cloud table of one data directory: the coerced feed mirror
  * flattened through {@link cloudToTable} ({} when absent, broken, or non-RMB).
@@ -545,21 +515,15 @@ async function readSyncedPricing(dir: string, logger: LoggerLike = consoleLogger
 }
 
 /**
- * Load the merged pricing table of one data directory: the synced cloud
- * mirror as the base, the hand-edited `pricing.json` layered on top — a
- * manual entry wins for its whole model (base rates, no cloud rules), so
- * manual tweaks survive re-syncs. A missing or malformed file contributes
- * nothing, keeping the stats route alive while the user fixes their table.
+ * Load the pricing table of one data directory: the synced cloud mirror
+ * flattened through {@link cloudToTable}. Absent or malformed mirrors read
+ * as empty so the stats route stays alive while the user retries the sync.
  * @param dir - the plugin's data directory.
  * @param logger - diagnostic sink (defaults to console).
- * @returns the validated, merged table (possibly empty).
+ * @returns the validated table (possibly empty).
  */
 export async function readPricingTable(dir: string, logger: LoggerLike = consoleLogger): Promise<PricingTable> {
-  const merged: PricingTable = { ...await readSyncedPricing(dir, logger) }
-  for (const [model, base] of Object.entries(await readManualPricing(dir, logger))) {
-    merged[model] = { base, contextTiers: [], dailySlots: [], timeRules: [] }
-  }
-  return merged
+  return readSyncedPricing(dir, logger)
 }
 
 /**
@@ -567,7 +531,7 @@ export async function readPricingTable(dir: string, logger: LoggerLike = console
  * the cloud feed envelope's `usdExchangeRate` when it carries a usable one,
  * else {@link DEFAULT_USD_EXCHANGE_RATE}. Absent, malformed, or non-RMB
  * mirrors fall back the same way — display conversion never blocks on a
- * broken feed. Hand-edited `pricing.json` carries no rate and never wins.
+ * broken feed.
  * @param dir - the plugin's data directory.
  * @param logger - diagnostic sink (defaults to console).
  * @returns the positive rate the stats page converts display costs with.

@@ -232,11 +232,12 @@ describe('createStatsRoute', () => {
     expect(body.totalCost).toBeCloseTo(0.000066, 12)
   })
 
-  it('computes costs from the user-maintained pricing table', async () => {
+  it('computes costs from the cloud pricing mirror', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'token-usage-route-'))
     await writeFile(join(dir, 'usage-2026-01-15.jsonl'), `${JSON.stringify(fixtureRecord(100))}\n`)
-    await writeFile(join(dir, 'pricing.json'), JSON.stringify({
-      'deepseek-chat': { inputPerMillion: 2, outputPerMillion: 8, cacheReadPerMillion: 0.5 },
+    await writeFile(join(dir, 'pricing.ccsa.json'), JSON.stringify({
+      version: 4, updatedAt: 1, currency: 'RMB',
+      models: [{ modelId: 'deepseek-chat', inputCostPerMillion: 2, outputCostPerMillion: 8, cacheReadCostPerMillion: 0.5 }],
     }))
     const route = createStatsRoute(() => dir)
     const { res, captured } = fakeResponse()
@@ -294,8 +295,9 @@ describe('createStatsRoute', () => {
   it('recomputes costs after filtering, dropping other models from the totals', async () => {
     const dir = await filteredDataDir()
     // Only chat is priced; reasoner stays unpriced.
-    await writeFile(join(dir, 'pricing.json'), JSON.stringify({
-      'deepseek-chat': { inputPerMillion: 2, outputPerMillion: 8, cacheReadPerMillion: 0.5 },
+    await writeFile(join(dir, 'pricing.ccsa.json'), JSON.stringify({
+      version: 4, updatedAt: 1, currency: 'RMB',
+      models: [{ modelId: 'deepseek-chat', inputCostPerMillion: 2, outputCostPerMillion: 8, cacheReadCostPerMillion: 0.5 }],
     }))
     const route = createStatsRoute(() => dir)
     const { res, captured } = fakeResponse()

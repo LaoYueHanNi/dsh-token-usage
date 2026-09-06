@@ -293,8 +293,7 @@ export interface TimeRule {
 /**
  * The full pricing of one model: the base rates plus the rule chain the
  * analyzer resolves per request — time-rule container first, then context
- * tier, then peak slot. A hand-edited entry contributes only `base` (manual
- * overrides replace the model's cloud rules wholesale).
+ * tier, then peak slot.
  */
 export interface ModelRates {
   base: ModelPricing
@@ -334,9 +333,8 @@ export function isUnpricedKey(key: RateKey): boolean {
 }
 
 /**
- * The merged pricing table: model id → full rule set, loaded from
- * `<data dir>/pricing.ccsa.json` (cloud mirror, full rules) layered under
- * `<data dir>/pricing.json` (hand-edited flat overrides; see pricing.ts).
+ * The pricing table: model id → full rule set, loaded from
+ * `<data dir>/pricing.ccsa.json` (the cloud mirror; see pricing.ts).
  * Models absent from the table are unpriced: their cost counts as 0 and they
  * surface in {@link UsageSummary.unpricedModels}.
  */

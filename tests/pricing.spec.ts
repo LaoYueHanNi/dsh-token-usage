@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   cloudToTable,
   coerceCloudPricing,
-  coercePricingTable,
   costOf,
   DEFAULT_PRICING_URL,
   DEFAULT_PRICING_URL_DOMESTIC,
@@ -33,7 +32,7 @@ function totals(overrides: Partial<UsageTotals> = {}): UsageTotals {
   }
 }
 
-/** A flat rule set (base rates only), the shape a manual entry produces. */
+/** A flat rule set (base rates only), the shape a cloud model produces. */
 function flat(input: number, output: number, cacheRead?: number, cacheWrite?: number): ModelRates {
   return {
     base: {
@@ -47,36 +46,6 @@ function flat(input: number, output: number, cacheRead?: number, cacheWrite?: nu
     timeRules: [],
   }
 }
-
-describe('coercePricingTable', () => {
-  it('accepts a flat model → rates map', () => {
-    expect(coercePricingTable({
-      'deepseek-chat': { inputPerMillion: 2, outputPerMillion: 8, cacheReadPerMillion: 0.5 },
-      'deepseek-reasoner': { inputPerMillion: 4, outputPerMillion: 16 },
-    })).toEqual({
-      'deepseek-chat': { inputPerMillion: 2, outputPerMillion: 8, cacheReadPerMillion: 0.5 },
-      'deepseek-reasoner': { inputPerMillion: 4, outputPerMillion: 16 },
-    })
-  })
-
-  it('drops invalid entries and keeps valid ones', () => {
-    expect(coercePricingTable({
-      ok: { inputPerMillion: 1, outputPerMillion: 2 },
-      'negative': { inputPerMillion: -1, outputPerMillion: 2 },
-      'missing-output': { inputPerMillion: 1 },
-      'string-rates': { inputPerMillion: '2', outputPerMillion: 8 },
-      'null-cache': { inputPerMillion: 1, outputPerMillion: 2, cacheReadPerMillion: null },
-      '': { inputPerMillion: 1, outputPerMillion: 2 },
-    })).toEqual({ ok: { inputPerMillion: 1, outputPerMillion: 2 } })
-  })
-
-  it('reads non-object values as an empty table', () => {
-    expect(coercePricingTable(null)).toEqual({})
-    expect(coercePricingTable(undefined)).toEqual({})
-    expect(coercePricingTable([{ inputPerMillion: 1, outputPerMillion: 2 }])).toEqual({})
-    expect(coercePricingTable('nope')).toEqual({})
-  })
-})
 
 describe('costOf', () => {
   it('bills each bucket at its own per-million rate', () => {
@@ -265,57 +234,36 @@ describe('dailySlots.daysOfWeek (weekday-only peak)', () => {
 })
 
 describe('readPricingTable', () => {
-  it('yields an empty table when pricing.json is absent', async () => {
+  it('yields an empty table when the cloud mirror is absent', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'token-usage-pricing-'))
     expect(await readPricingTable(dir)).toEqual({})
   })
 
-  it('reads the user table as flat base rates', async () => {
+  it('ignores a hand-edited pricing.json even when it carries valid entries', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'token-usage-pricing-'))
     await writeFile(join(dir, 'pricing.json'), JSON.stringify({
-      'deepseek-chat': { inputPerMillion: 2, outputPerMillion: 8, cacheReadPerMillion: 0.5 },
-      junk: { inputPerMillion: 'x', outputPerMillion: 1 },
+      'deepseek-chat': { inputPerMillion: 1, outputPerMillion: 4 },
     }))
-    expect(await readPricingTable(dir)).toEqual({
-      'deepseek-chat': flat(2, 8, 0.5),
-    })
-  })
-
-  it('treats malformed JSON as an empty table', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'token-usage-pricing-'))
-    await writeFile(join(dir, 'pricing.json'), '{not json')
+    // The manual file is no longer read: the only source is the cloud mirror,
+    // absent here, so the table is empty rather than picking up the override.
     expect(await readPricingTable(dir)).toEqual({})
   })
 
-  it('layers pricing.json over the synced cloud mirror, replacing rules wholesale', async () => {
+  it('ignores a malformed pricing.json without affecting the cloud mirror', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'token-usage-pricing-'))
     await writeFile(join(dir, 'pricing.ccsa.json'), JSON.stringify({
       version: 4,
-      updatedAt: 1_780_000_000,
+      updatedAt: 1,
       currency: 'RMB',
-      models: [
-        {
-          modelId: 'deepseek-chat',
-          inputCostPerMillion: 2, outputCostPerMillion: 8, cacheReadCostPerMillion: 0.5,
-          dailySlots: [{ windows: [{ startMinute: 540, endMinute: 720 }], inputCostPerMillion: 4, outputCostPerMillion: 16 }],
-        },
-        { modelId: 'glm-5.2', inputCostPerMillion: 4, outputCostPerMillion: 16 },
-      ],
+      models: [{ modelId: 'deepseek-chat', inputCostPerMillion: 2, outputCostPerMillion: 8 }],
     }))
-    // The manual entry replaces chat's rules entirely; glm keeps its mirror entry.
-    await writeFile(join(dir, 'pricing.json'), JSON.stringify({
-      'deepseek-chat': { inputPerMillion: 1, outputPerMillion: 4 },
-      'kimi-k2': { inputPerMillion: 3, outputPerMillion: 12 },
-    }))
-    const merged = await readPricingTable(dir)
-    expect(merged['deepseek-chat']).toEqual(flat(1, 4))
-    expect(hasRateRules(merged['deepseek-chat']!)).toBe(false)
-    expect(merged['glm-5.2']).toEqual(flat(4, 16))
-    expect(merged['kimi-k2']).toEqual(flat(3, 12))
-    expect(Object.keys(merged)).toHaveLength(3)
+    await writeFile(join(dir, 'pricing.json'), '{not json')
+    expect(await readPricingTable(dir)).toEqual({
+      'deepseek-chat': flat(2, 8),
+    })
   })
 
-  it('keeps the cloud rule chain (tiers, slots, time rules) through the merge', async () => {
+  it('flattens the cloud mirror and keeps the rule chain (tiers, slots, time rules)', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'token-usage-pricing-'))
     await writeFile(join(dir, 'pricing.ccsa.json'), JSON.stringify({
       version: 57,
@@ -329,8 +277,8 @@ describe('readPricingTable', () => {
         timeRules: [{ label: '原价', startTime: 0, endTime: 1786895999, inputCostPerMillion: 1, outputCostPerMillion: 2, cacheReadPerMillion: 0.02, cacheReadCostPerMillion: 0.02 }],
       }],
     }))
-    const merged = await readPricingTable(dir)
-    const rules = merged['deepseek-v4-flash']!
+    const table = await readPricingTable(dir)
+    const rules = table['deepseek-v4-flash']!
     expect(hasRateRules(rules)).toBe(true)
     expect(rules.timeRules[0]!.rates.inputPerMillion).toBe(1)
     expect(rules.contextTiers[0]!.threshold).toBe(512000)

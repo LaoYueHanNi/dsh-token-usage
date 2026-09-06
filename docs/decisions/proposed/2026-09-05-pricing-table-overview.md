@@ -8,7 +8,7 @@ Status: proposed
 
 ## Proposal
 
-**后端：新增 `/token-usage/pricing` exact 路由**（`stats-route.ts` 同模式：same-origin 校验、`no-store`、405/403 分支）。返回**模型行**形状而非 flat `PricingTable`：`models: [{ modelId, aliases, rules: ModelRates }]`——云端 feed 经 `coerceCloudPricing` 保留 models 数组形状直出。总览只呈现云端镜像：本地 `pricing.json` 手工覆盖机制已列入废弃计划，本提案不读它、不呈现它（连带地无来源区分、无手工徽标）。不用 flat 表的原因：`cloudToTable` 把别名展开成独立键，总览里同一模型会重复成多行同价行；保留形状让前端每模型一行、别名作小字附注、搜索可命中别名。无元信息（version/updatedAt/来源/同步时间——拍板不要）。`pricing.ts` 补一个保留形状的 cloud feed 读取函数（`readPricingTable` 的合并语义不受影响）。
+**后端：新增 `/token-usage/pricing` exact 路由**（`stats-route.ts` 同模式：same-origin 校验、`no-store`、405/403 分支）。返回**模型行**形状而非 flat `PricingTable`：`models: [{ modelId, aliases, rules: ModelRates }]`——云端 feed 经 `coerceCloudPricing` 保留 models 数组形状直出。总览只呈现云端镜像：本地 `pricing.json` 手工覆盖机制已废弃（见 [DR 2026-09-05](../implemented/2026-09-05-abolish-manual-pricing-json.md)），本提案不读它、不呈现它（连带地无来源区分、无手工徽标）。不用 flat 表的原因：`cloudToTable` 把别名展开成独立键，总览里同一模型会重复成多行同价行；保留形状让前端每模型一行、别名作小字附注、搜索可命中别名。无元信息（version/updatedAt/来源/同步时间——拍板不要）。`pricing.ts` 补一个保留形状的 cloud feed 读取函数（`readPricingTable` 的合并语义不受影响）。
 
 **前端：入口**。位置在筛选行（FilterBar）行尾、模型菜单之后：行内三个控件是"选择器"（决定下方数据看什么），行尾入口是"动作"（打开与筛选无关的视图），不进筛选语法。形态是**蓝色文字标签**：`--dsw-alias-link-primary`（fallback `label-primary`）、无边框无底、28px 点击区（padding 4px 8px + 13px/20px）、hover 显 `interactive-bg-hover` 圆角灰底——链接 token 沿用 UsageView 子代理"下钻链接"的先例（`UsageView.module.css` `.childLink`），hover 灰底沿用 `dialogClose` 手法。文案用新 locale key（中文「定价表」/ 英文 "Pricing"），不复用单模型的 `pricing.viewShort`「定价」。
 
@@ -30,7 +30,7 @@ Status: proposed
 - **搜索激活时仍按「已使用 ∩ 命中」决定展开**——严格继承联动语义，但搜索未使用家族时命中行全在收起组里、结果被藏起来。输了：搜索的第一义务是让结果可见；联动只该管默认态，不该收窄搜索。
 - **默认全部展开（无联动、无折叠）**——实现最简，但 166 行全铺与「聚焦当前在用」的使用直觉相悖，且折叠 + 联动的成本很低（一个 Set + 三级优先级）。输了：维护者要折叠与联动，全部展开只留作清空搜索后的回退基线之一。
 - **前端映射表推断家族**——曾按 modelId/别名关键词 + 首段前缀兜底推断了 14 家族；后确认上游 feed 每模型行自带 `family` 字段（16 家族全量覆盖）。输了：上游已有权威分类，前端重复发明一份只会随上游漂移而失真。
-- **手工覆盖徽标 / 手工条目呈现**——总览原可 ∪ 手工 `pricing.json` 条目并区分来源；维护者已决定废弃本地覆盖机制，总览只处理云端计价，来源区分无从谈起。输了：机制本身退场，呈现问题随之消失。
+- **手工覆盖徽标 / 手工条目呈现**——总览原可 ∪ 手工 `pricing.json` 条目并区分来源；维护者已决定废弃本地覆盖机制（现已落地），总览只处理云端计价，来源区分无从谈起。输了：机制本身退场，呈现问题随之消失。
 - **总览固定人民币**——与页面当前货币展示不一致。输了：跟随 `currencyViewOf` 几乎零成本，一致性更好（维护者选定跟随）。
 - **顺带给 whole stats 响应瘦身**——69KB 全表随每次统计请求确属冗余，但本提案目标是定价表浏览；瘦身改变用量响应契约，属独立优化另行决策。输了：非本提案目标，保持现状风险最低。
 

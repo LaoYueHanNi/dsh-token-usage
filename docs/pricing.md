@@ -15,14 +15,13 @@ README 的深度延伸:计费规则链、价格文件格式、fork 维护者的�
 - 档位匹配以上下文 token 量近似:本请求 `input + cacheRead + cacheWrite`。
 - 定价表更新价格后,全部历史按新价即时重算,无需重建数据。
 
-## 价格来源:两个文件,读取时合并
+## 价格来源:云端镜像
 
 | 文件 | 来源 | 说明 |
 |---|---|---|
 | `pricing.ccsa.json` | 启动自动拉取 | 云端 model-price-table(cc-switch-analyzer 同源)的本地镜像,每次重启 dsh 自动刷新,失败时沿用旧镜像 |
-| `pricing.json` | 手工编辑 | 覆盖同步价或补充缺失模型,手动微调不会被同步冲掉 |
 
-`pricing.json` 的条目永远优先,**整模型覆盖**(该模型不再使用云端规则,可借此禁用其云端定价)。文件损坏或条目非法时对应模型按未定价处理,不影响统计页;保存后刷新页面即可生效。默认数据目录:`~/.dsh/token-usage/`(配置了 `path` 时以该目录为准)。
+只有这一份来源:启动自动同步的云端镜像。文件损坏或非 RMB 时按未定价处理,不影响统计页;保存到磁盘上的旧版 `pricing.json` 升级后会被忽略(只是不再被读取,文件不被主动删除)。默认数据目录:`~/.dsh/token-usage/`(配置了 `path` 时以该目录为准)。
 
 ### 云端 feed 格式
 
@@ -38,16 +37,6 @@ README 的深度延伸:计费规则链、价格文件格式、fork 维护者的�
     { "modelId": "deepseek-chat", "inputCostPerMillion": 2, "outputCostPerMillion": 8,
       "cacheReadCostPerMillion": 0.5, "cacheCreationCostPerMillion": 1, "aliases": ["deepseek-v3"] }
   ]
-}
-```
-
-### pricing.json 扁平格式
-
-键为模型 id、与记录中的 `model` 完全一致;`inputPerMillion`、`outputPerMillion` 必填,`cacheReadPerMillion` / `cacheWritePerMillion` 可选、缺省按输入价计费:
-
-```json
-{
-  "deepseek-chat": { "inputPerMillion": 2, "outputPerMillion": 8, "cacheReadPerMillion": 0.5 }
 }
 ```
 
@@ -77,3 +66,4 @@ README 的深度延伸:计费规则链、价格文件格式、fork 维护者的�
 
 - [峰谷 daysOfWeek 语义](./decisions/implemented/2026-08-29-daily-slots-days-of-week.md)
 - [上下文压缩请求计费](./decisions/implemented/2026-09-02-compaction-billing.md)
+- [废除手工 pricing.json 定价文件](./decisions/implemented/2026-09-05-abolish-manual-pricing-json.md)
