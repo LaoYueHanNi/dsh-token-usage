@@ -807,3 +807,63 @@ describe('plugin webServer wiring', () => {
     expect(JSON.parse(body).recent[0]).toMatchObject({ requestId: 'm1', model: 'deepseek-chat' })
   })
 })
+
+describe('createStatsRoute session table', () => {
+  it('serves folded, cost-sorted session rows with metadata attached', async () => {
+    const dir = await sessionDataDir()
+    await writeFile(join(dir, 'sessions.json'), JSON.stringify({
+      alpha: { title: 'Alpha root', cwd: '/work/app' },
+      child: { title: 'Child task', cwd: '/work/app', parentSession: 'alpha' },
+    }))
+    const route = createStatsRoute(() => dir)
+    const { res, captured } = fakeResponse()
+    await route.handler(fakeRequest(), res)
+    expect(captured.status).toBe(200)
+    const body = JSON.parse(captured.body) as {
+      sessionRows: Array<{ sessionId: string; title?: string; cwd?: string; childCount?: number; totals: { requests: number } }>
+      bySession?: unknown
+    }
+    // Default: alpha absorbs child, ranks first by cost.
+    expect(body.sessionRows).toHaveLength(1)
+    const row = body.sessionRows[0]!
+    expect(row.sessionId).toBe('alpha')
+    expect(row.title).toBe('Alpha root')
+    expect(row.cwd).toBe('/work/app')
+    expect(row.childCount).toBe(1)
+    expect(row.totals.requests).toBe(3)
+    // The granular cells stay behind the route.
+    expect(body.bySession).toBeUndefined()
+  })
+
+  it('ignores a stale sessionScope query parameter (the fold is unconditional)', async () => {
+    const dir = await sessionDataDir()
+    await writeFile(join(dir, 'sessions.json'), JSON.stringify({
+      alpha: { title: 'Alpha root', cwd: '/work/app' },
+      child: { title: 'Child task', cwd: '/work/app', parentSession: 'alpha' },
+    }))
+    const route = createStatsRoute(() => dir)
+    const { res, captured } = fakeResponse()
+    await route.handler(fakeRequest({ url: `${STATS_PATH}?sessionScope=flat` }), res)
+    const body = JSON.parse(captured.body) as { sessionRows: Array<{ sessionId: string; childCount?: number }> }
+    // The fold no longer takes a query dimension: rows always fold over
+    // subagent subtrees, so the stale parameter changes nothing.
+    expect(body.sessionRows).toHaveLength(1)
+    expect(body.sessionRows[0]!.sessionId).toBe('alpha')
+    expect(body.sessionRows[0]!.childCount).toBe(1)
+  })
+
+  it('falls back to short identities when the index is missing', async () => {
+    const dir = await sessionDataDir()
+    const route = createStatsRoute(() => dir)
+    const { res, captured } = fakeResponse()
+    await route.handler(fakeRequest({ url: `${STATS_PATH}?sessionScope=flat` }), res)
+    expect(captured.status).toBe(200)
+    const body = JSON.parse(captured.body) as { sessionRows: Array<{ sessionId: string; title?: string; cwd?: string }> }
+    // No sessions.json: rows still reconcile, identity fields simply omit.
+    expect(body.sessionRows).toHaveLength(2)
+    for (const row of body.sessionRows) {
+      expect(row.title).toBeUndefined()
+      expect(row.cwd).toBeUndefined()
+    }
+  })
+})

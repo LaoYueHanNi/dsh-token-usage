@@ -382,6 +382,57 @@ export interface UsageRateRow {
 }
 
 /**
+ * One per-session × per-day × per-model × per-rate aggregation row: the
+ * session dimension the settings page's cross-session table folds from.
+ * Every granule pulls its weight — a session usually spans days (the day
+ * key keeps a date-filtered row to the window's share), the model key keeps
+ * a model-filtered row honest, the rate identity keeps cost re-pricing
+ * free, and `lastTime` sorts the table by recent activity. Failure rows
+ * (`model === ''`) fold in like every other record: the session dimension
+ * keeps the same totals semantics as rateRows, so request counts reconcile.
+ */
+export interface UsageSessionRow {
+  sessionId: string
+  day: string
+  model: string
+  rate: RateKey
+  /** Newest record time folded into this cell (max over the fold); the
+   * session table's "last active" column. */
+  lastTime: number
+  totals: UsageTotals
+}
+
+/**
+ * One final row of the settings page's session table: the server-side fold
+ * of {@link UsageSessionRow} cells over one top-level session plus its
+ * whole subtree, sorted by cost and truncated top-N before it crosses the
+ * wire. Subagents never surface as rows of their own — the row's
+ * `childCount` badge is their only visibility here. Identity fields ride
+ * in the row — the server folds, sorts, and truncates, so the client never
+ * reassembles titles or directories.
+ */
+export interface SessionUsageRow {
+  sessionId: string
+  /** Log-backed latest-wins title; omitted when no `session/title` event
+   * ever landed (the client falls back to a short session id + times). */
+  title?: string
+  /** The session header's working directory, verbatim; omitted when the
+   * header carried none. The client derives the tail segment and grouping. */
+  cwd?: string
+  /** How many descendant sessions folded into this row (the subagent
+   * badge); omitted when the subtree holds none. */
+  childCount?: number
+  totals: UsageTotals
+  /** Billed cost (¥) over the row's cells under the current table. */
+  cost: number
+  /** Start of the local day of the row's earliest cell — the fallback
+   * identity's "from" bound (day granularity; titles cover the rest). */
+  firstTime: number
+  /** Newest record time in the row (max over every folded cell). */
+  lastTime: number
+}
+
+/**
  * The token-only aggregation shape: what the aggregation functions produce
  * and the rollup persists. No currency — cost is an additive layer computed
  * from the pricing table when the route serves the summary (attachCosts),
@@ -401,12 +452,22 @@ export interface TokenSummary {
    * lets the route re-aggregate any day range × model filter without
    * rereading files, and re-price history under the current table. */
   rateRows: UsageRateRow[]
+  /** Per-session × per-day × per-model × per-rate rows, session then day
+   * then model then rate ascending; the settings page's session table folds
+   * from these (see {@link UsageSessionRow}). */
+  bySession: UsageSessionRow[]
   /** The most recent records, descending by time. */
   recent: UsageRecord[]
 }
 
 /** A per-model row carrying its billed cost (¥); 0 when the model is unpriced. */
 export type CostedModelRow = UsageModelRow & { cost: number }
+
+/** A per-session aggregation cell carrying its billed cost (¥); 0 when the
+ * model is unpriced — priced from the same rate identity the per-model cost
+ * folds from, so the session table's cost column reconciles with the
+ * summary card for free. */
+export type CostedSessionCell = UsageSessionRow & { cost: number }
 
 /** The currency the stats page renders cost figures in. The amounts on the
  * wire stay RMB — this only names the display convention. */
@@ -438,31 +499,44 @@ export interface CostedSummary extends TokenSummary {
   pricing: PricingTable
   /** Per-model rows with their billed cost attached. */
   byModel: CostedModelRow[]
+  /** Per-session cells with their billed cost attached (see
+   * {@link CostedSessionCell}); the route folds these into
+   * {@link SessionUsageRow}s for the session table. */
+  bySession: CostedSessionCell[]
 }
 
 /** The full stats payload served at {@link STATS_PATH}. A discriminated
  * union over the two scope modes the route serves:
  * - `'whole'`: the settings page's whole-log read. The `requestSeries`
  *   field is absent (the page plots hours/days), so its `TrendChart`
- *   falls back to the `byDay` / `byHour` rows.
+ *   falls back to the `byDay` / `byHour` rows. The session table reads
+ *   `sessionRows` — the server-side folded, sorted, truncated final
+ *   rows (always folded over subagent subtrees); the granular
+ *   `bySession` cells stay behind the route (sending them would only
+ *   duplicate the fold on the wire).
  * - `'session'`: the conversation view tab's session-scoped read. The
  *   `sessionIds` field lists every requested id (the parent + its
  *   subagent children when the scope is "tree"), and `requestSeries`
  *   is the per-request series the chart plots at request granularity.
  *
- * Both branches share every {@link CostedSummary} field plus the
+ * Both branches share every {@link CostedSummary} field except the
+ * granular `bySession` (stripped from the wire) plus the
  * display-currency metadata, so a consumer can read `total` /
  * `totalCost` / `pricing` without narrowing first.
  */
-export type StatsPayload = (CostedSummary & {
+type CostedSummaryWire = Omit<CostedSummary, 'bySession'>
+export type StatsPayload = (CostedSummaryWire & {
   scope: 'whole'
+  /** The session table's final rows: folded over subagent subtrees,
+   * cost-sorted, top-N truncated, metadata attached. */
+  sessionRows: readonly SessionUsageRow[]
   /** The display currency the page converts cost figures into. Amounts on
    * the wire (totalCost, byModel[].cost, pricing rates) remain RMB. */
   currency: DisplayCurrency
   /** Effective RMB-per-USD rate (feed value, else the built-in default);
    * the divisor when `currency` is USD. */
   usdExchangeRate: number
-}) | (CostedSummary & {
+}) | (CostedSummaryWire & {
   scope: 'session'
   /** The session ids aggregated to produce this payload, in URL order. */
   sessionIds: readonly string[]
@@ -484,9 +558,12 @@ export type StatsPayload = (CostedSummary & {
  * either branch without narrowing first. Uses a base cost layer plus the
  * display metadata; for new code, narrow on `StatsPayload` instead.
  */
-export interface UsageSummary extends CostedSummary {
+export interface UsageSummary extends Omit<CostedSummary, 'bySession'> {
   currency: DisplayCurrency
   usdExchangeRate: number
+  /** Whole-scope payloads only: the settings page's session table rows
+   * (see {@link SessionUsageRow}); absent on session-scoped reads. */
+  sessionRows?: readonly SessionUsageRow[]
   requestSeries?: readonly RequestPoint[]
   children?: Readonly<Record<string, ChildUsageSummary>>
   sessionIds?: readonly string[]

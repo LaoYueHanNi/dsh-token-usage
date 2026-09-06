@@ -218,7 +218,8 @@ describe('TokenUsageSection', () => {
     expect(screen.getAllByText('写').length).toBeGreaterThan(0)
     expect(screen.getByText('2')).toBeTruthy()
     // Per-model table: one row with the model's own totals (200 total, 28.6% hit rate).
-    expect(screen.getByText('按模型')).toBeTruthy()
+    // The dimension switch is the block's only "按模型" label (no separate heading).
+    expect(screen.getAllByText('按模型').length).toBe(1)
     const table = screen.getByRole('table', { name: '按模型' })
     expect(within(table).getByText('deepseek-reasoner')).toBeTruthy()
     expect(within(table).getByText('200')).toBeTruthy()

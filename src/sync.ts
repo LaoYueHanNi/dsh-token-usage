@@ -20,7 +20,7 @@ import type { SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-compaction/types'
 // Type-only: pulls the merged `llm/retry` payload into this program.
 import type {} from '@deepseek-ai/dsh-llm-retry/types'
-import { isInitialized, markInitialized } from './sync-state.ts'
+import { markInitialized, markMetaSynced, readSyncState } from './sync-state.ts'
 import { modelOfEvent, recordOfEvent } from './usage-record.ts'
 import type { UsageLog } from './usage-log.ts'
 
@@ -58,12 +58,37 @@ export interface SyncProgressTick {
   failedSessions: number
 }
 
-/** The persistence surface the sync needs (duck-typed for tests). */
+/**
+ * The header facts the metadata index captures (the duck-typed projection
+ * of the host's `SessionHeader`): the working directory, the subagent
+ * classification, and the parent lineage. All three are immutable per
+ * session, so one upsert per session per run suffices.
+ */
+export interface SessionHeaderFacts {
+  cwd?: string
+  origin?: 'subagent'
+  parentSession?: string
+}
+
+/** The metadata sink the sync folds identity facts into (duck-typed for
+ * tests; the host passes a {@link SessionMetaStore}). */
+export interface SyncMetaSink {
+  upsert(id: string, patch: SessionHeaderFacts & { title?: string }): Promise<void>
+}
+
+/** The persistence surface the sync needs (duck-typed for tests). The
+ * host's `inspect` returns a `SessionInspection` — `meta` (the immutable
+ * session header) rides alongside `events`; older duck types that omit it
+ * simply contribute no header facts. */
 export interface SyncPersistence {
   /** Every materialized session, in arbitrary order. */
   list(signal?: AbortSignal): Promise<{ id: SessionId }[]>
-  /** Immutable logical event log of one session. */
-  inspect(id: SessionId, signal?: AbortSignal): Promise<{ events: readonly SessionEvent[] }>
+  /** Immutable logical event log of one session, with its header. */
+  inspect(id: SessionId, signal?: AbortSignal): Promise<{ events: readonly SessionEvent[]; meta?: {
+    cwd?: string
+    origin?: 'subagent'
+    parentSession?: SessionId
+  } }>
 }
 
 /** Dependencies of one sync run. */
@@ -73,10 +98,28 @@ export interface SyncDeps {
   /** Whether the sync records `compaction/summary` events (default true,
    * mirroring the `recordCompaction` config). */
   recordCompaction?: boolean
+  /** Metadata sink for the session table's identity fields: the walk folds
+   * each session's latest-wins `session/title` text and its immutable
+   * header facts (cwd, lineage) into it. Absent → no metadata capture
+   * (the usage walk still runs). */
+  meta?: SyncMetaSink
   /** Called once per session whose stored log failed to load or validate
    * (the session is then skipped). The host uses this to log which session
    * and why; aborts raised through `signal` are re-thrown, never reported. */
   onSessionFailure?: (id: SessionId, error: unknown) => void
+}
+
+/**
+ * The latest-wins `session/title` text of one event, or undefined: the
+ * event type is host-merged (`dsh-session-title`), so the plugin reads the
+ * payload duck-typed and tolerantly — a non-string or empty title is
+ * skipped, never fabricated. Exported for the live recorder, which folds
+ * the same event into the same index.
+ */
+export function titleOfEvent(event: SessionEvent): string | undefined {
+  if ((event as { type: string }).type !== 'session/title') return undefined
+  const title = (event as { data?: { title?: unknown } }).data?.title
+  return typeof title === 'string' && title !== '' ? title : undefined
 }
 
 /**
@@ -108,7 +151,11 @@ export async function syncHistory(
     // One unreadable session log (a format the current dsh build rejects,
     // a torn file, …) must not abort the whole walk: skip the session,
     // report it, and let the rest of the history land.
-    let inspection: { events: readonly SessionEvent[] }
+    let inspection: { events: readonly SessionEvent[]; meta?: {
+      cwd?: string
+      origin?: 'subagent'
+      parentSession?: SessionId
+    } }
     try {
       inspection = await deps.persistence.inspect(session.id, signal)
     } catch (error) {
@@ -125,14 +172,33 @@ export async function syncHistory(
     // attribute, and turn/end names none, so the walk follows the same
     // request/context + assistant/message events the live recorder does.
     let model = ''
+    // Latest-wins title: title events append in seq order, so the LAST one
+    // seen is the current title — a rename, an auto-generated title, and a
+    // fallback all land as the same append, one fold covers every source.
+    let title: string | undefined
     for (const event of inspection.events) {
       signal?.throwIfAborted()
       const revealed = modelOfEvent(event)
       if (revealed !== undefined) model = revealed
+      const revealedTitle = titleOfEvent(event)
+      if (revealedTitle !== undefined) title = revealedTitle
       const record = recordOfEvent(event, session.id, model, deps.recordCompaction !== false)
       if (record === null) continue
       if (await deps.log.record(record)) added += 1
       else skipped += 1
+    }
+    // One metadata upsert per session: the title fold above plus the
+    // immutable header facts. The upsert is a no-op when nothing changed,
+    // so repeat syncs never rewrite the index.
+    if (deps.meta !== undefined) {
+      const header = inspection.meta
+      const patch = {
+        ...(title !== undefined ? { title } : {}),
+        ...(header?.cwd !== undefined && header.cwd !== '' ? { cwd: header.cwd } : {}),
+        ...(header?.origin !== undefined ? { origin: header.origin } : {}),
+        ...(header?.parentSession !== undefined && header.parentSession !== '' ? { parentSession: header.parentSession } : {}),
+      }
+      if (Object.keys(patch).length > 0) await deps.meta.upsert(session.id, patch)
     }
     processed += 1
     onTick?.({ processed, total, added, skipped, failedSessions })
@@ -141,17 +207,26 @@ export async function syncHistory(
 }
 
 /**
- * Run the one-shot automatic sync when the initialized marker is absent, then
- * persist the marker. A crash between the sync and the marker write leaves
- * the marker absent, so the next startup re-runs the sync — a no-op thanks to
- * dedupe.
- * @param deps - persistence and the shared log.
- * @param dir - the data directory holding the marker.
- * @returns the sync outcome, or null when the marker was already present.
+ * Run the gated automatic work, then persist the markers:
+ * - No `initializedAt` — the first-run backfill: one full sync (which also
+ *   folds the metadata), then both markers land together.
+ * - `initializedAt` present, `metaSyncedAt` absent — a pre-session-table
+ *   install owes exactly one metadata backfill: run the same sync once
+ *   more (every usage row dedupes to a no-op write; the walk lands the
+ *   titles and header facts the old build never stored), then stamp
+ *   `metaSyncedAt`.
+ * - Both markers present — nothing to do.
+ * A crash before the marker write leaves the marker absent, so the next
+ * startup re-runs — a no-op thanks to dedupe and idempotent upserts.
+ * @param deps - persistence and the shared log (with the metadata sink).
+ * @param dir - the data directory holding the markers.
+ * @returns the sync outcome, or null when both markers were already set.
  */
 export async function autoSyncIfNeeded(deps: SyncDeps, dir: string): Promise<SyncResult | null> {
-  if (await isInitialized(dir)) return null
+  const state = await readSyncState(dir)
+  if (state !== null && state.metaSyncedAt !== undefined) return null
   const result = await syncHistory(deps)
-  await markInitialized(dir)
+  if (state === null) await markInitialized(dir, undefined, true)
+  else await markMetaSynced(dir)
   return result
 }

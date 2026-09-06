@@ -140,4 +140,28 @@ describe('readRollup / writeRollup', () => {
     expect(loaded!.total.compactions).toBeUndefined()
     expect(loaded!.total.requests).toBe(1)
   })
+
+  it('reads null for a pre-bySession rollup so it rebuilds from the day files', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'token-usage-rollup-'))
+    const legacy = rollupWith('2026-01-15', [record(1_700_000_000_000, 'deepseek-chat')])
+    delete (legacy as Partial<typeof legacy>).bySession
+    await writeFile(join(dir, 'rollup.json'), JSON.stringify(legacy))
+    await expect(readRollup(dir)).resolves.toBeNull()
+  })
+
+  it('round-trips the session dimension alongside the rate rows', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'token-usage-rollup-'))
+    const rollup = rollupWith('2026-01-15', [
+      { ...record(1_700_000_000_000, 'deepseek-chat'), sessionId: 's1' },
+      { ...record(1_700_000_000_001, 'deepseek-chat'), sessionId: 's2' },
+      { ...record(1_700_000_000_002, 'deepseek-chat'), sessionId: 's1' },
+    ])
+    expect(rollup.bySession).toHaveLength(2)
+    await writeRollup(dir, rollup)
+    const loaded = await readRollup(dir)
+    expect(loaded?.bySession.map(row => [row.sessionId, row.totals.requests, row.lastTime])).toEqual([
+      ['s1', 2, 1_700_000_000_002],
+      ['s2', 1, 1_700_000_000_001],
+    ])
+  })
 })

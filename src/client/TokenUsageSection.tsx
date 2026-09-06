@@ -28,6 +28,7 @@ import { MenuSelect } from './MenuSelect.tsx'
 import { PricingDialog } from './PricingDialog.tsx'
 import { PricingOverviewDialog } from './PricingOverviewDialog.tsx'
 import { RequestsCell, RequestsSplitHead, RequestsStatCard, StatCard } from './StatCard.tsx'
+import { SessionTable } from './SessionTable.tsx'
 import { TrendChart } from './TrendChart.tsx'
 import { useColorSchemeMirror } from './use-color-scheme.ts'
 import styles from './TokenUsageSection.module.css'
@@ -168,6 +169,12 @@ export function TokenUsageSection({ t }: SettingsSectionOwnerProps & { t: Transl
   useColorSchemeMirror(rootRef)
   // Entering the page starts on today's window (the 1d quick range).
   const [filters, setFilters] = useState<Filters>(() => ({ model: '', ...quickRange(1) }))
+  // The detail-table block's mode: by model (default, the historical table,
+  // byte-identical behavior) or by session. Pure presentation state — both
+  // row sets arrive on the SAME summary response, so switching never
+  // refetches (session-local, not persisted, the usage tab's scope-switch
+  // tradeoff).
+  const [detailMode, setDetailMode] = useState<'model' | 'session'>('model')
   const [models, setModels] = useState<string[]>([])
   // The model whose pricing dialog is open (null = none). Refetched
   // summaries keep the dialog's rules in sync with the latest pricing.
@@ -306,76 +313,105 @@ export function TokenUsageSection({ t }: SettingsSectionOwnerProps & { t: Transl
               // selection) plots the day's 24 hours instead of one point.
               {...filters.from !== '' && filters.from === filters.to ? { hours: state.value.byHour } : {}}
             />
-            {state.value.byModel.length > 0
+            {state.value.byModel.length > 0 || (state.value.sessionRows?.length ?? 0) > 0
               ? (
                 <>
-                  <h3 className={styles['subtitle']}>{t('byModel.title')}</h3>
-                  <div className={styles['tableWrap']}>
-                    <table className={styles['table']} aria-label={t('byModel.title')}>
-                      <thead>
-                        <tr>
-                          <th className={styles['modelHead']}>{t('filter.model')}</th>
-                          <th aria-label={t('stat.successFail')}><RequestsSplitHead t={t} /></th>
-                          <th>{t('stat.cost')}</th>
-                          <th>{t('stat.totalTokens')}</th>
-                          <th>{t('stat.input')}</th>
-                          <th>{t('stat.output')}</th>
-                          <th>{t('stat.cacheRead')}</th>
-                          <th>{t('stat.cacheWrite')}</th>
-                          <th>{t('stat.hitRate')}</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {state.value.byModel.map(row => {
-                          const rules = state.value.pricing[row.model]
-                          return (
-                            <tr key={row.model}>
-                              <td className={styles['modelCol']}>
-                                <span className={styles['modelCell']}>
-                                  <span className={styles['modelName']}>{row.model}</span>
-                                  {rules !== undefined
-                                    ? (
-                                      // The pricing affordance: one click opens
-                                      // the model's detail-price dialog.
-                                      <button
-                                        type="button"
-                                        className={styles['pricingButton']}
-                                        aria-label={t('pricing.view', { model: row.model })}
-                                        onClick={() => setDetailModel(row.model)}
-                                      >
-                                        {t('pricing.viewShort')}
-                                      </button>
-                                    )
-                                    : (
-                                      // The unpriced tag explains the em-dash
-                                      // cost cell in place.
-                                      <span className={styles['unpricedTag']}>{t('pricing.unpriced')}</span>
-                                    )}
-                                </span>
-                              </td>
-                              <td>
-                                <RequestsCell
-                                  requests={row.totals.requests}
-                                  failures={row.totals.failures ?? 0}
-                                  failuresByCode={row.totals.failuresByCode}
-                                  t={t}
-                                />
-                              </td>
-                              <td>
-                                {rules !== undefined ? formatCost(row.cost, view) : '—'}
-                              </td>
-                              <td>{formatTokens(totalTokens(row.totals))}</td>
-                              <td>{formatTokens(row.totals.inputTokens)}</td>
-                              <td>{formatTokens(row.totals.outputTokens)}</td>
-                              <td>{formatTokens(row.totals.cacheReadTokens)}</td>
-                              <td>{formatTokens(row.totals.cacheWriteTokens)}</td>
-                              <td><HitRateText totals={row.totals} /></td>
-                            </tr>
-                          )
-                        })}
-                      </tbody>
-                    </table>
+                  {/* The block's dimension switch IS the block title: the
+                   * selected segment names the table below, so a separate
+                   * heading would only repeat it. Presentation only — both
+                   * row sets come from the same summary response. */}
+                  <div className={styles['segmented']} role="group" aria-label={t('detail.switch.label')}>
+                    <button
+                      type="button"
+                      className={detailMode === 'model' ? `${styles['segBtn']} ${styles['segActive']}` : styles['segBtn']}
+                      aria-pressed={detailMode === 'model'}
+                      onClick={() => setDetailMode('model')}
+                    >
+                      {t('byModel.title')}
+                    </button>
+                    <button
+                      type="button"
+                      className={detailMode === 'session' ? `${styles['segBtn']} ${styles['segActive']}` : styles['segBtn']}
+                      aria-pressed={detailMode === 'session'}
+                      onClick={() => setDetailMode('session')}
+                    >
+                      {t('bySession.title')}
+                    </button>
                   </div>
+                  {detailMode === 'model'
+                    ? (
+                      <div className={styles['tableWrap']}>
+                        <table className={styles['table']} aria-label={t('byModel.title')}>
+                          <thead>
+                            <tr>
+                              <th className={styles['modelHead']}>{t('filter.model')}</th>
+                              <th aria-label={t('stat.successFail')}><RequestsSplitHead t={t} /></th>
+                              <th>{t('stat.cost')}</th>
+                              <th>{t('stat.totalTokens')}</th>
+                              <th>{t('stat.input')}</th>
+                              <th>{t('stat.output')}</th>
+                              <th>{t('stat.cacheRead')}</th>
+                              <th>{t('stat.cacheWrite')}</th>
+                              <th>{t('stat.hitRate')}</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {state.value.byModel.map(row => {
+                              const rules = state.value.pricing[row.model]
+                              return (
+                                <tr key={row.model}>
+                                  <td className={styles['modelCol']}>
+                                    <span className={styles['modelCell']}>
+                                      <span className={styles['modelName']}>{row.model}</span>
+                                      {rules !== undefined
+                                        ? (
+                                          // The pricing affordance: one click opens
+                                          // the model's detail-price dialog.
+                                          <button
+                                            type="button"
+                                            className={styles['pricingButton']}
+                                            aria-label={t('pricing.view', { model: row.model })}
+                                            onClick={() => setDetailModel(row.model)}
+                                          >
+                                            {t('pricing.viewShort')}
+                                          </button>
+                                        )
+                                        : (
+                                          // The unpriced tag explains the em-dash
+                                          // cost cell in place.
+                                          <span className={styles['unpricedTag']}>{t('pricing.unpriced')}</span>
+                                        )}
+                                    </span>
+                                  </td>
+                                  <td>
+                                    <RequestsCell
+                                      requests={row.totals.requests}
+                                      failures={row.totals.failures ?? 0}
+                                      failuresByCode={row.totals.failuresByCode}
+                                      t={t}
+                                    />
+                                  </td>
+                                  <td>
+                                    {rules !== undefined ? formatCost(row.cost, view) : '—'}
+                                  </td>
+                                  <td>{formatTokens(totalTokens(row.totals))}</td>
+                                  <td>{formatTokens(row.totals.inputTokens)}</td>
+                                  <td>{formatTokens(row.totals.outputTokens)}</td>
+                                  <td>{formatTokens(row.totals.cacheReadTokens)}</td>
+                                  <td>{formatTokens(row.totals.cacheWriteTokens)}</td>
+                                  <td><HitRateText totals={row.totals} /></td>
+                                </tr>
+                              )
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )
+                    : (
+                      (state.value.sessionRows?.length ?? 0) > 0
+                        ? <SessionTable rows={state.value.sessionRows ?? []} view={view} t={t} />
+                        : <p className={styles['muted']}>{t('chart.empty')}</p>
+                    )}
                 </>
               )
               : null}

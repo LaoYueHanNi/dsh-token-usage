@@ -12,12 +12,13 @@ import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type { MigrationProgress } from './migrate.ts'
 import { consoleLogger, type LoggerLike } from './log.ts'
 import { readPricingOverview, readPricingTable, readUsdExchangeRate, resolveRate } from './pricing.ts'
-import { attachCosts, buildSummary, filterRecordsBySessions, filterSummary, requestSeriesOf, summarizeRecords } from './stats.ts'
-import type { RateResolver } from './stats.ts'
+import { attachCosts, buildSessionRows, buildSummary, filterRecordsBySessions, filterSummary, requestSeriesOf, SESSION_ROW_LIMIT, summarizeRecords } from './stats.ts'
+import type { RateResolver, SessionMetaEntry } from './stats.ts'
 import { readCachedRecords } from './record-cache.ts'
+import { SessionMetaStore } from './session-meta.ts'
 import { bucketSeries, pointsOfBuckets } from './trend-bucket.ts'
 import { decodeChildGroups, decodeSessionScope, DIR_GUARD_PATH, FULL_SYNC_PATH, MIGRATION_PATH, PRICING_PATH, STATS_PATH, UNPRICED_KEY } from './wire.ts'
-import type { ChildGroup, ChildUsageSummary, CostedSummary, DirectoryGuardView, DisplayCurrency, FullSyncView, PricingOverviewPayload, PricingTable, RequestPoint, StatsFields, StatsPayload } from './wire.ts'
+import type { ChildGroup, ChildUsageSummary, CostedSummary, DirectoryGuardView, DisplayCurrency, FullSyncView, PricingOverviewPayload, PricingTable, RequestPoint, SessionUsageRow, StatsFields, StatsPayload } from './wire.ts'
 import type { UsageRecord } from './usage-record.ts'
 
 /** The stats endpoint path, exported for tests and the client half. */
@@ -42,7 +43,9 @@ const DAY_KEY = /^\d{4}-\d{2}-\d{2}$/u
  * One filter dimension of the stats request: undefined when absent or blank,
  * the raw string otherwise. `sessionIds` collects every occurrence of the
  * `sessionId` query key — one fetch may scope to a session AND its subagent
- * subtree (the page aggregates parent + children in one request).
+ * subtree (the page aggregates parent + children in one request). The
+ * session table's fold is NOT a query dimension: rows always fold over
+ * subagent subtrees (see buildSessionRows), so no switch refetches.
  */
 interface RawFilter {
   from: string | undefined
@@ -303,7 +306,8 @@ function childBreakdown(
   return rows
 }
 
-/** Session-scoped wire shape: `full` keeps the CostedSummary; `session` /
+/** Session-scoped wire shape: `full` keeps the CostedSummary (minus the
+ * granular bySession cells — the fold happened server-side); `session` /
  * `chip` drop the unused pricing / rate / recent / hour layers, and
  * `session` sends a pre-bucketed request series (≤ 60 points). */
 function slimSessionPayload(input: {
@@ -316,9 +320,12 @@ function slimSessionPayload(input: {
   children: Record<string, ChildUsageSummary> | undefined
 }): unknown {
   const { summary, sessionIds, series, currency, usdExchangeRate, fields, children } = input
+  // The granular per-session cells stay behind the route: session-scoped
+  // consumers read totals / byModel / requestSeries, never the cells.
+  const { bySession: _cells, ...summaryRest } = summary
   const requestSeries = fields === 'session' ? pointsOfBuckets(bucketSeries(series)) : [...series]
   const full = {
-    ...summary,
+    ...summaryRest,
     scope: 'session' as const,
     sessionIds,
     requestSeries,
@@ -354,6 +361,17 @@ function slimSessionPayload(input: {
  * @returns the exact GET route serving the JSON summary.
  */
 export function createStatsRoute(dir: () => string, options: StatsRouteOptions = {}): WebRoute {
+  // One metadata store per data directory (its mtime cache is per-path), so
+  // repeated stats reads do not reparse an unchanged sessions.json. A
+  // relocation keys a new entry and the old one just goes unused.
+  const metaStores = new Map<string, SessionMetaStore>()
+  const metaStoreOf = (dataDir: string): SessionMetaStore => {
+    const existing = metaStores.get(dataDir)
+    if (existing !== undefined) return existing
+    const created = new SessionMetaStore(dataDir, options.logger ?? consoleLogger)
+    metaStores.set(dataDir, created)
+    return created
+  }
   return {
     kind: 'exact',
     path: STATS_PATH,
@@ -413,6 +431,18 @@ export function createStatsRoute(dir: () => string, options: StatsRouteOptions =
         // page converts (÷ usdExchangeRate) when the region pick says USD.
         const currency = options.currency?.() ?? 'CNY'
         const usdExchangeRate = await readUsdExchangeRate(dataDir, logger)
+        // The session table's final rows: the costed bySession cells fold
+        // per top-level session (the whole subtree merges in), sorted by
+        // cost and truncated top-N server-side, with the metadata index's
+        // titles and directories attached. The fold is unconditional —
+        // subagents badge through childCount, never their own rows.
+        const metaIndex = await metaStoreOf(dataDir).read()
+        const meta = new Map<string, SessionMetaEntry>(Object.entries(metaIndex))
+        const sessionRows: readonly SessionUsageRow[] = buildSessionRows(summary, meta, SESSION_ROW_LIMIT)
+        // Strip the granular cells from the whole-scope payload: the client
+        // renders the folded rows, and sending the cells would duplicate
+        // every aggregate once more on the wire.
+        const { bySession: _cells, ...summaryRest } = summary
         const children = allRecords !== undefined && filter.childGroups.length > 0
           ? childBreakdown(allRecords, filter, dataDir, resolve, pricing)
           : undefined
@@ -427,8 +457,9 @@ export function createStatsRoute(dir: () => string, options: StatsRouteOptions =
             children,
           })
           : {
-            ...summary,
+            ...summaryRest,
             scope: 'whole' as const,
+            sessionRows,
             currency,
             usdExchangeRate,
           } satisfies StatsPayload

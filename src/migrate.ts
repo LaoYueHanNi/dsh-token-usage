@@ -1,8 +1,9 @@
 /**
  * Data-directory migration of the token-usage plugin: copies every file from
  * one data directory into another, physically and verbatim — the per-day
- * JSONL shards, the pricing files, the sync marker, and the stats rollup all
- * keep their exact names and contents; no row is re-bucketed or rewritten.
+ * JSONL shards, the pricing files, the sync marker, the session-metadata
+ * index, and the stats rollup all keep their exact names and contents; no
+ * row is re-bucketed or rewritten.
  *
  * Two-phase commit, in the shape of a database switch: every file copies
  * first (a failure aborts with the source untouched); the caller then flips
@@ -28,6 +29,7 @@ const OWNED_PATTERNS = [
   /^state\.json$/u,
   /^pricing\.json$/u,
   /^pricing\.ccsa\.json$/u,
+  /^sessions\.json$/u,
 ] as const
 
 /**

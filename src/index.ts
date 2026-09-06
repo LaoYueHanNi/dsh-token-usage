@@ -39,10 +39,11 @@ import type {} from '@deepseek-ai/dsh-host-webserver'
 // Type-only: pulls the ctx.llm declaration merge (the provider directory).
 import type {} from '@deepseek-ai/dsh-llm'
 import { UsageLog } from './usage-log.ts'
+import { SessionMetaStore } from './session-meta.ts'
 import { cleanSource, copyData, type MigrationProgress } from './migrate.ts'
 import { resolvePricingUrl, syncCloudPricing, type PricingSourceInput } from './pricing.ts'
 import { modelOfEvent, recordOfEvent } from './usage-record.ts'
-import { autoSyncIfNeeded, syncHistory } from './sync.ts'
+import { autoSyncIfNeeded, syncHistory, titleOfEvent } from './sync.ts'
 import { clearRecordCache, warmRecordCache } from './record-cache.ts'
 import { ROLLUP_FILE_NAME, ROLLUP_TMP_FILE_NAME } from './rollup.ts'
 import { createDirectoryGuardRoute, createFullSyncRoute, createMigrationRoute, createPricingRoute, createStatsRoute, type FullSyncTrigger } from './stats-route.ts'
@@ -339,10 +340,10 @@ export function apply(ctx: Context, config: Config = {}) {
   // A thunk, not a snapshot — reads see the current resolution at call time,
   // so both the pricing region and the data directory follow a stored edit.
   let sectionSource: () => SectionConfig = () => sectionOf(config)
-  // The directory and log currently in force. Registrations below read them
-  // per event and per request, so a settings-driven move swaps the running
-  // directory without re-registering anything.
-  let current: { dir: string; log: UsageLog } | undefined
+  // The directory, log, and metadata index currently in force. Registrations
+  // below read them per event and per request, so a settings-driven move
+  // swaps the running directory without re-registering anything.
+  let current: { dir: string; log: UsageLog; meta: SessionMetaStore } | undefined
   // Serialized relocations: a move runs to settlement before the next begins,
   // so two quick edits cannot interleave two migrations of the same files.
   let relocating: Promise<void> = Promise.resolve()
@@ -389,6 +390,9 @@ export function apply(ctx: Context, config: Config = {}) {
 
     // Quiesce the source: drain queued appends so the files on disk are final.
     await previous.log.flush()
+    // The metadata index writes on its own queue; drain it too, so the
+    // sessions.json that migrates is final.
+    await previous.meta.flush()
 
     migration = { phase: 'copying', done: 0, total: 0 }
     const report = (progress: MigrationProgress): void => {
@@ -400,11 +404,12 @@ export function apply(ctx: Context, config: Config = {}) {
     await copyData(previous.dir, nextDir, report)
 
     // Phase 2: flip the running configuration. A fresh log knows the rows the
-    // target already holds, so post-flip events dedupe against them.
+    // target already holds, so post-flip events dedupe against them; a fresh
+    // metadata index points at the copied sessions.json (mtime-stamped).
     const log = new UsageLog(nextDir, logger)
     await log.scan()
     const moved = await log.refileByEventDay()
-    current = { dir: nextDir, log }
+    current = { dir: nextDir, log, meta: new SessionMetaStore(nextDir, logger) }
     clearRecordCache(previous.dir)
     if (moved > 0) invalidateDerivedState(nextDir)
     void warmRecordCache(nextDir, undefined, logger)
@@ -513,7 +518,7 @@ export function apply(ctx: Context, config: Config = {}) {
     if (target === undefined) return { started: false, reason: 'already-running' }
     fullSyncRunning = true
     fullSyncStatus = { status: 'running', processed: 0, total: 0, added: 0, skipped: 0, failedSessions: 0 }
-    void syncHistory({ persistence: ctx.sessionPersistence, log: target.log, recordCompaction,
+    void syncHistory({ persistence: ctx.sessionPersistence, log: target.log, meta: target.meta, recordCompaction,
         onSessionFailure: (id, error) => {
           logger.warn(`[token-usage] session ${id} unreadable, skipped:`, error instanceof Error ? error.message : String(error))
         } },
@@ -688,7 +693,8 @@ export function apply(ctx: Context, config: Config = {}) {
     }
     const dir = resolved
     const log = new UsageLog(dir, logger)
-    current = { dir, log }
+    const meta = new SessionMetaStore(dir, logger)
+    current = { dir, log, meta }
     void warmRecordCache(dir, undefined, logger)
 
     // Last-known route model per session: failure rows need a model to
@@ -696,7 +702,32 @@ export function apply(ctx: Context, config: Config = {}) {
     // events the sync walk does (request/context route changes, then
     // assistant/message confirmations). Bounded by the session count.
     const lastModel = new Map<string, string>()
+    // Header facts are immutable, so one upsert per session is enough even
+    // though events keep arriving; the index store dedupes the write anyway.
+    const headerSeen = new Set<string>()
     ctx.on('session/event', (session: Session, event: SessionEvent) => {
+      // Session-table identity capture, alongside the usage rows: the
+      // latest-wins title fold (a rename, an auto-generated title, and a
+      // fallback all append the same `session/title` event — who is last
+      // wins) and the session header's cwd / subagent lineage, read off the
+      // callback's session the first time it is seen.
+      const title = titleOfEvent(event)
+      // Fire-and-forget with a logged catch: a failed write must degrade to
+      // "stale identity" (the index rebuilds from logs), not crash the host.
+      if (title !== undefined) void meta.upsert(session.id, { title }).catch(error => logger.warn('[token-usage] session title upsert failed:', error))
+      if (!headerSeen.has(session.id)) {
+        headerSeen.add(session.id)
+        // Duck-typed: a session without a header (host versions, test
+        // doubles) simply contributes no identity fields.
+        const header = (session as { header?: Session['header'] }).header
+        const patch = header === undefined ? {} : {
+          ...(typeof header.cwd === 'string' && header.cwd !== '' ? { cwd: header.cwd } : {}),
+          ...(header.origin === 'subagent' ? { origin: header.origin } : {}),
+          ...(typeof header.parentSession === 'string' && header.parentSession !== ''
+            ? { parentSession: header.parentSession } : {}),
+        }
+        if (Object.keys(patch).length > 0) void meta.upsert(session.id, patch).catch(error => logger.warn('[token-usage] session header upsert failed:', error))
+      }
       const revealed = modelOfEvent(event)
       if (revealed !== undefined) lastModel.set(session.id, revealed)
       const record = recordOfEvent(
@@ -717,7 +748,7 @@ export function apply(ctx: Context, config: Config = {}) {
           logger.info(`[token-usage] refiled ${String(moved)} rows onto event-day files`)
           invalidateDerivedState(dir)
         }
-        return autoSyncIfNeeded({ persistence: ctx.sessionPersistence, log, recordCompaction,
+        return autoSyncIfNeeded({ persistence: ctx.sessionPersistence, log, meta, recordCompaction,
           onSessionFailure: (id, error) => {
             logger.warn(`[token-usage] session ${id} unreadable, skipped:`, error instanceof Error ? error.message : String(error))
           } }, dir)

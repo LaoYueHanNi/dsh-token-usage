@@ -2,13 +2,13 @@ import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import type { SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
+import { SessionSeq, type SessionEvent, type SessionId } from '@deepseek-ai/dsh-session'
 import type { UsageLog } from '../src/usage-log.ts'
 import { autoSyncIfNeeded, syncHistory, type SyncPersistence } from '../src/sync.ts'
 import { isInitialized } from '../src/sync-state.ts'
 import { compactionEvent, messageEvent, retryEvent, turnEndEvent } from './helpers.ts'
 
-function fakePersistence(sessions: Array<{ id: string; events: SessionEvent[] }>): SyncPersistence {
+function fakePersistence(sessions: Array<{ id: string; events: SessionEvent[]; meta?: { cwd?: string; origin?: 'subagent'; parentSession?: string } }>): SyncPersistence {
   return {
     async list() {
       return sessions.map(session => ({ id: session.id as SessionId }))
@@ -16,7 +16,7 @@ function fakePersistence(sessions: Array<{ id: string; events: SessionEvent[] }>
     async inspect(id) {
       const session = sessions.find(candidate => candidate.id === id)
       if (session === undefined) throw new Error(`missing session ${id}`)
-      return { events: session.events }
+      return { events: session.events, ...(session.meta !== undefined ? { meta: session.meta } : {}) }
     },
   }
 }
@@ -462,4 +462,73 @@ class FakeLogWithFile extends FakeLog {
   override async scan(): Promise<void> {
     for (const id of this.fileSeen) this.seen.add(id)
   }
+}
+
+describe('syncHistory metadata capture', () => {
+  it('folds the latest-wins title and the header facts into the sink', async () => {
+    const log = new FakeLog()
+    const persistence = fakePersistence([
+      {
+        id: 's1',
+        events: [
+          titleEvent('Auto title', 1),
+          titleEvent('User rename', 2),
+          messageEventWith('m1', 3),
+        ] as SessionEvent[],
+        meta: { cwd: '/work/app', origin: 'subagent', parentSession: 'p0' },
+      },
+      { id: 's2', events: [messageEventWith('m2', 1)] },
+    ])
+    const upserts: Array<{ id: string; patch: Record<string, unknown> }> = []
+    const result = await syncHistory({
+      persistence,
+      log,
+      meta: { async upsert(id, patch) { upserts.push({ id, patch: { ...patch } }) } },
+    })
+    expect(result.added).toBe(2)
+    // One upsert per session: s1 carries the LAST title (latest-wins) plus
+    // the immutable header facts; s2 (no title, no header) upserts nothing.
+    expect(upserts).toHaveLength(1)
+    expect(upserts[0]).toEqual({
+      id: 's1',
+      patch: { title: 'User rename', cwd: '/work/app', origin: 'subagent', parentSession: 'p0' },
+    })
+  })
+
+  it('skips an empty or non-string title instead of fabricating one', async () => {
+    const log = new FakeLog()
+    const persistence = fakePersistence([
+      {
+        id: 's1',
+        events: [titleEvent('', 1), titleEvent(42 as unknown as string, 2)] as SessionEvent[],
+      },
+    ])
+    const upserts: Array<{ id: string; patch: Record<string, unknown> }> = []
+    await syncHistory({
+      persistence,
+      log,
+      meta: { async upsert(id, patch) { upserts.push({ id, patch: { ...patch } }) } },
+    })
+    expect(upserts).toHaveLength(0)
+  })
+
+  it('runs without a meta sink (usage-only sync unchanged)', async () => {
+    const log = new FakeLog()
+    const persistence = fakePersistence([
+      { id: 's1', events: [messageEventWith('m1', 1)] },
+    ])
+    const result = await syncHistory({ persistence, log })
+    expect(result.added).toBe(1)
+  })
+})
+
+/** Minimal but shape-true `session/title` event (host-merged payload, read
+ * duck-typed by the sync — hence the cast). */
+function titleEvent(title: string, seq: number): SessionEvent<'session/title'> {
+  return {
+    type: 'session/title',
+    seq: SessionSeq(seq),
+    time: 1_700_000_000_000 + seq,
+    data: { title, messageSeqs: [], source: { kind: 'user' } },
+  } as unknown as SessionEvent<'session/title'>
 }

@@ -16,7 +16,7 @@ import { join } from 'node:path'
 import { consoleLogger, type LoggerLike } from './log.ts'
 import { coerceRecord } from './usage-record.ts'
 import type { UsageRecord } from './usage-record.ts'
-import type { RateKey, UsageDayRow, UsageHourRow, UsageModelRow, UsageRateRow, UsageTotals } from './wire.ts'
+import type { RateKey, UsageDayRow, UsageHourRow, UsageModelRow, UsageRateRow, UsageSessionRow, UsageTotals } from './wire.ts'
 
 const ROLLUP_FILE = 'rollup.json'
 const TMP_FILE = 'rollup.json.tmp'
@@ -44,6 +44,12 @@ export interface RollupFile {
    * identities, never prices, so an updated pricing table re-prices the
    * absorbed history without a rebuild. */
   rateRows: UsageRateRow[]
+  /** Per-(session, day, model, rate identity) rows of the absorbed records
+   * — the session dimension the settings page's session table folds from.
+   * Part of the format contract: a rollup without it fails validation and
+   * rebuilds, because the absorbed day files are never reread to backfill
+   * the dimension lazily. */
+  bySession: UsageSessionRow[]
   /** The newest absorbed records, descending by time (bounded window). */
   recent: UsageRecord[]
 }
@@ -91,6 +97,16 @@ function isRateRow(value: unknown): value is UsageRateRow {
     && typeof row.model === 'string' && isRateKey(row.rate) && isTotals(row.totals)
 }
 
+function isSessionRow(value: unknown): value is UsageSessionRow {
+  if (typeof value !== 'object' || value === null) return false
+  const row = value as Record<string, unknown>
+  return typeof row.sessionId === 'string'
+    && typeof row.day === 'string' && DAY_KEY.test(row.day)
+    && typeof row.model === 'string' && isRateKey(row.rate)
+    && typeof row.lastTime === 'number' && Number.isFinite(row.lastTime)
+    && isTotals(row.totals)
+}
+
 function isRollupFile(value: unknown): value is RollupFile {
   if (typeof value !== 'object' || value === null) return false
   const rollup = value as Record<string, unknown>
@@ -100,6 +116,11 @@ function isRollupFile(value: unknown): value is RollupFile {
     && Array.isArray(rollup.byHour) && rollup.byHour.every(isHourRow)
     && Array.isArray(rollup.byModel) && rollup.byModel.every(isModelRow)
     && Array.isArray(rollup.rateRows) && rollup.rateRows.every(isRateRow)
+    // Hard requirement, not an optional field: the absorbed frozen day
+    // files are never reread, so a legacy rollup without the session
+    // dimension could not backfill it lazily — failing validation routes
+    // the file through the one-shot rebuild instead.
+    && Array.isArray(rollup.bySession) && rollup.bySession.every(isSessionRow)
     && Array.isArray(rollup.recent)
 }
 

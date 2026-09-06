@@ -1,0 +1,175 @@
+/* Session detail table (browser half): reuses the settings-page table
+ * vocabulary (the section's .table styles apply by composition) and adds
+ * the identity cell, badges, and directory-group heads. Tokens only. */
+
+/* The head row of the block: the grouping switch sits left, right above
+ * the table it controls. */
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+}
+
+/* Scope switches: a track with an inset selected pill, same vocabulary as
+ * the usage tab's scope switch. */
+.segmented {
+  display: inline-flex;
+  align-items: stretch;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 8px;
+  background: var(--dsw-alias-fill-container, transparent);
+}
+
+.segBtn {
+  border: none;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary));
+  font-size: 12px;
+  font-weight: 500;
+  padding: 4px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.segBtn:hover:not(.segActive) {
+  color: var(--dsw-alias-label-secondary);
+  background: color-mix(in srgb, var(--dsw-alias-label-primary) 6%, transparent);
+}
+
+.segBtn:focus-visible {
+  outline: 2px solid var(--dsw-alias-border-l2);
+  outline-offset: 1px;
+}
+
+.segActive {
+  background: color-mix(in srgb, var(--dsw-alias-label-primary) 16%, transparent);
+  color: var(--dsw-alias-label-primary);
+  font-weight: 600;
+}
+
+.tableWrap {
+  overflow: auto;
+  max-height: 420px;
+}
+
+.table {
+  width: 100%;
+  /* Session column + 4 numeric columns; the session column dominates. */
+  min-width: 480px;
+  border-collapse: collapse;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.table th,
+.table td {
+  padding: 4px 6px;
+  text-align: right;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+  white-space: nowrap;
+}
+
+.table th.sessionHead,
+.table td.sessionCol {
+  text-align: left;
+  width: 220px;
+  max-width: 220px;
+}
+
+/* Grouped rows indent under their directory head: the extra left padding
+ * is the only hierarchy cue the title column gets (the group head is a
+ * full-width row above). */
+.table td.sessionIndent {
+  padding-left: 18px;
+}
+
+.table th {
+  font-weight: 500;
+  color: var(--dsw-alias-label-secondary);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--dsw-alias-bg-layer-2);
+}
+
+.table td {
+  color: var(--dsw-alias-label-primary);
+}
+
+/* Sortable header: the column name is the toggle. The button resets to the
+ * th's own type style so it reads as a header first, a control second. */
+.sortBtn {
+  padding: 0;
+  font: inherit;
+  font-weight: 500;
+  color: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.sortBtn:hover {
+  color: var(--dsw-alias-label-primary);
+}
+
+/* Active direction marker, held tight to the label. */
+.sortMark {
+  margin-left: 3px;
+  font-size: 9px;
+}
+
+/* Session identity: title (or the id+span fallback) plus the badge, one
+ * line, ellipsized; the ungrouped list adds the directory tail below. */
+.sessionCell {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  max-width: 208px;
+}
+
+.sessionName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.badge {
+  flex: none;
+  font-size: 10px;
+  color: var(--dsw-alias-label-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.dirTail {
+  display: block;
+  font-size: 10px;
+  color: var(--dsw-alias-label-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Directory group head: a full-width tertiary row, like the host sidebar's
+ * directory sections. The doubled class out-specifies the shared `.table td`
+ * cell rules (right-align, nowrap) without `!important`. */
+.table td.groupRow {
+  padding-top: 8px;
+  border-bottom: none;
+}
+
+.table td.groupHead {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-secondary);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.groupCount {
+  margin-left: 6px;
+  color: var(--dsw-alias-label-tertiary);
+  font-variant-numeric: tabular-nums;
+}

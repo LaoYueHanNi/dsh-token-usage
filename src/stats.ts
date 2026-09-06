@@ -19,15 +19,18 @@ import { readRollup, writeRollup } from './rollup.ts'
 import type { RollupFile } from './rollup.ts'
 import type {
   CostedModelRow,
+  CostedSessionCell,
   CostedSummary,
   PricingTable,
   RateKey,
   RequestPoint,
+  SessionUsageRow,
   TokenSummary,
   UsageDayRow,
   UsageHourRow,
   UsageModelRow,
   UsageRateRow,
+  UsageSessionRow,
   UsageTotals,
 } from './wire.ts'
 import { UNPRICED_KEY } from './wire.ts'
@@ -44,7 +47,7 @@ export type RateResolver = (record: UsageRecord) => RateKey
 
 /** Empty rollup used as the merge base when no rollup exists on disk yet. */
 function emptyRollup(): RollupFile {
-  return { upto: '', total: emptyTotals(), byDay: [], byHour: [], byModel: [], rateRows: [], recent: [] }
+  return { upto: '', total: emptyTotals(), byDay: [], byHour: [], byModel: [], rateRows: [], bySession: [], recent: [] }
 }
 
 /** Zeroed totals; requests counts rows, the token buckets sum reported usage. */
@@ -116,6 +119,20 @@ function rateRowsSorted(rows: Iterable<UsageRateRow>): UsageRateRow[] {
 /** Map key of one (day, model, rate) cell. */
 function rateRowKey(day: string, model: string, rate: RateKey): string {
   return `${day}\n${model}\n${rate.ruleStart}-${rate.ruleEnd}-${rate.tier}-${rate.slot}`
+}
+
+/** Deterministic session-cell order: session id, day, model, rate identity. */
+function sessionRowsSorted(rows: Iterable<UsageSessionRow>): UsageSessionRow[] {
+  return [...rows].sort((left, right) =>
+    left.sessionId < right.sessionId ? -1 : left.sessionId > right.sessionId ? 1
+      : left.day < right.day ? -1 : left.day > right.day ? 1
+        : left.model < right.model ? -1 : left.model > right.model ? 1
+          : compareKeys(left.rate, right.rate))
+}
+
+/** Map key of one (sessionId, day, model, rate) cell. */
+function sessionRowKey(row: UsageSessionRow): string {
+  return `${row.sessionId}\n${row.day}\n${row.model}\n${row.rate.ruleStart}-${row.rate.ruleEnd}-${row.rate.tier}-${row.rate.slot}`
 }
 
 /**
@@ -196,6 +213,7 @@ export function summarizeRecords(records: readonly UsageRecord[], resolve: RateR
   const hours = new Map<string, UsageTotals>()
   const models = new Map<string, UsageTotals>()
   const rated = new Map<string, UsageRateRow>()
+  const sessions = new Map<string, UsageSessionRow>()
   const recent: UsageRecord[] = []
   for (const record of records) {
     addUsage(total, record)
@@ -206,7 +224,9 @@ export function summarizeRecords(records: readonly UsageRecord[], resolve: RateR
     // An unattributed failure (`model === ''`) still folds into totals,
     // byDay, and rateRows (so a day-range filter keeps the count). It
     // stays out of byModel / byHour — a blank table row would pretend
-    // we know the route.
+    // we know the route. The session dimension keeps it too: request
+    // counts must reconcile per session, and a failure belongs to its
+    // session even when no model was ever observed.
     if (record.model !== '') {
       const hour = hourKey(record.time)
       const hourTotals = hours.get(hourRowKey(hour, record.model)) ?? emptyTotals()
@@ -222,6 +242,19 @@ export function summarizeRecords(records: readonly UsageRecord[], resolve: RateR
       ?? { day, model: record.model, rate, totals: emptyTotals() }
     addUsage(cell.totals, record)
     rated.set(rowKey, cell)
+    const sessionCell: UsageSessionRow = {
+      sessionId: record.sessionId,
+      day,
+      model: record.model,
+      rate,
+      lastTime: record.time,
+      totals: emptyTotals(),
+    }
+    const sessionKey = sessionRowKey(sessionCell)
+    const folded = sessions.get(sessionKey) ?? sessionCell
+    addUsage(folded.totals, record)
+    sessions.set(sessionKey, folded)
+    if (record.time > folded.lastTime) folded.lastTime = record.time
     if (recent.length === RECENT_LIMIT) recent.shift()
     recent.push(record)
   }
@@ -229,7 +262,15 @@ export function summarizeRecords(records: readonly UsageRecord[], resolve: RateR
   const byHour: UsageHourRow[] = hourRows(hours)
   const byModel: UsageModelRow[] = modelRows(models)
   recent.sort((left, right) => right.time - left.time)
-  return { total, byDay, byHour, byModel, rateRows: rateRowsSorted(rated.values()), recent }
+  return {
+    total,
+    byDay,
+    byHour,
+    byModel,
+    rateRows: rateRowsSorted(rated.values()),
+    bySession: sessionRowsSorted(sessions.values()),
+    recent,
+  }
 }
 
 /**
@@ -353,6 +394,7 @@ export function mergeSummaries(
   const hours = new Map<string, UsageTotals>()
   const models = new Map<string, UsageTotals>()
   const rated = new Map<string, UsageRateRow>()
+  const sessions = new Map<string, UsageSessionRow>()
   for (const row of [...left.byDay, ...right.byDay]) {
     const day = days.get(row.day) ?? emptyTotals()
     addTotals(day, row.totals)
@@ -376,6 +418,17 @@ export function mergeSummaries(
     addTotals(cell.totals, row.totals)
     rated.set(key, cell)
   }
+  // `?? []`: a hand-built or legacy-shaped summary without the session
+  // dimension folds as if it had none — on-disk rollups fail validation
+  // instead (isRollupFile), so this leniency only serves in-memory shapes.
+  for (const row of [...(left.bySession ?? []), ...(right.bySession ?? [])]) {
+    const key = sessionRowKey(row)
+    const cell = sessions.get(key)
+      ?? { ...row, totals: emptyTotals() }
+    addTotals(cell.totals, row.totals)
+    if (row.lastTime > cell.lastTime) cell.lastTime = row.lastTime
+    sessions.set(key, cell)
+  }
   const recent = [...left.recent, ...right.recent]
     .sort((a, b) => b.time - a.time)
     .slice(0, RECENT_LIMIT)
@@ -385,6 +438,7 @@ export function mergeSummaries(
     byHour: hourRows(hours),
     byModel: modelRows(models),
     rateRows: rateRowsSorted(rated.values()),
+    bySession: sessionRowsSorted(sessions.values()),
     recent,
   }
 }
@@ -422,6 +476,13 @@ export function filterSummary(
     (from === undefined || row.hour.slice(0, 10) >= from)
     && (to === undefined || row.hour.slice(0, 10) <= to)
     && (model === undefined || row.model === model))
+  // Session cells keep the same granule the rate rows carry (day × model ×
+  // rate per session), so the filtered fold stays the exact source the cost
+  // layer bills from — same pattern as `rows`, one dimension wider.
+  const bySession = summary.bySession.filter(row =>
+    (from === undefined || row.day >= from)
+    && (to === undefined || row.day <= to)
+    && (model === undefined || row.model === model))
   const total = emptyTotals()
   const days = new Map<string, UsageTotals>()
   const models = new Map<string, UsageTotals>()
@@ -437,7 +498,7 @@ export function filterSummary(
     }
   }
   const recent = filterRecordsByRange(summary.recent, undefined, dayRangeFilter(from, to, model))
-  return { dataDir: summary.dataDir, total, byDay: dayRows(days), byHour, byModel: modelRows(models), rateRows: rateRowsSorted(rows), recent }
+  return { dataDir: summary.dataDir, total, byDay: dayRows(days), byHour, byModel: modelRows(models), rateRows: rateRowsSorted(rows), bySession, recent }
 }
 
 /**
@@ -461,6 +522,17 @@ export function attachCosts(summary: TokenSummary & { dataDir: string }, pricing
     costs.set(row.model, (costs.get(row.model) ?? 0) + cost)
     totalCost += cost
   }
+  // Session cells bill from their own rate identity — the same units the
+  // per-model cost folds from, so the session table's cost column and the
+  // summary card reconcile without any extra plumbing. An unpriced model's
+  // cells stay 0 and surface through unpricedModels as before.
+  const bySession: CostedSessionCell[] = summary.bySession.map(row => {
+    const rules = pricing[row.model]
+    return {
+      ...row,
+      cost: rules === undefined ? 0 : costOf(row.totals, ratesForKey(rules, row.rate)),
+    }
+  })
   const byModel: CostedModelRow[] = summary.byModel.map(row => ({
     model: row.model,
     totals: row.totals,
@@ -478,9 +550,137 @@ export function attachCosts(summary: TokenSummary & { dataDir: string }, pricing
     byDay: summary.byDay,
     byHour: summary.byHour,
     byModel,
+    bySession,
     rateRows: summary.rateRows,
     recent: summary.recent,
   }
+}
+
+/** How many session rows the route sends, counted after the fold — the
+ * truncation that makes folding a server-side concern in the first place. */
+export const SESSION_ROW_LIMIT = 20
+
+/** One entry of the session-metadata index the fold reads identities from
+ * (the duck-typed projection of `session-meta.ts`'s store). */
+export interface SessionMetaEntry {
+  title?: string
+  cwd?: string
+  parentSession?: string
+}
+
+/**
+ * Fold the costed per-session cells into the final rows the settings page's
+ * session table renders: one row per top-level session with its whole
+ * subtree merged in, priced, sorted by cost descending, and truncated to
+ * `limit` — the fold changes ranking (a parent row ranks by its subtree's
+ * cost), so the cut must see the folded order or it would drop the wrong
+ * rows. Subagents never surface as rows of their own; the row's
+ * `childCount` badge is their only visibility here (the conversation view's
+ * subagent table owns the per-child drill-down).
+ *
+ * Fold rules all converge on "the sum never changes": a session without a
+ * `parentSession` is a root, a parent missing from the cells (or from the
+ * index) leaves the child a top-level row, nested subagents walk to the
+ * topmost root, and a defensive cut on a parent cycle keeps every row as
+ * its own root rather than dropping one. Identity fields (title, cwd) come
+ * from the metadata index — the server attaches them so the wire carries
+ * final rows and the client never reassembles anything.
+ * @param summary - the (already filtered) costed summary.
+ * @param meta - the session-metadata index (id → identity fields).
+ * @param limit - maximum rows returned.
+ * @returns the truncated, cost-descending session rows.
+ */
+export function buildSessionRows(
+  summary: CostedSummary,
+  meta: ReadonlyMap<string, SessionMetaEntry>,
+  limit: number,
+): SessionUsageRow[] {
+  interface Accum {
+    totals: UsageTotals
+    cost: number
+    firstTime: number
+    lastTime: number
+  }
+  const cells = new Map<string, Accum>()
+  for (const cell of summary.bySession) {
+    const bucket = cells.get(cell.sessionId) ?? {
+      totals: emptyTotals(),
+      cost: 0,
+      firstTime: dayStart(cell.day),
+      lastTime: cell.lastTime,
+    }
+    addTotals(bucket.totals, cell.totals)
+    bucket.cost += cell.cost
+    const dayStartMs = dayStart(cell.day)
+    if (dayStartMs < bucket.firstTime) bucket.firstTime = dayStartMs
+    if (cell.lastTime > bucket.lastTime) bucket.lastTime = cell.lastTime
+    cells.set(cell.sessionId, bucket)
+  }
+  // Lineage index: a parent the index never saw is the same as no parent.
+  const parentOf = new Map<string, string>()
+  for (const [id, entry] of meta) {
+    if (entry.parentSession !== undefined && entry.parentSession !== '') parentOf.set(id, entry.parentSession)
+  }
+  // Walk up the lineage to the topmost ancestor that holds cells; a parent
+  // outside the cells (no usage in the window, or an orphan) ends the walk,
+  // and a `seen` guard turns a pathological cycle into a top-level row.
+  const rootOf = (id: string): string => {
+    let current = id
+    const seen = new Set<string>([id])
+    for (;;) {
+      const parent = parentOf.get(current)
+      if (parent === undefined || seen.has(parent) || !cells.has(parent)) return current
+      seen.add(parent)
+      current = parent
+    }
+  }
+  // Two-pass fold: group every session's accumulation under its root
+  // first, then merge each group — order-independent, so iteration order
+  // cannot double-count a root or drop a child that landed first.
+  const grouped = new Map<string, Accum[]>()
+  for (const [id, accum] of cells) {
+    const root = rootOf(id)
+    const bucket = grouped.get(root) ?? []
+    bucket.push(accum)
+    grouped.set(root, bucket)
+  }
+  const rows = new Map<string, { accum: Accum; childCount: number }>()
+  for (const [root, accums] of grouped) {
+    const merged: Accum = { totals: emptyTotals(), cost: 0, firstTime: accums[0]!.firstTime, lastTime: accums[0]!.lastTime }
+    for (const accum of accums) {
+      addTotals(merged.totals, accum.totals)
+      merged.cost += accum.cost
+      if (accum.firstTime < merged.firstTime) merged.firstTime = accum.firstTime
+      if (accum.lastTime > merged.lastTime) merged.lastTime = accum.lastTime
+    }
+    // The root itself is one of the group's sessions (rootOf always lands
+    // on a session that holds cells); the rest are its folded descendants.
+    rows.set(root, { accum: merged, childCount: accums.length - 1 })
+  }
+  const entryOf = (id: string): SessionMetaEntry | undefined => {
+    const entry = meta.get(id)
+    return entry !== undefined && (entry.title !== undefined || entry.cwd !== undefined)
+      ? { ...(entry.title !== undefined ? { title: entry.title } : {}), ...(entry.cwd !== undefined ? { cwd: entry.cwd } : {}) }
+      : undefined
+  }
+  const out: SessionUsageRow[] = [...rows.entries()].map(([sessionId, { accum, childCount }]) => {
+    const entry = entryOf(sessionId)
+    return {
+      sessionId,
+      ...(entry !== undefined ? entry : {}),
+      // The folded-descendants badge: a subagent subtree's only visibility
+      // in this table (count 0 omits the key entirely).
+      ...(childCount > 0 ? { childCount } : {}),
+      totals: accum.totals,
+      cost: accum.cost,
+      firstTime: accum.firstTime,
+      lastTime: accum.lastTime,
+    }
+  })
+  out.sort((left, right) =>
+    right.cost - left.cost || right.lastTime - left.lastTime
+      || (left.sessionId < right.sessionId ? -1 : 1))
+  return out.length > limit ? out.slice(0, limit) : out
 }
 
 /**
@@ -490,8 +690,7 @@ export function attachCosts(summary: TokenSummary & { dataDir: string }, pricing
  * usage-tab polls do not re-parse frozen files.
  * @param dir - the plugin's data directory.
  * @returns parsed records, or [] when the directory does not exist.
- */
-export async function readAllRecords(dir: string, logger: LoggerLike = consoleLogger): Promise<UsageRecord[]> {
+ */export async function readAllRecords(dir: string, logger: LoggerLike = consoleLogger): Promise<UsageRecord[]> {
   const records: UsageRecord[] = []
   for (const name of await listDayFiles(dir)) {
     records.push(...await readDayFile(dir, name, logger))

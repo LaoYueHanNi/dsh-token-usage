@@ -41,6 +41,46 @@
   color: var(--dsw-alias-label-secondary);
 }
 
+/* Dimension switch: a track with an inset selected pill, the same
+ * vocabulary as the usage tab's scope switch. The selected segment names
+ * the table below — it IS the block title, no separate heading. */
+.segmented {
+  display: inline-flex;
+  align-items: stretch;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 8px;
+  background: var(--dsw-alias-fill-container, transparent);
+}
+
+.segBtn {
+  border: none;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary));
+  font-size: 12px;
+  font-weight: 500;
+  padding: 4px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.segBtn:hover:not(.segActive) {
+  color: var(--dsw-alias-label-secondary);
+  background: color-mix(in srgb, var(--dsw-alias-label-primary) 6%, transparent);
+}
+
+.segBtn:focus-visible {
+  outline: 2px solid var(--dsw-alias-border-l2);
+  outline-offset: 1px;
+}
+
+.segActive {
+  background: color-mix(in srgb, var(--dsw-alias-label-primary) 16%, transparent);
+  color: var(--dsw-alias-label-primary);
+  font-weight: 600;
+}
+
 /* Scroll shell: the table keeps its natural single-line width and scrolls
  * horizontally when the panel is narrower, instead of squeezing cells into
  * wrapped or clipped content. Vertically the shell is capped and scrolls
