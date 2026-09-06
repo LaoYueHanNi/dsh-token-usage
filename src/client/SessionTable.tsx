@@ -14,7 +14,7 @@
  * @module token-usage/client/SessionTable
  */
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SessionUsageRow } from '../wire.ts'
@@ -34,6 +34,31 @@ function dirTailOf(cwd: string): string {
  * tell sessions apart when no title ever landed. */
 function shortIdOf(sessionId: string): string {
   return sessionId.length > 8 ? `${sessionId.slice(0, 8)}…` : sessionId
+}
+
+/** Browser-level grouping preference: localStorage, not per-component state —
+ * a filter change unmounts this table (the section flips to its loading
+ * branch), and the choice must survive that remount as well as reloads. */
+const SESSION_GROUPED_KEY = 'dsh.token-usage.sessionGrouped'
+
+function readGroupedPreference(): boolean {
+  if (typeof localStorage === 'undefined') return true
+  try {
+    // Absent or unparseable reads as the default (grouped); only an
+    // explicit '0' (the flat-list pick) turns grouping off.
+    return localStorage.getItem(SESSION_GROUPED_KEY) !== '0'
+  } catch {
+    return true
+  }
+}
+
+function writeGroupedPreference(grouped: boolean): void {
+  try {
+    if (grouped) localStorage.removeItem(SESSION_GROUPED_KEY)
+    else localStorage.setItem(SESSION_GROUPED_KEY, '0')
+  } catch {
+    // Storage may refuse (private mode); the choice just stays session-local.
+  }
 }
 
 /** The columns whose headers sort the table, and the row value each reads. */
@@ -61,19 +86,51 @@ function nextSort(current: SortState, key: SortKey): SortState {
  * directory groups (rows indent under their group head), one row per
  * served session. The token / cost / last-active headers sort the rows
  * client-side within the served set (groups keep their directory order;
- * rows reorder inside each group).
- * @param props - the served rows, the currency view, locale.
+ * rows reorder inside each group). Holding Ctrl over a session title draws
+ * a dashed underline and a click jumps to that session (the parent closes
+ * the settings panel; the conversation view lands on the session's last
+ * used tab) — rows the session controller does not list never invite it.
+ * @param props - the served rows, the currency view, the session jump
+ * seats (absent on tests / hosts without the controller), locale.
  */
-export function SessionTable({ rows, view, t }: {
+export function SessionTable({ rows, view, t, sessionListed, openSession }: {
   rows: readonly SessionUsageRow[]
   view: CurrencyView
   t: TranslateNS<'token-usage'>
+  sessionListed?: (id: string) => boolean
+  openSession?: (id: string) => void
 }): ReactNode {
   // Directory grouping: presentation-only (rows already carry their cwd),
-  // default on, session-local like the usage tab's switches — never
-  // persisted, never a request.
-  const [grouped, setGrouped] = useState(true)
+  // default on, persisted at browser level so a filter change (which
+  // unmounts this table) and a reload keep the user's pick.
+  const [grouped, setGrouped] = useState(readGroupedPreference)
+  const toggleGrouped = (next: boolean): void => {
+    setGrouped(next)
+    writeGroupedPreference(next)
+  }
   const [sort, setSort] = useState<SortState>(null)
+  // Whether Ctrl is held: the jump affordance (dashed title, click) exists
+  // only while it is, so plain clicks keep the rows inert. `blur` resets —
+  // a focus loss can swallow the keyup and strand the state on.
+  const [ctrlHeld, setCtrlHeld] = useState(false)
+  useEffect(() => {
+    const down = (event: KeyboardEvent): void => { if (event.key === 'Control') setCtrlHeld(true) }
+    const up = (event: KeyboardEvent): void => { if (event.key === 'Control') setCtrlHeld(false) }
+    const blur = (): void => setCtrlHeld(false)
+    window.addEventListener('keydown', down)
+    window.addEventListener('keyup', up)
+    window.addEventListener('blur', blur)
+    return () => {
+      window.removeEventListener('keydown', down)
+      window.removeEventListener('keyup', up)
+      window.removeEventListener('blur', blur)
+    }
+  }, [])
+  // A row is jumpable when the controller knows the session; the click
+  // re-checks through openSession (the list may have moved between hover
+  // and click), which reports whether it actually opened.
+  const jumpable = (id: string): boolean =>
+    ctrlHeld && sessionListed !== undefined && openSession !== undefined && sessionListed(id)
   const sorted = useMemo(() => {
     if (sort === null) return rows
     const factor = sort.dir === 'desc' ? -1 : 1
@@ -124,7 +181,7 @@ export function SessionTable({ rows, view, t }: {
             type="button"
             className={grouped ? `${styles['segBtn']} ${styles['segActive']}` : styles['segBtn']}
             aria-pressed={grouped}
-            onClick={() => setGrouped(true)}
+            onClick={() => toggleGrouped(true)}
           >
             {t('session.group.on')}
           </button>
@@ -132,7 +189,7 @@ export function SessionTable({ rows, view, t }: {
             type="button"
             className={!grouped ? `${styles['segBtn']} ${styles['segActive']}` : styles['segBtn']}
             aria-pressed={!grouped}
-            onClick={() => setGrouped(false)}
+            onClick={() => toggleGrouped(false)}
           >
             {t('session.group.off')}
           </button>
@@ -168,16 +225,29 @@ export function SessionTable({ rows, view, t }: {
     // session id plus the time span (the span substitutes for the missing
     // title, it never pretends to be one). The directory tail rides along
     // as the secondary identity only in the ungrouped list — grouped, it
-    // lives in the group head.
+    // lives in the group head. While Ctrl is held over a listed session,
+    // the identity becomes a jump affordance: dashed underline, click
+    // opens the session (the parent closes the settings panel).
+    const jump = jumpable(row.sessionId)
     return (
       <tr key={row.sessionId}>
         <td className={indented ? `${styles['sessionCol']} ${styles['sessionIndent']}` : styles['sessionCol']}>
           <span className={styles['sessionCell']}>
-            <span className={styles['sessionName']}>
+            <button
+              type="button"
+              className={jump ? `${styles['sessionName']} ${styles['jumpable']}` : styles['sessionName']}
+              title={jump ? t('session.openHint') : undefined}
+              onClick={jump
+                ? event => {
+                  event.preventDefault()
+                  openSession?.(row.sessionId)
+                }
+                : undefined}
+            >
               {row.title !== undefined
                 ? row.title
                 : `${shortIdOf(row.sessionId)} · ${dayKeyOf(new Date(row.firstTime))} – ${dayKeyOf(new Date(row.lastTime))}`}
-            </span>
+            </button>
             {row.childCount !== undefined && row.childCount > 0
               ? (
                 <span

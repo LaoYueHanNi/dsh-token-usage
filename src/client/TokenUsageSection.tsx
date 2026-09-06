@@ -160,11 +160,19 @@ function FilterBar({ filters, models, onChange, onPricingTable, t }: {
 /**
  * Render the Token Usage section content column. The `t` seat arrives from
  * the registration's `locale:` declaration and follows the active locale.
- * @param props - the settings shell's owner share (close is unused: the nav
- * rail owns leaving the panel) plus the framework-injected translate seat.
+ * The session jump seats (`sessionListed` / `openSession`) come from the
+ * registration's `inject:` — the session table's Ctrl+click affordance
+ * reads the controller's list and opens the target session.
+ * @param props - the settings shell's owner share (close rides along to the
+ * session jump: the jump closes the panel) plus the injected jump seats and
+ * the framework-injected translate seat.
  * @returns the section, one of loading / error / ready.
  */
-export function TokenUsageSection({ t }: SettingsSectionOwnerProps & { t: TranslateNS<'token-usage'> }): ReactNode {
+export function TokenUsageSection({ t, close, sessionListed, openSession }: SettingsSectionOwnerProps & {
+  t: TranslateNS<'token-usage'>
+  sessionListed?: (id: string) => boolean
+  openSession?: (id: string) => boolean
+}): ReactNode {
   const rootRef = useRef<HTMLDivElement>(null)
   useColorSchemeMirror(rootRef)
   // Entering the page starts on today's window (the 1d quick range).
@@ -409,7 +417,16 @@ export function TokenUsageSection({ t }: SettingsSectionOwnerProps & { t: Transl
                     )
                     : (
                       (state.value.sessionRows?.length ?? 0) > 0
-                        ? <SessionTable rows={state.value.sessionRows ?? []} view={view} t={t} />
+                        ? (
+                          <SessionTable
+                            rows={state.value.sessionRows ?? []}
+                            view={view}
+                            t={t}
+                            {...sessionListed !== undefined && openSession !== undefined
+                              ? { sessionListed, openSession: id => { if (openSession(id)) close() } }
+                              : {}}
+                          />
+                        )
                         : <p className={styles['muted']}>{t('chart.empty')}</p>
                     )}
                 </>

@@ -61,7 +61,10 @@ const ROWS: SessionUsageRow[] = [
 ]
 
 describe('SessionTable', () => {
-  afterEach(cleanup)
+  afterEach(() => {
+    cleanup()
+    localStorage.clear()
+  })
 
   it('renders the served rows with the grouping switch above the table', () => {
     render(<SessionTable rows={ROWS} view={VIEW} t={t} />)
@@ -149,5 +152,59 @@ describe('SessionTable', () => {
     // 最近活跃 sorts by recency: first click descending → B (300) / C (200) / A (100).
     fireEvent.click(within(table).getByText('最近活跃'))
     expect(order()).toEqual(['B', 'C', 'A'])
+  })
+
+  it('jumps on Ctrl+click only for listed sessions; plain clicks stay inert', () => {
+    const opened: string[] = []
+    render(
+      <SessionTable
+        rows={ROWS}
+        view={VIEW}
+        t={t}
+        sessionListed={id => id === 's-root'}
+        openSession={id => { opened.push(id) }}
+      />,
+    )
+    const table = screen.getByRole('table', { name: '按会话' })
+    const root = within(table).getByText('Fix the login flow')
+    // No Ctrl: no affordance, no click handler.
+    expect(root.className).not.toMatch(/jumpable/)
+    fireEvent.click(root)
+    expect(opened).toEqual([])
+    // Ctrl held: the listed row draws the dashed affordance and jumps.
+    fireEvent.keyDown(window, { key: 'Control' })
+    expect(root.className).toMatch(/jumpable/)
+    fireEvent.click(root)
+    expect(opened).toEqual(['s-root'])
+    // An unlisted session (archived / unknown to the controller) never
+    // invites the jump even while Ctrl is held.
+    const bare = within(table).getByText('s-bare · 2026-01-10 – 2026-01-10')
+    expect(bare.className).not.toMatch(/jumpable/)
+    // Ctrl released: the affordance retracts.
+    fireEvent.keyUp(window, { key: 'Control' })
+    expect(root.className).not.toMatch(/jumpable/)
+  })
+
+  it('persists the grouping pick at browser level across remounts', () => {
+    // First mount: default grouped; pick the flat list.
+    const first = render(<SessionTable rows={ROWS} view={VIEW} t={t} />)
+    fireEvent.click(within(screen.getByRole('group', { name: '目录分组' })).getByText('列表'))
+    cleanup()
+    // Second mount (what a filter change does): the pick survives.
+    render(<SessionTable rows={ROWS} view={VIEW} t={t} />)
+    const group = screen.getByRole('group', { name: '目录分组' })
+    expect(within(group).getByText('列表').getAttribute('aria-pressed')).toBe('true')
+    expect(within(group).getByText('分组').getAttribute('aria-pressed')).toBe('false')
+    first.unmount()
+  })
+
+  it('returns to grouped when the stored pick is cleared', () => {
+    localStorage.setItem('dsh.token-usage.sessionGrouped', '0')
+    render(<SessionTable rows={ROWS} view={VIEW} t={t} />)
+    const group = screen.getByRole('group', { name: '目录分组' })
+    expect(within(group).getByText('列表').getAttribute('aria-pressed')).toBe('true')
+    // Picking grouped again removes the key (absence reads as the default).
+    fireEvent.click(within(group).getByText('分组'))
+    expect(localStorage.getItem('dsh.token-usage.sessionGrouped')).toBeNull()
   })
 })

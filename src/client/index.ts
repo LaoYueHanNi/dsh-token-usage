@@ -18,6 +18,8 @@
 // Type-only: pulls the ctx.slots declaration merge (owned by ui-renderer,
 // whose published types no longer re-declare it through ui-session).
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
+import type { SessionId } from '@deepseek-ai/dsh-client-connection/client'
+import type { ISessions } from '@deepseek-ai/dsh-api-session-controller/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 // Type-only: pulls ctx.uiWorkspace (directory picker) into this program.
 import type {} from '@deepseek-ai/dsh-client-ui-workspace/client'
@@ -51,9 +53,10 @@ import { en, NS, zh } from './locales.ts'
 const TOKEN_USAGE_NS = 'token-usage'
 
 /** Required services: the slot registry, the locale dictionaries, the
- * settings scope, and the workspace navigation service (its native
- * directory picker backs the card's browse button). */
-export const inject = ['slots', 'locale', 'connection', 'remote', 'settingsScope', 'uiWorkspace']
+ * settings scope, the workspace navigation service (its native directory
+ * picker backs the card's browse button), and the session controller (the
+ * stats page's Ctrl+click session jump reads the list and opens the target). */
+export const inject = ['slots', 'locale', 'connection', 'remote', 'settingsScope', 'uiWorkspace', 'sessions']
 
 /**
  * Register the dictionary pair, then the settings page and the plugin
@@ -65,12 +68,31 @@ export function apply(ctx: ClientContext): void {
   // Stable per-namespace translate reading the active locale at call time;
   // the label thunk re-evaluates it per read, so the nav row follows switches.
   const t = ctx.locale.bind(NS)
+  // The stats page's session jump: the pure predicate drives the Ctrl-hover
+  // affordance (a session outside the controller's list — archived, or a
+  // pre-install log row the list never saw — renders no dashed underline and
+  // refuses the click), and the jump closes the settings panel and opens the
+  // session. The conversation view then lands on whatever tab the session
+  // last used (the host persists the per-session view preference), so a
+  // session that previously showed its usage tab opens directly on it.
+  // Cast over the merge: the host program's `sessions` (a Session[]) and the
+  // client's ISessions share the service name, so the cordis Context merge
+  // is ambiguous here — the runtime inject is the client instance.
+  const clientSessions = (ctx as unknown as { sessions: ISessions }).sessions
+  const sessionListed = (id: string): boolean =>
+    clientSessions.list.getSnapshot().byId[id as SessionId] !== undefined
+  const openSession = (id: string): boolean => {
+    if (!sessionListed(id)) return false
+    clientSessions.open(id as SessionId)
+    return true
+  }
   ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',
     id: 'token-usage',
     order: 50,
     label: () => t('nav.label'),
     locale: NS,
+    inject: () => ({ sessionListed, openSession }),
   }, TokenUsageSection))
 
   // The Usage view tab: one entry of the conversation view ring (beside the
