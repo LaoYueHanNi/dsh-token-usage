@@ -16,14 +16,22 @@ import type { TokenUsageKey } from './locales.ts'
 /** Known `LlmFailure.code`s that have a `fail.*` locale label. An unknown
  * future code is not in this map and the tooltip renders it verbatim. */
 const FAILURE_CODE_LABEL_KEYS = {
+  ABORTED: 'fail.ABORTED',
+  AUTH: 'fail.AUTH',
+  CONTEXT_WINDOW_EXCEEDED: 'fail.CONTEXT_WINDOW_EXCEEDED',
+  EMPTY_RESPONSE: 'fail.EMPTY_RESPONSE',
+  FILES_API: 'fail.FILES_API',
+  INVALID_CREDENTIAL: 'fail.INVALID_CREDENTIAL',
+  INVALID_REQUEST: 'fail.INVALID_REQUEST',
+  MALFORMED_RESPONSE: 'fail.MALFORMED_RESPONSE',
+  MISSING_CREDENTIAL: 'fail.MISSING_CREDENTIAL',
+  QUOTA: 'fail.QUOTA',
   RATE_LIMIT: 'fail.RATE_LIMIT',
+  REQUEST_EXTENSION: 'fail.REQUEST_EXTENSION',
   SERVER: 'fail.SERVER',
+  STREAM_CLOSED: 'fail.STREAM_CLOSED',
   TIMEOUT: 'fail.TIMEOUT',
   TRANSPORT: 'fail.TRANSPORT',
-  EMPTY_RESPONSE: 'fail.EMPTY_RESPONSE',
-  QUOTA: 'fail.QUOTA',
-  CONTEXT_WINDOW_EXCEEDED: 'fail.CONTEXT_WINDOW_EXCEEDED',
-  INVALID_CREDENTIAL: 'fail.INVALID_CREDENTIAL',
   UNKNOWN: 'fail.UNKNOWN',
 } as const satisfies Record<string, TokenUsageKey>
 

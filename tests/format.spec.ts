@@ -80,6 +80,10 @@ describe('failuresTooltip', () => {
     expect(failuresTooltip({ TRANSPORT: 1, RATE_LIMIT: 1 }, t)).toBe('限流 ×1\n网络异常 ×1')
   })
 
+  it('maps every tracked provider code to a Chinese label', () => {
+    expect(failuresTooltip({ INVALID_REQUEST: 2, AUTH: 1 }, t)).toBe('请求无效 ×2\n鉴权失败 ×1')
+  })
+
   it('falls back to the raw code when the locale has no label', () => {
     expect(failuresTooltip({ BRAND_NEW_CODE: 3 }, t)).toBe('BRAND_NEW_CODE ×3')
   })
