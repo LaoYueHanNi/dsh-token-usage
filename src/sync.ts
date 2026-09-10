@@ -35,6 +35,10 @@ export interface SyncResult {
   added: number
   /** Requests already present in the log (deduped). */
   skipped: number
+  /** Rows removed because no readable session log reproduced them: relics of
+   * an older stored format, whose event coordinates the host rewrote when it
+   * migrated the log to the current format generation. */
+  removed: number
   /** Sessions whose stored log failed to load or validate. Their rows are
    * absent from this run; every such session is reported through
    * {@link SyncDeps.onSessionFailure} and counted here. */
@@ -58,6 +62,9 @@ export interface SyncProgressTick {
   added: number
   /** Rows skipped by dedupe so far. */
   skipped: number
+  /** Rows removed by the closing reconcile pass so far. Stays zero until the
+   * walk finishes: the pass needs every readable session to have spoken. */
+  removed: number
   /** Sessions skipped so far because their stored log failed to load or
    * validate; they count as processed for the progress bar. */
   failedSessions: number
@@ -127,10 +134,16 @@ export interface SyncPersistence {
   inspect?(id: SessionId, signal?: AbortSignal): Promise<{ events: readonly SessionEvent[]; meta?: SessionHeaderFacts }>
 }
 
+/**
+ * The ledger surface the sync needs (duck-typed for tests): the host passes
+ * the {@link UsageLog}, tests pass an in-memory twin.
+ */
+export type SyncLog = Pick<UsageLog, 'scan' | 'ids' | 'record' | 'reconcile'>
+
 /** Dependencies of one sync run. */
 export interface SyncDeps {
   persistence: SyncPersistence
-  log: UsageLog
+  log: SyncLog
   /** Whether the sync records `compaction/summary` events (default true,
    * mirroring the `recordCompaction` config). */
   recordCompaction?: boolean
@@ -143,6 +156,11 @@ export interface SyncDeps {
    * (the session is then skipped). The host uses this to log which session
    * and why; aborts raised through `signal` are re-thrown, never reported. */
   onSessionFailure?: (id: SessionId, error: unknown) => void
+  /** Whether the closing reconcile pass runs (default true). The boot path
+   * passes false: a first-run install has no stale rows to drop, and the
+   * pass would delay the marker write that a concurrent data-directory
+   * migration waits behind. */
+  reconcile?: boolean
 }
 
 /** One generation-normalized read surface: {@link syncHistory} walks sessions
@@ -233,14 +251,24 @@ export async function syncHistory(
   signal?: AbortSignal,
 ): Promise<SyncResult> {
   await deps.log.scan()
+  // Snapshot before the walk: only rows already saved are reconcile
+  // candidates, so a request landing live mid-walk is never deleted.
+  const eligible = deps.log.ids()
   const reader = readerOf(deps.persistence)
   const sessions = await reader.list(signal)
   let added = 0
   let skipped = 0
+  let removed = 0
   let failedSessions = 0
   const total = sessions.length
   let processed = 0
-  onTick?.({ processed, total, added, skipped, failedSessions })
+  /** Every id this walk reproduces; the reconcile pass keeps exactly these. */
+  const reproduced = new Set<string>()
+  /** Sessions this walk read in full. Only their rows may be reconciled: a
+   * row whose session is missing from the list (deleted, or hidden behind a
+   * header this build cannot read) is never dropped for its absence. */
+  const readable = new Set<SessionId>()
+  onTick?.({ processed, total, added, skipped, removed, failedSessions })
   for (const id of sessions) {
     signal?.throwIfAborted()
     // One unreadable session log (a format the current dsh build rejects,
@@ -256,9 +284,12 @@ export async function syncHistory(
       failedSessions += 1
       processed += 1
       deps.onSessionFailure?.(id, error)
-      onTick?.({ processed, total, added, skipped, failedSessions })
+      onTick?.({ processed, total, added, skipped, removed, failedSessions })
       continue
     }
+    // The session was read in full: this walk is now the authority for what
+    // the ledger must hold, so its stale coordinates become droppable.
+    readable.add(id)
     // Last-known route model of this session: failure rows need a model to
     // attribute, and turn/end names none, so the walk follows the same
     // request/context + assistant/message events the live recorder does.
@@ -275,6 +306,9 @@ export async function syncHistory(
       if (revealedTitle !== undefined) title = revealedTitle
       const record = recordOfEvent(event, id, model, deps.recordCompaction !== false)
       if (record === null) continue
+      // Keep the id whether the row was already saved or lands now: the
+      // reconcile pass keeps exactly the ids this walk produced.
+      reproduced.add(record.requestId)
       if (await deps.log.record(record)) added += 1
       else skipped += 1
     }
@@ -292,9 +326,15 @@ export async function syncHistory(
       if (Object.keys(patch).length > 0) await deps.meta.upsert(id, patch)
     }
     processed += 1
-    onTick?.({ processed, total, added, skipped, failedSessions })
+    onTick?.({ processed, total, added, skipped, removed, failedSessions })
   }
-  return { added, skipped, failedSessions }
+  // Reconcile last, once every readable session has spoken for its rows: a
+  // saved row no readable session reproduces is a relic of an older stored
+  // format. A session that merely failed to load protects its own rows.
+  if (deps.reconcile !== false) {
+    removed = await deps.log.reconcile(reproduced, readable, eligible)
+  }
+  return { added, skipped, removed, failedSessions }
 }
 
 /**
@@ -316,7 +356,7 @@ export async function syncHistory(
 export async function autoSyncIfNeeded(deps: SyncDeps, dir: string): Promise<SyncResult | null> {
   const state = await readSyncState(dir)
   if (state !== null && state.metaSyncedAt !== undefined) return null
-  const result = await syncHistory(deps)
+  const result = await syncHistory({ ...deps, reconcile: false })
   if (state === null) await markInitialized(dir, undefined, true)
   else await markMetaSynced(dir)
   return result

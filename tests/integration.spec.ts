@@ -457,7 +457,10 @@ describe('live data-directory relocation', () => {
 
   /** Poll until a directory stops existing (migration settled and removed it). */
   async function pollGone(dir: string): Promise<void> {
-    const deadline = Date.now() + 2_000
+    // The migration is asynchronous and waits on the append queue behind any
+    // in-flight startup work, so a tight deadline flakes under the parallel
+    // full-suite load (Windows file locks make the removal itself slower).
+    const deadline = Date.now() + 10_000
     while (Date.now() < deadline) {
       if (!existsSync(dir)) return
       await new Promise(resolve => setTimeout(resolve, 20))

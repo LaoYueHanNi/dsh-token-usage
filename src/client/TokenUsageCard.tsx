@@ -104,6 +104,7 @@ export function TokenUsageCard(props: TokenUsageCardProps) {
             total: body.total,
             added: body.added,
             skipped: body.skipped,
+            removed: typeof body.removed === 'number' ? body.removed : 0,
             failedSessions: typeof body.failedSessions === 'number' ? body.failedSessions : 0,
           }
         }
@@ -143,7 +144,7 @@ export function TokenUsageCard(props: TokenUsageCardProps) {
     try {
       const response = await fetch(FULL_SYNC_PATH, { method: 'POST' })
       if (response.status === 202) {
-        setFullSync({ status: 'running', processed: 0, total: 0, added: 0, skipped: 0, failedSessions: 0 })
+        setFullSync({ status: 'running', processed: 0, total: 0, added: 0, skipped: 0, removed: 0, failedSessions: 0 })
         return
       }
       if (response.status === 409) {
@@ -259,6 +260,7 @@ export function TokenUsageCard(props: TokenUsageCardProps) {
                         total: String(fullSync.total),
                         added: String(fullSync.added),
                         skipped: String(fullSync.skipped),
+                        removed: String(fullSync.removed),
                       })}
                       {fullSync.failedSessions > 0
                         ? t('card.fullSync.failuresNote', { count: String(fullSync.failedSessions) })
@@ -279,6 +281,7 @@ export function TokenUsageCard(props: TokenUsageCardProps) {
                     {t('card.fullSync.done', {
                       added: String(fullSync.added),
                       skipped: String(fullSync.skipped),
+                      removed: String(fullSync.removed),
                     })}
                     {fullSync.failedSessions > 0
                       ? t('card.fullSync.failuresNote', { count: String(fullSync.failedSessions) })

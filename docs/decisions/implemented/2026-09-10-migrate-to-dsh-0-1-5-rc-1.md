@@ -37,7 +37,7 @@ Status: implemented
 ## Consequences
 
 - 代价：`sync.ts` 多一条 seam 分支与一个 `SessionReader` 归一化层；新增用例只覆盖 handle 面（旧面由既有 `inspect` 假件覆盖），两代宿主各自需要一次真机回归。
-- 代价：**v3 的 seq 重排会让 `failure:<session>:<seq>` / `compaction:<session>:<seq>` 两类 requestId 漂移**（`src/usage-record.ts:125`、`:154`），宿主升级后手动全量同步可能对同一失败/压缩落两条行（低频；`assistant` 行以 `message.id` 为键，不受影响）。本轮不处理；如需严格去重可另立提交按 `(sessionId, event.time)` 折叠一次。
+- 代价：**v3 的 seq 重排会让 `failure:<session>:<seq>` / `compaction:<session>:<seq>` 两类 requestId 漂移**（`src/usage-record.ts:125`、`:154`），宿主升级后手动全量同步可能对同一失败/压缩落两条行（低频；`assistant` 行以 `message.id` 为键，不受影响）。本轮不改键；陈旧行的清理见后续 [对账式扫描](./2026-09-10-scan-reconciles-stale-ids.md)。
 - 代价：v2→v3 迁移是**严格审计**式的——宿主对未分类事件与未知内容种类直接拒绝（`dsh-session-format-v2-to-v3` 的分类白名单），该会话随即**整体不可读**，插件把它计入 `failedSessions` 跳过。升级后首次全量同步出现少量 `failedSessions` 属预期而非插件缺陷；定性要按 `onSessionFailure` 打出的会话 id 逐个看，且只列出不等于读得出。
 - 代价：声明与实际宿主不一致的事实保留——`^0.1.2-rc.1` 在 semver 上不匹配 `0.1.5-rc.1`，`dsh plugin add` 的 pnpm 输出里会出现 unmet-peer 警告（与既有的 cordis 警告同类，属预期噪音）。
 - 代价：devDependencies 不升，本地 `typecheck` 跑在 `0.1.2-rc.1` 的类型面上，新 seam 的编译期校验缺位——由 handle 面测试假件（形状真实、且刻意不提供 `inspect`）在运行期补上。

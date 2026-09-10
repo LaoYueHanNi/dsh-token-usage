@@ -45,6 +45,9 @@ function dayFilePath(dir: string, time: number): string {
  */
 export class UsageLog {
   private readonly seen = new Set<string>()
+  /** Owning session of every saved id; the reconcile pass uses it to protect
+   * the rows of sessions whose log could not be read. */
+  private readonly owners = new Map<string, string>()
   private queue: Promise<void> = Promise.resolve()
   private ready: Promise<void> | undefined
 
@@ -60,6 +63,15 @@ export class UsageLog {
   /** Whether a request id is already known to this log. */
   has(requestId: string): boolean {
     return this.seen.has(requestId)
+  }
+
+  /**
+   * Snapshot every saved request id. A reconcile pass takes this *before* the
+   * session walk so a row appended by a live request while the walk runs is
+   * never a deletion candidate.
+   */
+  ids(): ReadonlySet<string> {
+    return new Set(this.seen)
   }
 
   /**
@@ -101,6 +113,7 @@ export class UsageLog {
           continue
         }
         this.seen.add(record.requestId)
+        this.owners.set(record.requestId, record.sessionId)
       }
     }
   }
@@ -113,6 +126,7 @@ export class UsageLog {
     if (this.seen.has(record.requestId)) return Promise.resolve(false)
     // Claim before queueing: a concurrent call with the same id dedupes here.
     this.seen.add(record.requestId)
+    this.owners.set(record.requestId, record.sessionId)
     const task = this.queue.then(async () => {
       await this.ensureDir()
       await this.appendOnce(record)
@@ -124,6 +138,7 @@ export class UsageLog {
       .catch((error: unknown) => {
         // Release the claim so a later sync can retry this row.
         this.seen.delete(record.requestId)
+        this.owners.delete(record.requestId)
         this.logger.error('[token-usage] append failed:', error)
         return false
       })
@@ -145,6 +160,59 @@ export class UsageLog {
     this.queue = task.catch(() => {})
     return task.then(() => moved).catch((error: unknown) => {
       this.logger.error('[token-usage] refile by event day failed:', error)
+      return 0
+    })
+  }
+
+  /**
+   * Drop every saved row that the authoritative session walk did not
+   * reproduce. A row whose request id no longer appears in any session log is
+   * a relic of an older stored format: the host rewrote the event coordinates
+   * when it migrated the log to the current format generation, so the walk
+   * reproduces the same requests under new ids.
+   *
+   * Three guards keep this pass from destroying live data:
+   * - only ids in `eligible` (the snapshot taken before the walk) are
+   *   candidates, so a row a live request appended during the walk survives;
+   * - a row is dropped only when its owning session was read **in full** by
+   *   the walk, so "the walk did not see it" is never inferred from a session
+   *   that failed to load, from a session missing out of the list (deleted,
+   *   or hidden behind a header this build cannot read), or from a row whose
+   *   owner is unknown;
+   * - malformed lines are never candidates and stay where they are.
+   *
+   * A day file is rewritten only when it actually loses a row, and the
+   * rewrite is atomic. Runs on the append queue so a live write cannot
+   * interleave with it.
+   * @param keep - request ids the walk reproduced from readable sessions.
+   * @param readableSessions - sessions the walk read in full.
+   * @param eligible - the pre-walk snapshot of saved request ids.
+   * @returns the number of rows removed.
+   */
+  reconcile(
+    keep: ReadonlySet<string>,
+    readableSessions: ReadonlySet<string>,
+    eligible: ReadonlySet<string>,
+  ): Promise<number> {
+    let removed = 0
+    const task = this.queue.then(async () => {
+      // Deliberately no ensureDir: a reconcile still queued when this store's
+      // directory is relocated away would otherwise resurrect it. A missing
+      // directory has nothing to reconcile, and readdir reports exactly that.
+      const dropped = await reconcileDayFiles(
+        this.dir,
+        { keep, readableSessions, eligible, owners: this.owners },
+        this.logger,
+      )
+      removed = dropped.length
+      for (const id of dropped) {
+        this.seen.delete(id)
+        this.owners.delete(id)
+      }
+    })
+    this.queue = task.catch(() => {})
+    return task.then(() => removed).catch((error: unknown) => {
+      this.logger.error('[token-usage] reconcile failed:', error)
       return 0
     })
   }
@@ -264,4 +332,67 @@ async function refileDayFiles(dir: string, logger: LoggerLike): Promise<number> 
     }
   }
   return moved
+}
+
+/** The decision inputs of one reconcile pass. */
+interface ReconcileSets {
+  /** Request ids the session walk reproduced from readable sessions. */
+  keep: ReadonlySet<string>
+  /** Sessions the walk read in full; only their rows may be dropped. */
+  readableSessions: ReadonlySet<string>
+  /** Saved ids as of the walk's start — the only rows that may be dropped. */
+  eligible: ReadonlySet<string>
+  /** Owning session of every saved id. */
+  owners: ReadonlyMap<string, string>
+}
+
+/**
+ * Rewrite every day file without the rows {@link ReconcileSets} marks
+ * droppable, and report the dropped ids. A file is touched only when it
+ * actually loses a row; malformed lines stay in place so a bad row is never
+ * silently dropped by the pass that exists to remove rows on purpose.
+ */
+async function reconcileDayFiles(dir: string, sets: ReconcileSets, logger: LoggerLike): Promise<string[]> {
+  let names: string[]
+  try {
+    names = (await readdir(dir)).filter(name => DAY_FILE.test(name)).sort()
+  } catch (error) {
+    logger.error('[token-usage] cannot list data dir ' + dir + ':', error)
+    return []
+  }
+  const dropped: string[] = []
+  for (const name of names) {
+    const lines = await readDayLines(dir, name, logger)
+    const stay: UsageRecord[] = []
+    const stray: string[] = []
+    let lost = 0
+    for (const line of lines) {
+      if (line.record === null) {
+        stray.push(line.raw)
+        continue
+      }
+      const id = line.record.requestId
+      const doomed = sets.eligible.has(id)
+        && !sets.keep.has(id)
+        && sets.readableSessions.has(sets.owners.get(id) ?? '')
+      if (doomed) {
+        dropped.push(id)
+        lost += 1
+        continue
+      }
+      stay.push(line.record)
+    }
+    if (lost === 0) continue
+    if (stray.length > 0) {
+      const target = join(dir, name)
+      const body = `${stay.map(serializeRecord).join('\n')}${stay.length > 0 ? '\n' : ''}${stray.join('\n')}\n`
+      const tmp = join(dir, `${name}.tmp`)
+      await writeFile(tmp, body, 'utf8')
+      await unlink(target).catch(() => undefined)
+      await rename(tmp, target)
+    } else {
+      await rewriteDayFile(dir, name, stay)
+    }
+  }
+  return dropped
 }

@@ -505,7 +505,7 @@ export function apply(ctx: Context, config: Config = {}) {
   /**
    * Kick off one full scan over every persisted session log and stream the
    * live counts into {@link fullSyncStatus}. The scan is the same shape as
-   * the one-shot startup sync (list + inspect + UsageLog dedupe) — there is
+   * the one-shot startup sync (list + per-session read + UsageLog dedupe) — there is
    * no watermark shortcut here, so the user gets a guarantee that every
    * persisted request row the log does not yet hold will land. The run is
    * fire-and-forget: a second trigger while one is in flight returns
@@ -517,7 +517,7 @@ export function apply(ctx: Context, config: Config = {}) {
     const target = current
     if (target === undefined) return { started: false, reason: 'already-running' }
     fullSyncRunning = true
-    fullSyncStatus = { status: 'running', processed: 0, total: 0, added: 0, skipped: 0, failedSessions: 0 }
+    fullSyncStatus = { status: 'running', processed: 0, total: 0, added: 0, skipped: 0, removed: 0, failedSessions: 0 }
     void syncHistory({ persistence: ctx.sessionPersistence, log: target.log, meta: target.meta, recordCompaction,
         onSessionFailure: (id, error) => {
           logger.warn(`[token-usage] session ${id} unreadable, skipped:`, error instanceof Error ? error.message : String(error))
@@ -535,24 +535,25 @@ export function apply(ctx: Context, config: Config = {}) {
         // (the last tick carries the in-loop counters; this stamp aligns
         // them with the result in case of any trailing read).
         const last = fullSyncStatus.status === 'running' ? fullSyncStatus
-          : { processed: 0, total: 0, added: 0, skipped: 0, failedSessions: 0 }
+          : { processed: 0, total: 0, added: 0, skipped: 0, removed: 0, failedSessions: 0 }
         fullSyncStatus = {
           status: 'done',
           processed: last.processed,
           total: last.total,
           added: result.added,
           skipped: result.skipped,
+          removed: result.removed,
           failedSessions: result.failedSessions,
         }
         // A manual scan usually backfills compactions this version just
         // learned to record (or rows a crash dropped): drop the derived
         // stats state so the next read aggregates over the appended rows.
         const moved = await target.log.refileByEventDay()
-        if (result.added > 0 || moved > 0) invalidateDerivedState(target.dir)
+        if (result.added > 0 || result.removed > 0 || moved > 0) invalidateDerivedState(target.dir)
         if (moved > 0) {
           logger.info(`[token-usage] refiled ${String(moved)} rows onto event-day files`)
         }
-        logger.info(`[token-usage] full sync done: ${String(result.added)} added, ${String(result.skipped)} skipped, ${String(result.failedSessions)} failed sessions`)
+        logger.info(`[token-usage] full sync done: ${String(result.added)} added, ${String(result.skipped)} skipped, ${String(result.removed)} removed, ${String(result.failedSessions)} failed sessions`)
       })
       .catch((error: unknown) => {
         const message = error instanceof Error ? error.message : String(error)
@@ -755,12 +756,13 @@ export function apply(ctx: Context, config: Config = {}) {
       })
       .then((result) => {
         if (result !== null) {
-          logger.info(`[token-usage] first-run sync: ${result.added} added, ${result.skipped} skipped, ${String(result.failedSessions)} failed sessions`)
+          logger.info(`[token-usage] first-run sync: ${result.added} added, ${result.skipped} skipped, ${String(result.removed)} removed, ${String(result.failedSessions)} failed sessions`)
           // Appended rows (compactions backfilled by an upgrade, or requests
-          // a previous run missed) invalidate the derived stats state before
-          // the cache re-warms over the new contents — including writes into
-          // frozen day files the rollup may already have absorbed.
-          if (result.added > 0) invalidateDerivedState(dir)
+          // a previous run missed) and rows the reconcile pass dropped both
+          // invalidate the derived stats state before the cache re-warms over
+          // the new contents — including writes into frozen day files the
+          // rollup may already have absorbed.
+          if (result.added > 0 || result.removed > 0) invalidateDerivedState(dir)
         }
         return warmRecordCache(dir, undefined, logger)
       })
