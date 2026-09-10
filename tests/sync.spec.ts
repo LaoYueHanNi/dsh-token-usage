@@ -532,3 +532,132 @@ function titleEvent(title: string, seq: number): SessionEvent<'session/title'> {
     data: { title, messageSeqs: [], source: { kind: 'user' } },
   } as unknown as SessionEvent<'session/title'>
 }
+
+/**
+ * Persistence twin for the handle generation (`dsh` 0.1.3-alpha.1 and later):
+ * `list({ signal })` reports ids under `header`, and `open(id, 'read')` hands
+ * back a handle whose `read()` yields the log while `header` carries the
+ * identity facts. It deliberately exposes no `inspect`, so a code path that
+ * fell back to the old seam would fail loudly here instead of passing.
+ */
+function handlePersistence(
+  sessions: Array<{
+    id: string
+    events: SessionEvent[]
+    header?: { cwd?: string; origin?: 'subagent'; parentSession?: string }
+  }>,
+  hooks: { onClose?: (id: string) => void; closeFails?: string[]; openFails?: string[] } = {},
+): SyncPersistence {
+  return {
+    async list(options) {
+      // The handle generation takes an options object; a bare positional
+      // signal would mean the probe chose the wrong call shape.
+      expect(options).toBeTypeOf('object')
+      return sessions.map(session => ({ header: { id: session.id as SessionId } }))
+    },
+    async open(id) {
+      if (hooks.openFails?.includes(id) === true) throw new Error(`stored session "${id}" failed validation`)
+      const session = sessions.find(candidate => candidate.id === id)
+      if (session === undefined) throw new Error(`missing session ${id}`)
+      return {
+        header: session.header,
+        read() { return Promise.resolve({ events: session.events }) },
+        close() {
+          hooks.onClose?.(id)
+          return hooks.closeFails?.includes(id) === true
+            ? Promise.reject(new Error(`close failed for ${id}`))
+            : Promise.resolve()
+        },
+      }
+    },
+  }
+}
+
+describe('syncHistory over the handle persistence seam', () => {
+  it('walks list({ signal }) + open/read and lands the same rows', async () => {
+    const log = new FakeLog()
+    const closed: string[] = []
+    const persistence = handlePersistence([
+      { id: 's1', events: [messageEventWith('m1', 1), messageEventWith('m2', 2)] },
+      { id: 's2', events: [messageEventWith('m3', 1)] },
+    ], { onClose: id => { closed.push(id) } })
+    const result = await syncHistory({ persistence, log })
+    expect(result).toEqual({ added: 3, skipped: 0, failedSessions: 0 })
+    expect(log.rows.map(row => row.requestId)).toEqual(['m1', 'm2', 'm3'])
+    // Exactly one close per session: a leaked read handle is a host-side leak.
+    expect(closed).toEqual(['s1', 's2'])
+  })
+
+  it('projects the handle header into the meta sink', async () => {
+    const log = new FakeLog()
+    const persistence = handlePersistence([
+      {
+        id: 's1',
+        events: [titleEvent('Auto title', 1), messageEventWith('m1', 2)],
+        header: { cwd: '/work/app', origin: 'subagent', parentSession: 'p0' },
+      },
+      { id: 's2', events: [messageEventWith('m2', 1)] },
+    ])
+    const upserts: Array<{ id: string; patch: Record<string, unknown> }> = []
+    const result = await syncHistory({
+      persistence,
+      log,
+      meta: { async upsert(id, patch) { upserts.push({ id, patch: { ...patch } }) } },
+    })
+    expect(result.added).toBe(2)
+    // The identity facts ride on `handle.header`, not on the read result:
+    // dropping that projection would silently empty the session table.
+    expect(upserts).toEqual([
+      { id: 's1', patch: { title: 'Auto title', cwd: '/work/app', origin: 'subagent', parentSession: 'p0' } },
+    ])
+  })
+
+  it('keeps a session readable when its close fails', async () => {
+    const log = new FakeLog()
+    const persistence = handlePersistence(
+      [{ id: 's1', events: [messageEventWith('m1', 1)] }],
+      { closeFails: ['s1'] },
+    )
+    // Teardown is best-effort: the rows are already collected, so a failing
+    // close must not turn a good read into an unreadable session.
+    const result = await syncHistory({ persistence, log })
+    expect(result).toEqual({ added: 1, skipped: 0, failedSessions: 0 })
+  })
+
+  it('skips a session whose open throws and continues the walk', async () => {
+    const log = new FakeLog()
+    const failures: string[] = []
+    const persistence = handlePersistence([
+      { id: 'broken', events: [messageEventWith('m1', 1)] },
+      { id: 's2', events: [messageEventWith('m2', 1)] },
+    ], { openFails: ['broken'] })
+    const result = await syncHistory({
+      persistence,
+      log,
+      onSessionFailure: (id) => { failures.push(id) },
+    })
+    expect(result).toEqual({ added: 1, skipped: 0, failedSessions: 1 })
+    expect(failures).toEqual(['broken'])
+    expect(log.rows.map(row => row.requestId)).toEqual(['m2'])
+  })
+
+  it('prefers the handle seam when a twin carries both', async () => {
+    const log = new FakeLog()
+    const legacy = fakePersistence([{ id: 's1', events: [messageEventWith('legacy', 1)] }])
+    const persistence: SyncPersistence = {
+      ...handlePersistence([{ id: 's1', events: [messageEventWith('modern', 1)] }]),
+      inspect: legacy.inspect,
+    }
+    const result = await syncHistory({ persistence, log })
+    expect(result.added).toBe(1)
+    expect(log.rows.map(row => row.requestId)).toEqual(['modern'])
+  })
+
+  it('fails loudly when the persistence exposes neither seam', async () => {
+    const log = new FakeLog()
+    const persistence: SyncPersistence = { async list() { return [] } }
+    // A host too old or too new to read must not be reported as a run of
+    // individually unreadable sessions.
+    await expect(syncHistory({ persistence, log })).rejects.toThrow(/neither open\(\)/)
+  })
+})
