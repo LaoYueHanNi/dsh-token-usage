@@ -353,6 +353,44 @@ export function cloudToTable(feed: CloudPricingData): PricingTable {
   return table
 }
 
+/** One model row's identity for alias → modelId folding. */
+export interface CanonicalModelRef {
+  modelId: string
+  aliases?: readonly string[]
+}
+
+/**
+ * Map every priced name (modelId and each alias) onto its canonical
+ * modelId, using the same collision order as {@link cloudToTable}:
+ * aliases first (first writer wins), model ids last (always overwrite).
+ * Names that do not appear in the feed are absent; callers fall back
+ * to the raw name.
+ * @param models - the feed's model rows (or the overview projection).
+ * @returns name → modelId; unpriced names are not keys.
+ */
+export function canonicalMapOf(models: readonly CanonicalModelRef[]): Map<string, string> {
+  const map = new Map<string, string>()
+  for (const model of models) {
+    for (const alias of model.aliases ?? []) {
+      if (alias !== '' && !map.has(alias)) map.set(alias, model.modelId)
+    }
+  }
+  for (const model of models) map.set(model.modelId, model.modelId)
+  return map
+}
+
+/**
+ * The canonical model-id of one usage name under a {@link canonicalMapOf}
+ * map: a priced alias (or the modelId itself) resolves to the feed's
+ * modelId; an unpriced name is returned unchanged.
+ * @param name - the raw model string on a record or row.
+ * @param map - the alias → modelId map; undefined / missing key → `name`.
+ * @returns the name the byModel table should fold onto.
+ */
+export function canonicalName(name: string, map?: ReadonlyMap<string, string>): string {
+  return map?.get(name) ?? name
+}
+
 // ---------------------------------------------------------------------------
 // Per-record rate resolution (the analyzer's rule chain)
 // ---------------------------------------------------------------------------
@@ -511,12 +549,24 @@ async function readJsonFile(dir: string, name: string, logger: LoggerLike = cons
 }
 
 /**
- * The synced cloud table of one data directory: the coerced feed mirror
- * flattened through {@link cloudToTable} ({} when absent, broken, or non-RMB).
+ * The synced cloud table of one data directory plus the alias → modelId
+ * map, from a single feed parse so the stats route does not read the
+ * mirror twice for the two shapes.
+ * @param dir - the plugin's data directory.
+ * @param logger - diagnostic sink (defaults to console).
+ * @returns the flat table and the canonical map (both empty when absent).
  */
-async function readSyncedPricing(dir: string, logger: LoggerLike = consoleLogger): Promise<PricingTable> {
+export async function readPricingContext(dir: string, logger: LoggerLike = consoleLogger): Promise<{
+  table: PricingTable
+  canonical: Map<string, string>
+}> {
   const feed = coerceCloudPricing(await readJsonFile(dir, PRICING_CCSA_FILE, logger))
-  return feed === null ? {} : cloudToTable(feed)
+  if (feed === null) return { table: {}, canonical: new Map() }
+  return { table: cloudToTable(feed), canonical: canonicalMapOf(feed.models) }
+}
+
+async function readSyncedPricing(dir: string, logger: LoggerLike = consoleLogger): Promise<PricingTable> {
+  return (await readPricingContext(dir, logger)).table
 }
 
 /**

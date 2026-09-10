@@ -3,6 +3,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  canonicalMapOf,
+  canonicalName,
   cloudToTable,
   coerceCloudPricing,
   costOf,
@@ -458,6 +460,39 @@ describe('cloudToTable', () => {
       ],
     })
     expect(table['shared-name']!.base).toEqual({ inputPerMillion: 9, outputPerMillion: 9 })
+  })
+})
+
+describe('canonicalMapOf', () => {
+  it('maps aliases onto the modelId and leaves the id pointing at itself', () => {
+    const map = canonicalMapOf([
+      { modelId: 'deepseek-v4-flash', aliases: ['deepseek-v4-flash-0731', 'deepseek-v4-flash-08xx'] },
+    ])
+    expect(map.get('deepseek-v4-flash')).toBe('deepseek-v4-flash')
+    expect(map.get('deepseek-v4-flash-0731')).toBe('deepseek-v4-flash')
+    expect(map.get('deepseek-v4-flash-08xx')).toBe('deepseek-v4-flash')
+    expect(canonicalName('deepseek-v4-flash-0731', map)).toBe('deepseek-v4-flash')
+    expect(canonicalName('unpriced-model', map)).toBe('unpriced-model')
+    expect(canonicalName('unpriced-model')).toBe('unpriced-model')
+  })
+
+  it('lets a model id win a collision with another model\'s alias', () => {
+    const map = canonicalMapOf([
+      { modelId: 'alias-holder', aliases: ['shared-name'] },
+      { modelId: 'shared-name' },
+    ])
+    expect(map.get('shared-name')).toBe('shared-name')
+    expect(map.get('alias-holder')).toBe('alias-holder')
+  })
+
+  it('lets the first alias writer win a shared alias', () => {
+    const map = canonicalMapOf([
+      { modelId: 'a', aliases: ['shared'] },
+      { modelId: 'b', aliases: ['shared'] },
+    ])
+    expect(map.get('shared')).toBe('a')
+    expect(map.get('a')).toBe('a')
+    expect(map.get('b')).toBe('b')
   })
 })
 

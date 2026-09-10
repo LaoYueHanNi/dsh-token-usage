@@ -387,6 +387,34 @@ describe('filterSummary', () => {
     const reasoner = filterSummary(fixture(), '2026-01-14', '2026-01-16', 'deepseek-reasoner')
     expect(reasoner.byHour.map(row => row.hour)).toEqual(['2026-01-14T11', '2026-01-16T10'])
   })
+
+  it('matches priced aliases of the selected model when a canonical map is given', () => {
+    const at = (hour: number): number => new Date(2026, 0, 15, hour).getTime()
+    const summary = {
+      dataDir: 'C:/data',
+      ...summarizeRecords([
+        record(at(10), 'deepseek-v4-flash', { input: 10, output: 1 }),
+        record(at(11), 'deepseek-v4-flash-0731', { input: 20, output: 2 }),
+        record(at(12), 'glm-5.3', { input: 5, output: 1 }),
+      ]),
+    }
+    const canonical = new Map([
+      ['deepseek-v4-flash', 'deepseek-v4-flash'],
+      ['deepseek-v4-flash-0731', 'deepseek-v4-flash'],
+    ])
+    const byId = filterSummary(summary, undefined, undefined, 'deepseek-v4-flash', canonical)
+    expect(byId.total.requests).toBe(2)
+    expect(byId.total.inputTokens).toBe(30)
+    expect(byId.byModel.map(row => row.model).sort()).toEqual(['deepseek-v4-flash', 'deepseek-v4-flash-0731'])
+    expect(byId.recent).toHaveLength(2)
+    // Selecting an alias query also covers the whole family.
+    const byAlias = filterSummary(summary, undefined, undefined, 'deepseek-v4-flash-0731', canonical)
+    expect(byAlias.total.requests).toBe(2)
+    // An unpriced name still matches only itself.
+    const unpriced = filterSummary(summary, undefined, undefined, 'glm-5.3', canonical)
+    expect(unpriced.total.requests).toBe(1)
+    expect(unpriced.byModel.map(row => row.model)).toEqual(['glm-5.3'])
+  })
 })
 
 describe('filterRecordsBySessions', () => {
@@ -670,6 +698,56 @@ describe('attachCosts', () => {
     expect(summary.rateRows).toEqual(before.rateRows)
     expect(summary.recent).toEqual(before.recent)
     expect(summary.dataDir).toBe(before.dataDir)
+  })
+
+  it('folds alias usage onto the priced model-id', () => {
+    const rates = {
+      base: { inputPerMillion: 1, outputPerMillion: 2 },
+      contextTiers: [],
+      dailySlots: [],
+      timeRules: [],
+    }
+    const table: PricingTable = {
+      'deepseek-v4-flash': rates,
+      'deepseek-v4-flash-0731': rates,
+    }
+    const canonical = new Map([
+      ['deepseek-v4-flash', 'deepseek-v4-flash'],
+      ['deepseek-v4-flash-0731', 'deepseek-v4-flash'],
+    ])
+    const summary = attachCosts({
+      dataDir: 'C:/data',
+      ...summarizeRecords([
+        record(1, 'deepseek-v4-flash', { input: 1_000_000, output: 0 }),
+        record(2, 'deepseek-v4-flash-0731', { input: 1_000_000, output: 0 }),
+      ]),
+    }, table, canonical)
+    expect(summary.byModel).toEqual([
+      {
+        model: 'deepseek-v4-flash',
+        totals: expect.objectContaining({ requests: 2, inputTokens: 2_000_000 }),
+        cost: 2,
+      },
+    ])
+    expect(summary.totalCost).toBe(2)
+    expect(summary.unpricedModels).toEqual([])
+    // rateRows stay keyed by the raw name so a later feed can regroup.
+    expect(summary.rateRows.map(row => row.model).sort()).toEqual([
+      'deepseek-v4-flash',
+      'deepseek-v4-flash-0731',
+    ])
+  })
+
+  it('leaves unpriced names unmerged', () => {
+    const summary = attachCosts({
+      dataDir: 'C:/data',
+      ...summarizeRecords([
+        record(1, 'foo-model', { input: 1 }),
+        record(2, 'bar-model', { input: 1 }),
+      ]),
+    }, {}, new Map())
+    expect(summary.byModel.map(row => row.model)).toEqual(['bar-model', 'foo-model'])
+    expect(summary.unpricedModels).toEqual(['bar-model', 'foo-model'])
   })
 })
 

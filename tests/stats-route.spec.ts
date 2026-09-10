@@ -262,6 +262,40 @@ describe('createStatsRoute', () => {
     expect(body.byModel[0]!.cost).toBe(0.0000615)
   })
 
+  it('folds alias usage onto the pricing model-id', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'token-usage-alias-'))
+    const id = { ...fixtureRecord(100), model: 'deepseek-v4-flash', requestId: 'id' }
+    const alias = { ...fixtureRecord(200), model: 'deepseek-v4-flash-0731', requestId: 'alias' }
+    await writeFile(join(dir, 'usage-2026-01-15.jsonl'), `${JSON.stringify(id)}\n${JSON.stringify(alias)}\n`)
+    await writeFile(join(dir, 'pricing.ccsa.json'), JSON.stringify({
+      version: 4, updatedAt: 1, currency: 'RMB',
+      models: [{
+        modelId: 'deepseek-v4-flash',
+        inputCostPerMillion: 1, outputCostPerMillion: 2, cacheReadCostPerMillion: 0.5,
+        aliases: ['deepseek-v4-flash-0731'],
+      }],
+    }))
+    const route = createStatsRoute(() => dir)
+    const whole = fakeResponse()
+    await route.handler(fakeRequest(), whole.res)
+    const body = JSON.parse(whole.captured.body) as {
+      total: { requests: number }
+      byModel: Array<{ model: string; totals: { requests: number }; cost: number }>
+    }
+    expect(body.byModel.map(row => row.model)).toEqual(['deepseek-v4-flash'])
+    expect(body.byModel[0]!.totals.requests).toBe(2)
+    expect(body.total.requests).toBe(2)
+    // Filtering by the canonical id includes the alias's usage.
+    const filtered = fakeResponse()
+    await route.handler(fakeRequest({ url: `${STATS_PATH}?model=deepseek-v4-flash` }), filtered.res)
+    const filteredBody = JSON.parse(filtered.captured.body) as {
+      total: { requests: number }
+      byModel: Array<{ model: string; totals: { requests: number } }>
+    }
+    expect(filteredBody.total.requests).toBe(2)
+    expect(filteredBody.byModel.map(row => row.model)).toEqual(['deepseek-v4-flash'])
+  })
+
   it('bills each record through the cloud rule chain at its own timestamp', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'token-usage-route-'))
     // Two records on one day, local time: 10:00 falls inside the peak window

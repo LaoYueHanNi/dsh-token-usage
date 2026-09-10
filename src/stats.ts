@@ -11,7 +11,7 @@
  * @module token-usage/stats
  */
 
-import { costOf, ratesForKey } from './pricing.ts'
+import { canonicalName, costOf, ratesForKey } from './pricing.ts'
 import { fileDay, listDayFiles, readDayFile } from './record-cache.ts'
 import { consoleLogger, type LoggerLike } from './log.ts'
 import type { UsageRecord } from './usage-record.ts'
@@ -299,8 +299,23 @@ export interface DayRangeFilter {
   start?: number
   /** Inclusive upper bound (with the day's millisecond span folded in), epoch ms. */
   end?: number
-  /** Exact model id; undefined matches any model. */
+  /** Selected model id (or a priced alias of it); undefined matches any model. */
   model?: string
+  /** Alias → modelId map; when present, `model` matches the whole priced family. */
+  canonical?: ReadonlyMap<string, string>
+}
+
+/**
+ * Whether `name` belongs to the selected model under an optional canonical
+ * map: priced aliases of the same feed row match each other and the
+ * modelId; an unpriced name matches only itself.
+ */
+function matchesModel(
+  name: string,
+  selected: string | undefined,
+  canonical?: ReadonlyMap<string, string>,
+): boolean {
+  return selected === undefined || canonicalName(name, canonical) === canonicalName(selected, canonical)
 }
 
 /**
@@ -309,14 +324,21 @@ export interface DayRangeFilter {
  * full millisecond span (the day-key convention used everywhere else).
  * @param from - first day key (`YYYY-MM-DD`), inclusive; '' ignores both ends.
  * @param to - last day key (`YYYY-MM-DD`), inclusive.
- * @param model - exact model id; undefined matches any model.
+ * @param model - selected model id (or alias); undefined matches any model.
+ * @param canonical - alias → modelId map so a priced family matches as one.
  * @returns the bounds (every field may be undefined).
  */
-export function dayRangeFilter(from?: string, to?: string, model?: string): DayRangeFilter {
+export function dayRangeFilter(
+  from?: string,
+  to?: string,
+  model?: string,
+  canonical?: ReadonlyMap<string, string>,
+): DayRangeFilter {
   const filter: DayRangeFilter = {}
   if (from !== undefined && from !== '') filter.start = dayStart(from)
   if (to !== undefined && to !== '') filter.end = dayStart(to) + 86_399_999
   if (model !== undefined && model !== '') filter.model = model
+  if (canonical !== undefined) filter.canonical = canonical
   return filter
 }
 
@@ -335,12 +357,12 @@ export function filterRecordsByRange(
   range: DayRangeFilter = {},
 ): UsageRecord[] {
   const wanted = sessions !== undefined ? new Set(sessions) : undefined
-  const { start, end, model } = range
+  const { start, end, model, canonical } = range
   return records.filter(record =>
     (wanted === undefined || wanted.has(record.sessionId))
     && (start === undefined || record.time >= start)
     && (end === undefined || record.time <= end)
-    && (model === undefined || record.model === model))
+    && matchesModel(record.model, model, canonical))
 }
 
 /**
@@ -353,7 +375,8 @@ export function filterRecordsByRange(
  * @param records - the scoped records (day-file order is chronological).
  * @param from - optional inclusive day key; the series keeps those requests.
  * @param to - optional inclusive day key.
- * @param model - optional exact model id.
+ * @param model - optional selected model id (or a priced alias of it).
+ * @param canonical - alias → modelId map so a priced family matches as one.
  * @returns one point per kept request, in the original time order.
  */
 export function requestSeriesOf(
@@ -361,8 +384,9 @@ export function requestSeriesOf(
   from?: string,
   to?: string,
   model?: string,
+  canonical?: ReadonlyMap<string, string>,
 ): RequestPoint[] {
-  return filterRecordsByRange(records, undefined, dayRangeFilter(from, to, model))
+  return filterRecordsByRange(records, undefined, dayRangeFilter(from, to, model, canonical))
     .filter(record => record.kind !== 'failure')
     .map(record => ({
       time: record.time,
@@ -454,10 +478,14 @@ function dayStart(day: string): number {
  * filter, drawing every dimension from the rate rows so no file is reread.
  * The recent window filters on its record timestamps
  * ([from 00:00, to 23:59:59.999] local). No filters returns the input as-is.
+ * With a canonical map, `model` matches the priced family (the modelId and
+ * every alias of the same feed row); unpriced names still match exactly.
+ * byModel rows stay keyed by the raw name — {@link attachCosts} folds them.
  * @param summary - the unfiltered summary.
  * @param from - first day key (`YYYY-MM-DD`), inclusive.
  * @param to - last day key (`YYYY-MM-DD`), inclusive.
- * @param model - exact model id.
+ * @param model - selected model id (or a priced alias of it).
+ * @param canonical - alias → modelId map so a priced family matches as one.
  * @returns the filtered summary.
  */
 export function filterSummary(
@@ -465,24 +493,25 @@ export function filterSummary(
   from?: string,
   to?: string,
   model?: string,
+  canonical?: ReadonlyMap<string, string>,
 ): TokenSummary & { dataDir: string } {
   if (from === undefined && to === undefined && model === undefined) return summary
   const rows = summary.rateRows.filter(row =>
     (from === undefined || row.day >= from)
     && (to === undefined || row.day <= to)
-    && (model === undefined || row.model === model))
+    && matchesModel(row.model, model, canonical))
   // Hour rows filter on their day prefix (the `YYYY-MM-DD` part of the key).
   const byHour = summary.byHour.filter(row =>
     (from === undefined || row.hour.slice(0, 10) >= from)
     && (to === undefined || row.hour.slice(0, 10) <= to)
-    && (model === undefined || row.model === model))
+    && matchesModel(row.model, model, canonical))
   // Session cells keep the same granule the rate rows carry (day × model ×
   // rate per session), so the filtered fold stays the exact source the cost
   // layer bills from — same pattern as `rows`, one dimension wider.
   const bySession = summary.bySession.filter(row =>
     (from === undefined || row.day >= from)
     && (to === undefined || row.day <= to)
-    && (model === undefined || row.model === model))
+    && matchesModel(row.model, model, canonical))
   const total = emptyTotals()
   const days = new Map<string, UsageTotals>()
   const models = new Map<string, UsageTotals>()
@@ -497,7 +526,7 @@ export function filterSummary(
       models.set(row.model, perModel)
     }
   }
-  const recent = filterRecordsByRange(summary.recent, undefined, dayRangeFilter(from, to, model))
+  const recent = filterRecordsByRange(summary.recent, undefined, dayRangeFilter(from, to, model, canonical))
   return { dataDir: summary.dataDir, total, byDay: dayRows(days), byHour, byModel: modelRows(models), rateRows: rateRowsSorted(rows), bySession, recent }
 }
 
@@ -508,11 +537,21 @@ export function filterSummary(
  * itself. Purely additive — totals, day rows, and the recent window are
  * returned untouched, so the token aggregation (and the rollup format)
  * never carries currency, and an updated table re-prices history for free.
+ *
+ * With a canonical map, byModel rows that hit the same feed model (the
+ * modelId or any of its aliases) fold onto that modelId; unpriced names
+ * stay as their raw string and never merge. rateRows / byHour / bySession
+ * keep the raw name so a later pricing update can regroup without rebuild.
  * @param summary - the aggregated summary (build or filtered).
  * @param pricing - the active pricing table.
+ * @param canonical - alias → modelId map; empty / omitted leaves raw names.
  * @returns the same summary plus the cost fields.
  */
-export function attachCosts(summary: TokenSummary & { dataDir: string }, pricing: PricingTable): CostedSummary {
+export function attachCosts(
+  summary: TokenSummary & { dataDir: string },
+  pricing: PricingTable,
+  canonical: ReadonlyMap<string, string> = new Map(),
+): CostedSummary {
   const costs = new Map<string, number>()
   let totalCost = 0
   for (const row of summary.rateRows) {
@@ -533,12 +572,24 @@ export function attachCosts(summary: TokenSummary & { dataDir: string }, pricing
       cost: rules === undefined ? 0 : costOf(row.totals, ratesForKey(rules, row.rate)),
     }
   })
-  const byModel: CostedModelRow[] = summary.byModel.map(row => ({
-    model: row.model,
-    totals: row.totals,
-    cost: costs.get(row.model) ?? 0,
-  }))
-  const unpricedModels = summary.byModel
+  const folded = new Map<string, { totals: UsageTotals, cost: number }>()
+  for (const row of summary.byModel) {
+    const name = canonicalName(row.model, canonical)
+    const existing = folded.get(name)
+    if (existing === undefined) {
+      const totals = emptyTotals()
+      addTotals(totals, row.totals)
+      folded.set(name, { totals, cost: costs.get(row.model) ?? 0 })
+    } else {
+      addTotals(existing.totals, row.totals)
+      existing.cost += costs.get(row.model) ?? 0
+    }
+  }
+  const byModel: CostedModelRow[] = [...folded.entries()]
+    .map(([model, { totals, cost }]) => ({ model, totals, cost }))
+    .sort((left, right) =>
+      right.totals.requests - left.totals.requests || left.model.localeCompare(right.model))
+  const unpricedModels = byModel
     .filter(row => pricing[row.model] === undefined)
     .map(row => row.model)
   return {

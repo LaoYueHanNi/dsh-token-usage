@@ -11,7 +11,7 @@ import type { IncomingMessage } from 'node:http'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type { MigrationProgress } from './migrate.ts'
 import { consoleLogger, type LoggerLike } from './log.ts'
-import { readPricingOverview, readPricingTable, readUsdExchangeRate, resolveRate } from './pricing.ts'
+import { readPricingContext, readPricingOverview, readUsdExchangeRate, resolveRate } from './pricing.ts'
 import { attachCosts, buildSessionRows, buildSummary, filterRecordsBySessions, filterSummary, requestSeriesOf, SESSION_ROW_LIMIT, summarizeRecords } from './stats.ts'
 import type { RateResolver, SessionMetaEntry } from './stats.ts'
 import { readCachedRecords } from './record-cache.ts'
@@ -289,13 +289,15 @@ function childBreakdown(
   dataDir: string,
   resolve: RateResolver,
   pricing: PricingTable,
+  canonical: ReadonlyMap<string, string>,
 ): Record<string, ChildUsageSummary> {
   const rows: Record<string, ChildUsageSummary> = {}
   for (const group of filter.childGroups) {
     const scoped = filterRecordsBySessions(records, group.sessionIds)
     const summary = attachCosts(
-      filterSummary({ dataDir, ...summarizeRecords(scoped, resolve) }, filter.from, filter.to, filter.model),
+      filterSummary({ dataDir, ...summarizeRecords(scoped, resolve) }, filter.from, filter.to, filter.model, canonical),
       pricing,
+      canonical,
     )
     rows[group.id] = {
       total: summary.total,
@@ -398,7 +400,9 @@ export function createStatsRoute(dir: () => string, options: StatsRouteOptions =
         // The pricing table is user-maintained and may change between
         // requests; reading it per request keeps the page honest without
         // any caching (the file is small and the route is not hot).
-        const pricing = await readPricingTable(dataDir, logger)
+        // Table and canonical map come from one feed parse so alias
+        // folding cannot drift from the rates used to bill.
+        const { table: pricing, canonical } = await readPricingContext(dataDir, logger)
         // Per-record pricing: each record resolves through the rule chain at
         // its own timestamp (tier approximated by its input-side tokens).
         const resolve: RateResolver = record => {
@@ -424,8 +428,9 @@ export function createStatsRoute(dir: () => string, options: StatsRouteOptions =
             scoped !== undefined
               ? { dataDir, ...summarizeRecords(scoped, resolve) }
               : await buildSummary(dataDir, undefined, resolve, logger),
-            filter.from, filter.to, filter.model),
+            filter.from, filter.to, filter.model, canonical),
           pricing,
+          canonical,
         )
         // Display-currency metadata: amounts stay RMB on the wire; the
         // page converts (÷ usdExchangeRate) when the region pick says USD.
@@ -444,13 +449,13 @@ export function createStatsRoute(dir: () => string, options: StatsRouteOptions =
         // every aggregate once more on the wire.
         const { bySession: _cells, ...summaryRest } = summary
         const children = allRecords !== undefined && filter.childGroups.length > 0
-          ? childBreakdown(allRecords, filter, dataDir, resolve, pricing)
+          ? childBreakdown(allRecords, filter, dataDir, resolve, pricing, canonical)
           : undefined
         const payload = scoped !== undefined
           ? slimSessionPayload({
             summary,
             sessionIds: filter.sessionIds,
-            series: requestSeriesOf(scoped, filter.from, filter.to, filter.model),
+            series: requestSeriesOf(scoped, filter.from, filter.to, filter.model, canonical),
             currency,
             usdExchangeRate,
             fields: filter.fields,
