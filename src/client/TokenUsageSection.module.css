@@ -191,12 +191,12 @@
   border-radius: 6px;
 }
 
-/* Model cell: name plus (only for unpriced models) the warning tag, one
- * line, ellipsized. Priced models render a bare name — their rates live in
- * the pricing detail block at the bottom of the page. The inner cap tracks
- * the column's `width: 150px` minus the cell padding (6px on each side,
- * 12px total) so the inline-flex children never force the outer `<td>` to
- * grow. */
+/* Model cell: the name, plus (only for unpriced models) the warning tag,
+ * one line, ellipsized. A priced name is itself the price-dialog
+ * affordance — no trailing chip, so ids line up and the 150px column
+ * budget stays with the id. The inner cap tracks the column's
+ * `width: 150px` minus the cell padding (6px on each side, 12px total)
+ * so the inline-flex children never force the outer `<td>` to grow. */
 .modelCell {
   position: relative;
   display: inline-flex;
@@ -211,6 +211,25 @@
   white-space: nowrap;
 }
 
+/* Priced-row name: a text-looking control. Hover picks up the same
+ * link colour the filter-row “定价表” action uses, so the table does
+ * not read as a list of links at rest. */
+button.modelName {
+  padding: 0;
+  margin: 0;
+  max-width: 100%;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+button.modelName:hover {
+  color: var(--dsw-alias-link-primary, var(--dsw-alias-label-primary));
+}
+
 .unpricedTag {
   flex: none;
   padding: 0 6px;
@@ -219,26 +238,6 @@
   color: var(--dsw-alias-state-warn-label);
   background: var(--dsw-alias-state-warn-tertiary);
   border-radius: 8px;
-}
-
-/* The pricing affordance of a priced model row: one click opens the
- * model's detail-price dialog. */
-.pricingButton {
-  flex: none;
-  padding: 0 6px;
-  font-size: 10px;
-  line-height: 16px;
-  color: var(--dsw-alias-label-secondary);
-  background: var(--dsw-alias-bg-layer-2);
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 8px;
-  cursor: pointer;
-}
-
-.pricingButton:hover {
-  color: var(--dsw-alias-state-warn-primary);
-  background: var(--dsw-alias-state-warn-tertiary);
-  border-color: var(--dsw-alias-state-warn-primary);
 }
 
 /* The filter row's tail action: opens the filter-free pricing overview.

@@ -58,3 +58,4 @@ Status: implemented
   - **双通道全表冗余**：stats 响应与本路由各带一份全表（69KB 级），本次接受；stats 瘦身另行决策。
   - **top layer 层叠属浏览器视觉行为**，jsdom 无法模拟——层叠、焦点落位、连按两次 Esc 依次关两层降级为浏览器人工验证项；事件逻辑（close 只关最上层、target 守卫防误伤总览）由 jsdom 单测覆盖。
   - **`PricingDialog` 搬出 `TokenUsageSection.tsx`**：价格表样式与 byModel 表样式在两个 CSS module 各存一份同名类（CSS Modules 哈希隔离、内容一致），接受少量复制换取叶子模块边界。
+  - **行内「定价」小按钮**后由 [按模型表定价入口改为模型名本身可点](2026-09-10-bymodel-pricing-name-affordance.md) 取代：已定价行点模型名开详情，不再跟徽章。

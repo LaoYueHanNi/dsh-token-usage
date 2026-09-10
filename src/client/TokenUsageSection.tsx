@@ -3,10 +3,11 @@
  * the host route and renders the filter bar (inclusive day range, model
  * select, 1d/7d/30d quick ranges where 1d spans today 00:00–23:59), the
  * total-usage strip, the daily-token trend chart, and the per-model detail
- * table with the hit rate last — all following the active filters. Each
- * priced model row's “定价” affordance opens that model's price dialog
- * (PricingDialog.tsx); the filter row's tail link opens the filter-free
- * pricing-overview dialog (PricingOverviewDialog.tsx). There is no refresh
+ * table with the hit rate last — all following the active filters. A
+ * priced model name is the row's price affordance (one click opens
+ * PricingDialog.tsx); unpriced rows keep the in-cell tag. The filter
+ * row's tail link opens the filter-free pricing-overview dialog
+ * (PricingOverviewDialog.tsx). There is no refresh
  * button: entering the page or changing a filter refetches (the route
  * answers no-store); only the error state keeps a retry.
  *
@@ -370,24 +371,28 @@ export function TokenUsageSection({ t, close, sessionListed, openSession }: Sett
                                 <tr key={row.model}>
                                   <td className={styles['modelCol']}>
                                     <span className={styles['modelCell']}>
-                                      <span className={styles['modelName']}>{row.model}</span>
                                       {rules !== undefined
                                         ? (
-                                          // The pricing affordance: one click opens
-                                          // the model's detail-price dialog.
+                                          // The model name is the price
+                                          // affordance: one click opens the
+                                          // detail-price dialog. No extra
+                                          // chip — the column is 150px and
+                                          // a trailing badge would truncate
+                                          // the id and refuse to line up.
                                           <button
                                             type="button"
-                                            className={styles['pricingButton']}
+                                            className={styles['modelName']}
                                             aria-label={t('pricing.view', { model: row.model })}
                                             onClick={() => setDetailModel(row.model)}
                                           >
-                                            {t('pricing.viewShort')}
+                                            {row.model}
                                           </button>
                                         )
                                         : (
-                                          // The unpriced tag explains the em-dash
-                                          // cost cell in place.
-                                          <span className={styles['unpricedTag']}>{t('pricing.unpriced')}</span>
+                                          <>
+                                            <span className={styles['modelName']}>{row.model}</span>
+                                            <span className={styles['unpricedTag']}>{t('pricing.unpriced')}</span>
+                                          </>
                                         )}
                                     </span>
                                   </td>
