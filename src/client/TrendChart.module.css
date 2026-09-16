@@ -21,19 +21,37 @@
 }
 
 .area {
-  fill: url(#token-usage-trend-gradient);
   pointer-events: none;
 }
 
 .line {
   fill: none;
   stroke: var(--dsw-alias-label-primary);
-  stroke-width: 2.2;
+  stroke-width: 1.8;
   stroke-linejoin: round;
   stroke-linecap: round;
-  filter: drop-shadow(0 2px 5px color-mix(in srgb, var(--dsw-alias-label-primary) 18%, transparent));
 }
 
+/* Light mode adaptations (Daytime / White theme):
+ * Softer grid opacity and lighter hover halo for white background. */
+.chartLight .dotHalo,
+:global([style*="color-scheme: light"]) .chart .dotHalo {
+  fill: color-mix(in srgb, var(--dsw-alias-label-primary) 7%, transparent);
+}
+
+.chartLight .grid,
+:global([style*="color-scheme: light"]) .chart .grid {
+  stroke-opacity: 0.45;
+}
+
+@media (prefers-color-scheme: light) {
+  .chart:not([data-theme="dark"]) .dotHalo {
+    fill: color-mix(in srgb, var(--dsw-alias-label-primary) 7%, transparent);
+  }
+  .chart:not([data-theme="dark"]) .grid {
+    stroke-opacity: 0.45;
+  }
+}
 
 .dot {
   fill: var(--dsw-alias-label-primary);
@@ -50,6 +68,7 @@
   stroke: var(--dsw-alias-bg-layer-1);
   stroke-width: 2;
 }
+
 
 /* The vertical guide from the active point down to the x axis. */
 .guide {

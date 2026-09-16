@@ -40,8 +40,13 @@
     --card-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.06);
 
     --chart-accent: #27272a;
-    --chart-area-top: rgba(24, 24, 27, 0.08);
-    --chart-halo: rgba(24, 24, 27, 0.12);
+    --chart-area-top: rgba(39, 39, 42, 0.045);
+    --chart-halo: rgba(39, 39, 42, 0.07);
+  }
+
+  [data-theme="light"] .modern-line {
+    stroke-width: 1.8;
+    filter: none;
   }
 
   * { box-sizing: border-box; }
@@ -270,10 +275,9 @@
   .modern-line {
     fill: none;
     stroke: var(--chart-accent);
-    stroke-width: 2.3;
+    stroke-width: 1.8;
     stroke-linejoin: round;
     stroke-linecap: round;
-    filter: drop-shadow(0 2px 5px rgba(255, 255, 255, 0.15));
   }
   .modern-area {
     fill: url(#chartAreaGradient);

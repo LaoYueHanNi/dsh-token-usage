@@ -19,7 +19,7 @@
  * @module token-usage/client/TrendChart
  */
 
-import { useState } from 'react'
+import { useId, useState } from 'react'
 import type { MouseEvent, ReactNode } from 'react'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { RequestPoint, UsageDayRow, UsageHourRow } from '../wire.ts'
@@ -28,6 +28,7 @@ import { tickValues } from './trend-chart/axis.ts'
 import { areaPath, gapAfter, smoothSeriesPath } from './trend-chart/path.ts'
 import { buildChartPoints, cumulateSeries } from './trend-chart/points.ts'
 import { dotRadius, labelIndices, scaleSeries } from './trend-chart/scale.ts'
+import { useIsLightMode } from './use-color-scheme.ts'
 import styles from './TrendChart.module.css'
 
 /** Re-export the chart's pure helpers for the test suite. */
@@ -123,6 +124,10 @@ export function TrendChart({ rows, hours, requests, from, to, mode = 'interval',
   mode?: TrendChartMode
   t: TranslateNS<'token-usage'>
 }): ReactNode {
+  const isLight = useIsLightMode()
+  const gradientId = useId()
+  const [active, setActive] = useState<number | null>(null)
+
   const base = buildChartPoints({ rows, hours, requests, from, to })
   if (base === null) {
     return <p className={styles.empty}>{t('chart.empty')}</p>
@@ -146,7 +151,6 @@ export function TrendChart({ rows, hours, requests, from, to, mode = 'interval',
   // SVG `cx`/`x` attributes without re-adding the y-axis margin.
   const { xs, xEnds, innerWidth } = scaleSeries(series, LEFT, WIDTH - RIGHT)
   const radius = dotRadius(points.length)
-  const [active, setActive] = useState<number | null>(null)
   const activePoint = active === null ? null : points[active] ?? null
   const y = (tokens: number): number => TOP + innerHeight - (tokens / top) * innerHeight
   const ys = points.map(point => y(point.tokens))
@@ -209,17 +213,32 @@ export function TrendChart({ rows, hours, requests, from, to, mode = 'interval',
       role="img"
       aria-label={chartAria}
       viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
-      className={styles.chart}
+      className={`${styles.chart} ${isLight ? styles.chartLight : ''}`.trim()}
+      data-theme={isLight ? 'light' : 'dark'}
       onMouseMove={handleMouseMove}
       onMouseLeave={() => setActive(null)}
     >
-      <defs>
-        <linearGradient id="token-usage-trend-gradient" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="var(--dsw-alias-label-primary)" stopOpacity="0.25" />
-          <stop offset="55%" stopColor="var(--dsw-alias-label-primary)" stopOpacity="0.08" />
-          <stop offset="100%" stopColor="var(--dsw-alias-label-primary)" stopOpacity="0.0" />
-        </linearGradient>
-      </defs>
+      {isLight ? (
+        <defs>
+          <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+            <stop
+              offset="0%"
+              stopColor="var(--dsw-alias-label-primary)"
+              stopOpacity="0.045"
+            />
+            <stop
+              offset="55%"
+              stopColor="var(--dsw-alias-label-primary)"
+              stopOpacity="0.012"
+            />
+            <stop
+              offset="100%"
+              stopColor="var(--dsw-alias-label-primary)"
+              stopOpacity="0.0"
+            />
+          </linearGradient>
+        </defs>
+      ) : null}
       {ticks.map(tick => (
         <g key={tick}>
           <line x1={LEFT} y1={y(tick)} x2={WIDTH - RIGHT} y2={y(tick)} className={styles.grid} />
@@ -229,7 +248,7 @@ export function TrendChart({ rows, hours, requests, from, to, mode = 'interval',
         </g>
       ))}
       <line x1={LEFT} y1={y(0)} x2={WIDTH - RIGHT} y2={y(0)} className={styles.axis} />
-      {area !== '' ? <path d={area} className={styles.area} /> : null}
+      {isLight && area !== '' ? <path d={area} fill={`url(#${gradientId})`} className={styles.area} /> : null}
       <path d={path} className={styles.line} />
       {/* Declutter: render dots only when focused/hovered, or for a lone point */}
       {activePoint !== null && active !== null ? (
