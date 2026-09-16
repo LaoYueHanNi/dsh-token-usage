@@ -272,7 +272,7 @@ export function SessionTable({ rows, view, t, sessionListed, openSession }: {
           />
         </td>
         <td>{formatTokens(totalTokens(row.totals))}</td>
-        <td>{formatCost(row.cost, view)}</td>
+        <td className={styles['costCol']}>{formatCost(row.cost, view)}</td>
         <td>{dayKeyOf(new Date(row.lastTime))}</td>
       </tr>
     )

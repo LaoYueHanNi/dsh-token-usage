@@ -404,14 +404,14 @@ export function TokenUsageSection({ t, close, sessionListed, openSession }: Sett
                                       t={t}
                                     />
                                   </td>
-                                  <td>
+                                  <td className={styles['costCol']}>
                                     {rules !== undefined ? formatCost(row.cost, view) : '—'}
                                   </td>
                                   <td>{formatTokens(totalTokens(row.totals))}</td>
-                                  <td>{formatTokens(row.totals.inputTokens)}</td>
-                                  <td>{formatTokens(row.totals.outputTokens)}</td>
-                                  <td>{formatTokens(row.totals.cacheReadTokens)}</td>
-                                  <td>{formatTokens(row.totals.cacheWriteTokens)}</td>
+                                  <td className={row.totals.inputTokens === 0 ? styles['zeroDim'] : undefined}>{formatTokens(row.totals.inputTokens)}</td>
+                                  <td className={row.totals.outputTokens === 0 ? styles['zeroDim'] : undefined}>{formatTokens(row.totals.outputTokens)}</td>
+                                  <td className={row.totals.cacheReadTokens === 0 ? styles['zeroDim'] : undefined}>{formatTokens(row.totals.cacheReadTokens)}</td>
+                                  <td className={row.totals.cacheWriteTokens === 0 ? styles['zeroDim'] : undefined}>{formatTokens(row.totals.cacheWriteTokens)}</td>
                                   <td><HitRateText totals={row.totals} /></td>
                                 </tr>
                               )

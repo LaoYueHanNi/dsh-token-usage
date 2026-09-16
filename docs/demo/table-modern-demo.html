@@ -1,0 +1,568 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>用量表格保持原有风格的精细微调体验面板</title>
+<style>
+  :root {
+    --dsw-alias-bg-layer-1: #1a1a1c;
+    --dsw-alias-bg-layer-2: #242427;
+    --dsw-alias-bg-layer-3: #2d2d31;
+    --dsw-alias-fill-container: #202023;
+    --dsw-alias-border-l1: rgba(255, 255, 255, 0.08);
+    --dsw-alias-border-l2: rgba(255, 255, 255, 0.14);
+    --dsw-alias-label-primary: #f4f4f5;
+    --dsw-alias-label-secondary: #a1a1aa;
+    --dsw-alias-label-tertiary: #71717a;
+    --dsw-alias-state-success-primary: #22c55e;
+    --dsw-alias-state-error-primary: #ef4444;
+    --dsw-interactive-bg-hover: rgba(255, 255, 255, 0.04);
+    --page-bg: #141416;
+    --card-shadow: 0 4px 24px -2px rgba(0, 0, 0, 0.45);
+  }
+
+  [data-theme="light"] {
+    --dsw-alias-bg-layer-1: #ffffff;
+    --dsw-alias-bg-layer-2: #f4f4f6;
+    --dsw-alias-bg-layer-3: #eaeaee;
+    --dsw-alias-fill-container: #f9f9fb;
+    --dsw-alias-border-l1: rgba(0, 0, 0, 0.08);
+    --dsw-alias-border-l2: rgba(0, 0, 0, 0.16);
+    --dsw-alias-label-primary: #18181b;
+    --dsw-alias-label-secondary: #71717a;
+    --dsw-alias-label-tertiary: #a1a1aa;
+    --dsw-alias-state-success-primary: #16a34a;
+    --dsw-alias-state-error-primary: #dc2626;
+    --dsw-interactive-bg-hover: rgba(0, 0, 0, 0.03);
+    --page-bg: #f4f4f7;
+    --card-shadow: 0 4px 24px -2px rgba(0, 0, 0, 0.08);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 28px 20px 70px;
+    background: var(--page-bg);
+    color: var(--dsw-alias-label-primary);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+    transition: background 0.2s ease, color 0.2s ease;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .container {
+    width: 100%;
+    max-width: 960px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  /* 顶部控制栏 */
+  .control-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+    padding: 14px 18px;
+    background: var(--dsw-alias-fill-container);
+    border: 1px solid var(--dsw-alias-border-l1);
+    border-radius: 12px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+  }
+
+  .title-group h1 {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .title-group p {
+    margin: 2px 0 0;
+    font-size: 12px;
+    color: var(--dsw-alias-label-secondary);
+  }
+
+  .actions-group {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  /* 分段切换按钮组件 */
+  .seg-control {
+    display: inline-flex;
+    background: var(--dsw-alias-bg-layer-2);
+    padding: 3px;
+    border-radius: 8px;
+    border: 1px solid var(--dsw-alias-border-l1);
+    gap: 2px;
+  }
+  .seg-btn {
+    border: none;
+    background: transparent;
+    color: var(--dsw-alias-label-secondary);
+    font-size: 12px;
+    padding: 5px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 500;
+    transition: all 0.15s ease;
+  }
+  .seg-btn:hover {
+    color: var(--dsw-alias-label-primary);
+  }
+  .seg-btn.active {
+    background: var(--dsw-alias-bg-layer-3);
+    color: var(--dsw-alias-label-primary);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+    font-weight: 600;
+  }
+
+  .btn-theme {
+    padding: 6px 12px;
+    background: var(--dsw-alias-bg-layer-2);
+    border: 1px solid var(--dsw-alias-border-l1);
+    border-radius: 8px;
+    color: var(--dsw-alias-label-primary);
+    font-size: 12px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    transition: all 0.15s ease;
+  }
+
+  /* 微调开关栏 */
+  .tweak-toggles {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+    padding: 10px 16px;
+    background: var(--dsw-alias-fill-container);
+    border: 1px solid var(--dsw-alias-border-l1);
+    border-radius: 8px;
+    font-size: 12px;
+  }
+  .toggle-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    user-select: none;
+    color: var(--dsw-alias-label-secondary);
+  }
+  .toggle-item:hover {
+    color: var(--dsw-alias-label-primary);
+  }
+  .toggle-item input[type="checkbox"] {
+    accent-color: #3b82f6;
+    cursor: pointer;
+  }
+
+  /* 模拟真实面板容器 */
+  .panel-shell {
+    background: var(--dsw-alias-bg-layer-1);
+    border: 1px solid var(--dsw-alias-border-l1);
+    border-radius: 12px;
+    box-shadow: var(--card-shadow);
+    padding: 18px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  /* 原生 Tab */
+  .tab-segmented {
+    display: inline-flex;
+    background: var(--dsw-alias-bg-layer-2);
+    padding: 3px;
+    border-radius: 8px;
+    align-self: flex-start;
+  }
+  .tab-btn {
+    border: none;
+    background: transparent;
+    color: var(--dsw-alias-label-secondary);
+    font-size: 13px;
+    padding: 4px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 500;
+  }
+  .tab-btn.active {
+    background: var(--dsw-alias-bg-layer-3);
+    color: var(--dsw-alias-label-primary);
+    font-weight: 600;
+  }
+
+  /* 表格基础通用排版（完全沿用项目的原生 CSS Module 属性） */
+  .table-wrap {
+    overflow-x: auto;
+  }
+
+  table.base-table {
+    width: 100%;
+    min-width: 500px;
+    border-collapse: collapse;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  table.base-table th,
+  table.base-table td {
+    padding: 4px 6px; /* 原版 4px 6px */
+    text-align: right;
+    border-bottom: 1px solid var(--dsw-alias-border-l1);
+    white-space: nowrap;
+  }
+
+  table.base-table th.model-head,
+  table.base-table td.model-col {
+    text-align: left;
+    width: 150px;
+    max-width: 150px;
+  }
+
+  table.base-table th {
+    font-weight: 500;
+    color: var(--dsw-alias-label-secondary);
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--dsw-alias-bg-layer-2);
+  }
+
+  table.base-table td {
+    color: var(--dsw-alias-label-primary);
+  }
+
+  .model-name-btn {
+    padding: 0;
+    margin: 0;
+    max-width: 100%;
+    font: inherit;
+    color: inherit;
+    text-align: left;
+    background: none;
+    border: none;
+    cursor: pointer;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .model-name-btn:hover {
+    color: var(--dsw-alias-link-primary, var(--dsw-alias-label-primary));
+  }
+
+  /* 命中率色相 (完全与项目一致) */
+  .hit-healthy { color: var(--dsw-alias-state-success-primary, #16a34a); }
+  .hit-lime    { color: #84cc16; }
+  .hit-amber   { color: #f59e0b; }
+  .hit-critical{ color: var(--dsw-alias-state-error-primary, #dc2626); }
+
+  /* 原生 split 实现 */
+  .split-raw {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    align-items: baseline;
+    column-gap: 4px;
+    width: 100%;
+  }
+  .split-sep {
+    color: var(--dsw-alias-label-tertiary);
+  }
+  .split-fail {
+    color: var(--dsw-alias-state-error-primary);
+    text-align: left;
+  }
+
+  /* =========================================================
+   * 可配置的 6 个轻量微调类
+   * ========================================================= */
+  /* 微调 1: 成功失败网格对齐修复 (即使没有失败也占位让成功数完美右对齐) */
+  .tweak-align-fix .split-raw {
+    grid-template-columns: 48px 10px 32px;
+    justify-content: flex-end;
+  }
+  .tweak-align-fix .split-raw.has-no-fail {
+    /* 补齐空列，保证成功数位置不漂移 */
+    grid-template-columns: 48px 10px 32px;
+  }
+
+  /* 微调 2: 0 值视觉弱化 (只对 0 生效，使非 0 活跃缓存凸显) */
+  .tweak-zero-dim .val-zero {
+    color: var(--dsw-alias-label-tertiary) !important;
+    opacity: 0.55;
+  }
+
+  /* 微调 3: 行级超微弱 Hover 导向 (极大缓解横向窜行) */
+  .tweak-row-hover tbody tr:hover {
+    background-color: var(--dsw-interactive-bg-hover);
+  }
+
+  /* 微调 4: 表头下边框与层次轻微加固 */
+  .tweak-header-border th {
+    border-bottom: 1.5px solid var(--dsw-alias-border-l2) !important;
+    font-weight: 600;
+  }
+
+  /* 微调 5: 单元格水平呼吸感从 6px 增至 8px */
+  .tweak-cell-padding th,
+  .tweak-cell-padding td {
+    padding: 5px 8px !important;
+  }
+
+  /* 微调 6: 费用列字重微加权 */
+  .tweak-cost-bold td.col-cost {
+    font-weight: 600;
+  }
+
+  /* 提示说明 */
+  .desc-box {
+    padding: 12px 16px;
+    background: var(--dsw-alias-fill-container);
+    border: 1px solid var(--dsw-alias-border-l1);
+    border-radius: 8px;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--dsw-alias-label-secondary);
+  }
+  .desc-box strong {
+    color: var(--dsw-alias-label-primary);
+  }
+</style>
+</head>
+<body>
+
+<div class="container">
+  <!-- 顶部控制面板 -->
+  <div class="control-bar">
+    <div class="title-group">
+      <h1>🎯 用量表格「保持原风格」精细微调体验面板</h1>
+      <p>完全保持当前极简、内敛、原生的视觉风格，不做大改，仅对细节体验精工细琢</p>
+    </div>
+
+    <div class="actions-group">
+      <div class="seg-control" id="modeSeg">
+        <button type="button" class="seg-btn active" data-mode="polished">精细微调版 (推荐)</button>
+        <button type="button" class="seg-btn" data-mode="raw">当前原版 (完全未改)</button>
+      </div>
+
+      <button type="button" class="btn-theme" id="themeToggle" title="切换暗黑 / 明亮主题">
+        <span id="themeIcon">☀️</span>
+        <span id="themeText">明亮模式</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- 微调项独立勾选开关（方便对比每一个小细节带来的影响） -->
+  <div class="tweak-toggles" id="togglePanel">
+    <span style="font-weight:600; color:var(--dsw-alias-label-primary);">微调细节开关:</span>
+    <label class="toggle-item">
+      <input type="checkbox" id="chkAlign" checked>
+      <span>1. 成功数纵向严格对齐修复</span>
+    </label>
+    <label class="toggle-item">
+      <input type="checkbox" id="chkZero" checked>
+      <span>2. 0 值轻微降噪弱化</span>
+    </label>
+    <label class="toggle-item">
+      <input type="checkbox" id="chkHover" checked>
+      <span>3. 超微弱行 Hover (防视线错位)</span>
+    </label>
+    <label class="toggle-item">
+      <input type="checkbox" id="chkPad" checked>
+      <span>4. 间距微呼吸 (4x6px → 5x8px)</span>
+    </label>
+    <label class="toggle-item">
+      <input type="checkbox" id="chkHead" checked>
+      <span>5. 表头底边线清晰分界</span>
+    </label>
+    <label class="toggle-item">
+      <input type="checkbox" id="chkCost" checked>
+      <span>6. 费用列字重轻微强化</span>
+    </label>
+  </div>
+
+  <!-- 模拟真实设置面板容器 -->
+  <div class="panel-shell">
+    <!-- 原生Tab: 按模型 / 按会话 -->
+    <div class="tab-segmented">
+      <button type="button" class="tab-btn active">按模型</button>
+      <button type="button" class="tab-btn">按会话</button>
+    </div>
+
+    <!-- 表格展示区 -->
+    <div class="table-wrap tweak-align-fix tweak-zero-dim tweak-row-hover tweak-header-border tweak-cell-padding tweak-cost-bold" id="tableContainer">
+      <table class="base-table">
+        <thead>
+          <tr>
+            <th class="model-head">模型</th>
+            <th style="text-align: right;">成功 / 失败</th>
+            <th>费用</th>
+            <th>总 token</th>
+            <th>入</th>
+            <th>出</th>
+            <th>缓</th>
+            <th>写</th>
+            <th>命中率</th>
+          </tr>
+        </thead>
+        <tbody id="tableBody">
+          <!-- 动态渲染数据 -->
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- 说明 -->
+  <div class="desc-box" id="detailDesc">
+    <strong>✨ 当前生效的 6 个原风格小微调说明：</strong>
+    <ol style="margin: 6px 0 0 16px; padding: 0;">
+      <li><strong>垂直对齐修复</strong>：当前原版中，没有失败的行（如 <code>457</code>、<code>95</code>）会飘向右边；微调后无论有无失败，成功数个位均与上面的 <code>1,546</code> 保持笔直右对齐。</li>
+      <li><strong>0 值静音降噪</strong>：大量占位的 <code>0</code> 赋予微弱灰色，使全表最下方唯一有缓存写入的 <code>11K</code> 立即被精准识别。</li>
+      <li><strong>行级微弱 Hover</strong>：鼠标滑过行有极浅的背景响应，横向扫视 9 列数据时再也不容易看串行。</li>
+      <li><strong>呼吸感间距</strong>：padding 从 <code>4px 6px</code> 调整为 <code>5px 8px</code>，保持紧凑的同时消除了数字紧挨的拥挤感。</li>
+      <li><strong>表头微锚定</strong>：表头下边框由 <code>1px border-l1</code> 加深为 <code>1.5px border-l2</code>，表头与数据行分界更稳。</li>
+      <li><strong>费用主指标微聚焦</strong>：在不改颜色的前提下，仅为费用列赋予 <code>font-weight: 600</code>，清晰建立主次层级。</li>
+    </ol>
+  </div>
+</div>
+
+<script>
+// 截图中 9 行完整真实数据
+const modelData = [
+  { model: 'deepseek-v4-flash', success: 1546, fail: 50, cost: '¥25.43', totalTokens: '212M', in: '6.5M', out: '1.1M', cacheRead: '205M', cacheWrite: '0', hitRate: '96.9%', band: 'healthy' },
+  { model: 'MiniMax-M3', success: 1090, fail: 18, cost: '¥64.93', totalTokens: '130M', in: '3.1M', out: '645K', cacheRead: '126M', cacheWrite: '0', hitRate: '97.6%', band: 'healthy' },
+  { model: 'glm-5.3', success: 972, fail: 13, cost: '¥313.76', totalTokens: '144M', in: '1.9M', out: '570K', cacheRead: '141M', cacheWrite: '0', hitRate: '98.7%', band: 'healthy' },
+  { model: 'deepseek-v4.1-flash', success: 457, fail: 0, cost: '¥4.05', totalTokens: '54M', in: '1.2M', out: '451K', cacheRead: '53M', cacheWrite: '0', hitRate: '97.8%', band: 'healthy' },
+  { model: 'glm-5.3-flash', success: 409, fail: 9, cost: '¥6.10', totalTokens: '46M', in: '1.9M', out: '234K', cacheRead: '43M', cacheWrite: '0', hitRate: '95.8%', band: 'healthy' },
+  { model: 'ox-alpha', success: 288, fail: 23, cost: '¥0.00', totalTokens: '11M', in: '1.3M', out: '81K', cacheRead: '9.8M', cacheWrite: '0', hitRate: '88.4%', band: 'lime' },
+  { model: 'glm-5.2', success: 95, fail: 0, cost: '¥44.41', totalTokens: '21M', in: '418K', out: '34K', cacheRead: '20M', cacheWrite: '0', hitRate: '98%', band: 'healthy' },
+  { model: 'deepseek-v4-pro', success: 38, fail: 0, cost: '¥1.78', totalTokens: '5.9M', in: '157K', out: '16K', cacheRead: '5.7M', cacheWrite: '0', hitRate: '97.3%', band: 'healthy' },
+  { model: 'MiniMax-M2.7-highspeed', success: 22, fail: 0, cost: '¥2.93', totalTokens: '831K', in: '651K', out: '5.5K', cacheRead: '163K', cacheWrite: '11K', hitRate: '20%', band: 'critical' }
+];
+
+const container = document.getElementById('tableContainer');
+const tableBody = document.getElementById('tableBody');
+
+function renderRows() {
+  const isAlignFix = document.getElementById('chkAlign').checked;
+
+  tableBody.innerHTML = modelData.map(d => {
+    let reqHtml = '';
+    if (isAlignFix) {
+      // 修复版：保留右侧固定占位，对齐个位
+      if (d.fail > 0) {
+        reqHtml = `
+          <span class="split-raw">
+            <span style="text-align:right;">${d.success.toLocaleString()}</span>
+            <span class="split-sep">/</span>
+            <span class="split-fail">${d.fail}</span>
+          </span>
+        `;
+      } else {
+        reqHtml = `
+          <span class="split-raw has-no-fail">
+            <span style="text-align:right;">${d.success.toLocaleString()}</span>
+            <span></span>
+            <span></span>
+          </span>
+        `;
+      }
+    } else {
+      // 当前原版渲染逻辑
+      if (d.fail > 0) {
+        reqHtml = `
+          <span class="split-raw">
+            <span style="text-align:right;">${d.success.toLocaleString()}</span>
+            <span class="split-sep">/</span>
+            <span class="split-fail">${d.fail}</span>
+          </span>
+        `;
+      } else {
+        reqHtml = `<span>${d.success.toLocaleString()}</span>`;
+      }
+    }
+
+    return `
+      <tr>
+        <td class="model-col"><button type="button" class="model-name-btn">${d.model}</button></td>
+        <td>${reqHtml}</td>
+        <td class="col-cost">${d.cost}</td>
+        <td>${d.totalTokens}</td>
+        <td>${d.in}</td>
+        <td>${d.out}</td>
+        <td class="${d.cacheRead === '0' ? 'val-zero' : ''}">${d.cacheRead}</td>
+        <td class="${d.cacheWrite === '0' ? 'val-zero' : ''}">${d.cacheWrite}</td>
+        <td class="hit-${d.band}">${d.hitRate}</td>
+      </tr>
+    `;
+  }).join('');
+}
+
+// 绑定复选框变化与对应类名
+const chkAlign = document.getElementById('chkAlign');
+const chkZero = document.getElementById('chkZero');
+const chkHover = document.getElementById('chkHover');
+const chkPad = document.getElementById('chkPad');
+const chkHead = document.getElementById('chkHead');
+const chkCost = document.getElementById('chkCost');
+
+function syncClasses() {
+  container.classList.toggle('tweak-align-fix', chkAlign.checked);
+  container.classList.toggle('tweak-zero-dim', chkZero.checked);
+  container.classList.toggle('tweak-row-hover', chkHover.checked);
+  container.classList.toggle('tweak-cell-padding', chkPad.checked);
+  container.classList.toggle('tweak-header-border', chkHead.checked);
+  container.classList.toggle('tweak-cost-bold', chkCost.checked);
+  renderRows();
+}
+
+[chkAlign, chkZero, chkHover, chkPad, chkHead, chkCost].forEach(chk => {
+  chk.addEventListener('change', syncClasses);
+});
+
+// 模式切换（一键全选 vs 一键全关）
+document.querySelectorAll('#modeSeg .seg-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('#modeSeg .seg-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    const isPolished = btn.getAttribute('data-mode') === 'polished';
+    [chkAlign, chkZero, chkHover, chkPad, chkHead, chkCost].forEach(chk => {
+      chk.checked = isPolished;
+    });
+    syncClasses();
+  });
+});
+
+// 主题切换
+const themeToggle = document.getElementById('themeToggle');
+const themeIcon = document.getElementById('themeIcon');
+const themeText = document.getElementById('themeText');
+let isDark = true;
+themeToggle.addEventListener('click', () => {
+  isDark = !isDark;
+  if (isDark) {
+    document.documentElement.removeAttribute('data-theme');
+    themeIcon.textContent = '☀️';
+    themeText.textContent = '明亮模式';
+  } else {
+    document.documentElement.setAttribute('data-theme', 'light');
+    themeIcon.textContent = '🌙';
+    themeText.textContent = '暗黑模式';
+  }
+});
+
+syncClasses();
+</script>
+</body>
+</html>

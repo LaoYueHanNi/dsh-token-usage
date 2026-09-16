@@ -87,12 +87,25 @@
 }
 
 .table th {
-  font-weight: 500;
+  font-weight: 600;
   color: var(--dsw-alias-label-secondary);
   position: sticky;
   top: 0;
   z-index: 1;
   background: var(--dsw-alias-bg-layer-2);
+  border-bottom: 1.5px solid var(--dsw-alias-border-l2);
+}
+
+.table tbody tr {
+  transition: background-color 0.12s ease;
+}
+
+.table tbody tr:hover {
+  background-color: var(--dsw-interactive-bg-hover);
+}
+
+.costCol {
+  font-weight: 600;
 }
 
 .table td {

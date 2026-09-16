@@ -315,12 +315,12 @@ export function UsageView({ useSessions, useProjection, sessionId, t }: UsageVie
                                   t={t}
                                 />
                               </td>
-                              <td>{formatTokens(row.totals.inputTokens)}</td>
-                              <td>{formatTokens(row.totals.outputTokens)}</td>
-                              <td>{formatTokens(row.totals.cacheReadTokens)}</td>
-                              <td>{formatTokens(row.totals.cacheWriteTokens)}</td>
+                              <td className={row.totals.inputTokens === 0 ? styles['zeroDim'] : undefined}>{formatTokens(row.totals.inputTokens)}</td>
+                              <td className={row.totals.outputTokens === 0 ? styles['zeroDim'] : undefined}>{formatTokens(row.totals.outputTokens)}</td>
+                              <td className={row.totals.cacheReadTokens === 0 ? styles['zeroDim'] : undefined}>{formatTokens(row.totals.cacheReadTokens)}</td>
+                              <td className={row.totals.cacheWriteTokens === 0 ? styles['zeroDim'] : undefined}>{formatTokens(row.totals.cacheWriteTokens)}</td>
                               <td><HitRateText totals={row.totals} /></td>
-                              <td>{formatCost(row.cost, view)}</td>
+                              <td className={styles['costCol']}>{formatCost(row.cost, view)}</td>
                             </tr>
                           ))}
                         </tbody>
@@ -405,7 +405,7 @@ export function UsageView({ useSessions, useProjection, sessionId, t }: UsageVie
                         </td>
                         <td>{row?.total.requests.toLocaleString() ?? '—'}</td>
                         <td>{row !== undefined ? formatTokens(totalTokens(row.total)) : '—'}</td>
-                        <td>
+                        <td className={styles['costCol']}>
                           {row !== undefined ? formatCost(row.totalCost, view) : '—'}
                         </td>
                         <td>{row !== undefined ? <HitRateText totals={row.total} /> : '—'}</td>

@@ -219,6 +219,28 @@
   white-space: nowrap;
 }
 
+.table tbody tr {
+  transition: background-color 0.12s ease;
+}
+
+.table tbody tr:hover {
+  background-color: var(--dsw-interactive-bg-hover);
+}
+
+.table th {
+  font-weight: 600;
+  border-bottom: 1.5px solid var(--dsw-alias-border-l2);
+}
+
+.costCol {
+  font-weight: 600;
+}
+
+.zeroDim {
+  color: var(--dsw-alias-label-tertiary);
+  opacity: 0.55;
+}
+
 .table th:first-child,
 .table td:first-child {
   text-align: left;
