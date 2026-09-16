@@ -5,10 +5,12 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
-  MAX_BUCKETS, bucketSeries, bucketWidth, buildChartPoints, cumulateSeries, gapAfter, scaleSeries,
-  scaleToSpan, seriesPath,
+  MAX_BUCKETS, areaPath, bucketSeries, bucketWidth, buildChartPoints, cumulateSeries, gapAfter,
+  gapPatchedPoints, monotoneSplinePath, scaleSeries, scaleToSpan, seriesPath, smoothSeriesPath,
 } from '../src/client/TrendChart.tsx'
+
 import type { ChartSeries } from '../src/client/TrendChart.tsx'
+
 import type { RequestPoint } from '../src/wire.ts'
 
 function reqSeries(times: number[]): ChartSeries {
@@ -315,3 +317,71 @@ describe('seriesPath', () => {
     expect(seriesPath({ xs: [], ys: [], yZero, style: 'polyline' })).toBe('')
   })
 })
+
+describe('monotoneSplinePath', () => {
+  it('returns empty string for empty inputs and single M for one point', () => {
+    expect(monotoneSplinePath([], [])).toBe('')
+    expect(monotoneSplinePath([10], [20])).toBe('M10.0,20.0')
+  })
+
+  it('connects two points with a straight line', () => {
+    expect(monotoneSplinePath([0, 100], [50, 80])).toBe('M0.0,50.0 L100.0,80.0')
+  })
+
+  it('generates cubic Bezier segments with flat slopes on identical zero plateaus', () => {
+    // 00:00 -> 01:00 are both at y=100 (zero level); slope must stay 0 with no dip
+    const xs = [0, 50, 100, 150]
+    const ys = [100, 100, 20, 100]
+    const path = monotoneSplinePath(xs, ys)
+    expect(path).toContain('M0.0,100.0')
+    // First segment (0,100) -> (50,100) must have horizontal control points (y=100)
+    expect(path).toMatch(/C\d+\.\d+,100\.0 \d+\.\d+,100\.0 50\.0,100\.0/)
+  })
+})
+
+describe('areaPath', () => {
+  it('returns empty string when line path is empty or fewer than two points', () => {
+    expect(areaPath('', [10, 20], 100)).toBe('')
+    expect(areaPath('M10.0,20.0', [10], 100)).toBe('')
+  })
+
+  it('closes a line path down to the baseline', () => {
+    const line = 'M0.0,20.0 L50.0,10.0 L100.0,40.0'
+    expect(areaPath(line, [0, 50, 100], 100)).toBe(
+      'M0.0,20.0 L50.0,10.0 L100.0,40.0 L100.0,100.0 L0.0,100.0 Z',
+    )
+  })
+})
+
+describe('gapPatchedPoints', () => {
+  it('inserts hold points at gap boundaries', () => {
+    const res = gapPatchedPoints({
+      xs: [0, 80],
+      ys: [10, 50],
+      xEnds: [20, 100],
+      yZero: 90,
+      hold: 'zero',
+      gaps: [true],
+    })
+    expect(res.xs).toEqual([0, 20, 60, 80])
+    expect(res.ys).toEqual([10, 90, 90, 50])
+  })
+})
+
+describe('smoothSeriesPath', () => {
+  it('interpolates gap-patched temporal points with monotone spline', () => {
+    const path = smoothSeriesPath({
+      xs: [0, 80],
+      ys: [10, 50],
+      xEnds: [20, 100],
+      yZero: 90,
+      hold: 'zero',
+      gaps: [true],
+    })
+    expect(path).toMatch(/^M0\.0,10\.0 C/)
+    // Middle hold segment (20->60 at y=90) must have horizontal tangents at y=90
+    expect(path).toContain('90.0')
+  })
+})
+
+

@@ -5,35 +5,49 @@
   display: block;
   width: 100%;
   height: auto;
+  user-select: none;
 }
 
 .axis {
-  stroke: var(--dsw-alias-border-l2);
+  stroke: var(--dsw-alias-border-l1);
   stroke-width: 1;
 }
 
 .grid {
   stroke: var(--dsw-alias-border-l2);
   stroke-width: 1;
-  stroke-dasharray: 3 3;
+  stroke-dasharray: 4 4;
+  stroke-opacity: 0.6;
+}
+
+.area {
+  fill: url(#token-usage-trend-gradient);
+  pointer-events: none;
 }
 
 .line {
   fill: none;
   stroke: var(--dsw-alias-label-primary);
-  stroke-width: 2;
+  stroke-width: 2.2;
   stroke-linejoin: round;
   stroke-linecap: round;
+  filter: drop-shadow(0 2px 5px color-mix(in srgb, var(--dsw-alias-label-primary) 18%, transparent));
 }
+
 
 .dot {
   fill: var(--dsw-alias-label-primary);
 }
 
-/* The hovered/focused point grows; the label owns the exact value. */
+/* The hovered/focused point's outer luminescent halo */
+.dotHalo {
+  fill: color-mix(in srgb, var(--dsw-alias-label-primary) 14%, transparent);
+}
+
+/* The hovered/focused point inner core */
 .dotActive {
   fill: var(--dsw-alias-label-primary);
-  stroke: var(--dsw-alias-bg-layer-2);
+  stroke: var(--dsw-alias-bg-layer-1);
   stroke-width: 2;
 }
 
@@ -42,27 +56,33 @@
   stroke: var(--dsw-alias-label-secondary);
   stroke-width: 1;
   stroke-dasharray: 3 3;
+  stroke-opacity: 0.45;
 }
 
 /* Invisible per-day hit target: fills the column around its point. */
 .hit {
-  cursor: default;
+  cursor: crosshair;
 }
 
 /* The floating per-day label: card-like box above the active point. */
 .pointLabel rect {
   fill: var(--dsw-alias-bg-layer-3);
   stroke: var(--dsw-alias-border-l2);
+  stroke-width: 1;
+  filter: drop-shadow(0 3px 8px rgba(0, 0, 0, 0.28));
 }
 
 .pointLabel text {
   fill: var(--dsw-alias-label-primary);
   font-size: 11px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
 }
 
 .tick {
-  fill: var(--dsw-alias-label-secondary);
+  fill: var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary));
   font-size: 11px;
+  font-variant-numeric: tabular-nums;
 }
 
 .empty {
@@ -72,3 +92,4 @@
   text-align: center;
   color: var(--dsw-alias-label-secondary);
 }
+

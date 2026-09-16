@@ -20,23 +20,25 @@
  */
 
 import { useState } from 'react'
-import type { ReactNode } from 'react'
+import type { MouseEvent, ReactNode } from 'react'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { RequestPoint, UsageDayRow, UsageHourRow } from '../wire.ts'
 import { formatTokens } from './format.ts'
 import { tickValues } from './trend-chart/axis.ts'
-import { gapAfter, seriesPath } from './trend-chart/path.ts'
+import { areaPath, gapAfter, smoothSeriesPath } from './trend-chart/path.ts'
 import { buildChartPoints, cumulateSeries } from './trend-chart/points.ts'
 import { dotRadius, labelIndices, scaleSeries } from './trend-chart/scale.ts'
 import styles from './TrendChart.module.css'
 
 /** Re-export the chart's pure helpers for the test suite. */
 export {
-  MAX_BUCKETS, bucketSeries, bucketWidth, buildChartPoints, cumulateSeries, dotRadius, gapAfter,
-  labelIndices, niceStep, scaleSeries, scaleToSpan, seriesPath, tickValues,
+  MAX_BUCKETS, areaPath, bucketSeries, bucketWidth, buildChartPoints, cumulateSeries, dotRadius, gapAfter,
+  gapPatchedPoints, labelIndices, monotoneSplinePath, niceStep, scaleSeries, scaleToSpan, seriesPath,
+  smoothSeriesPath, tickValues,
 } from './trend-chart/index.ts'
 export type { TrendBucket } from './trend-chart/bucket.ts'
 export type { ChartSeries, ScaleResult } from './trend-chart/index.ts'
+
 
 /** SVG canvas metrics; the element scales to the section width via viewBox. */
 const WIDTH = 800
@@ -147,16 +149,19 @@ export function TrendChart({ rows, hours, requests, from, to, mode = 'interval',
   const [active, setActive] = useState<number | null>(null)
   const activePoint = active === null ? null : points[active] ?? null
   const y = (tokens: number): number => TOP + innerHeight - (tokens / top) * innerHeight
-  // Gap-patched polyline lives in trend-chart/path.ts; the renderer picks the style.
-  const path = seriesPath({
+  const ys = points.map(point => y(point.tokens))
+  const yZero = y(0)
+  // Generate a smooth monotonic cubic spline across either equidistant
+  // days/hours or gap-patched temporal buckets (so request idle stays idle).
+  const path = smoothSeriesPath({
     xs,
-    ys: points.map(point => y(point.tokens)),
-    yZero: y(0),
-    style: series.mode === 'temporal' ? 'gap' : 'polyline',
-    ...series.mode === 'temporal'
-      ? { gaps: gapAfter(series.points), xEnds: xEnds ?? xs, hold: mode === 'cumulative' ? 'previous' : 'zero' }
-      : {},
+    ys,
+    yZero,
+    gaps: series.mode === 'temporal' ? gapAfter(series.points) : undefined,
+    xEnds: series.mode === 'temporal' ? (xEnds ?? xs) : undefined,
+    hold: mode === 'cumulative' ? 'previous' : 'zero',
   })
+  const area = areaPath(path, xs, yZero)
 
   // Cumulative reads one aria regardless of granularity: the per-mode
   // phrasing ("daily" / "hourly" / "request-bucketed") describes interval
@@ -182,14 +187,39 @@ export function TrendChart({ rows, hours, requests, from, to, mode = 'interval',
     return { start: center - half, width: half * 2 }
   }
 
+  const handleMouseMove = (event: MouseEvent<SVGSVGElement>): void => {
+    if (points.length <= 1) return
+    const rect = event.currentTarget.getBoundingClientRect()
+    if (rect.width <= 0) return
+    const svgX = ((event.clientX - rect.left) / rect.width) * WIDTH
+    let closest = 0
+    let minDiff = Math.abs(xs[0]! - svgX)
+    for (let i = 1; i < xs.length; i += 1) {
+      const diff = Math.abs(xs[i]! - svgX)
+      if (diff < minDiff) {
+        minDiff = diff
+        closest = i
+      }
+    }
+    setActive(closest)
+  }
+
   return (
     <svg
       role="img"
       aria-label={chartAria}
       viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
       className={styles.chart}
+      onMouseMove={handleMouseMove}
       onMouseLeave={() => setActive(null)}
     >
+      <defs>
+        <linearGradient id="token-usage-trend-gradient" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="var(--dsw-alias-label-primary)" stopOpacity="0.25" />
+          <stop offset="55%" stopColor="var(--dsw-alias-label-primary)" stopOpacity="0.08" />
+          <stop offset="100%" stopColor="var(--dsw-alias-label-primary)" stopOpacity="0.0" />
+        </linearGradient>
+      </defs>
       {ticks.map(tick => (
         <g key={tick}>
           <line x1={LEFT} y1={y(tick)} x2={WIDTH - RIGHT} y2={y(tick)} className={styles.grid} />
@@ -199,16 +229,32 @@ export function TrendChart({ rows, hours, requests, from, to, mode = 'interval',
         </g>
       ))}
       <line x1={LEFT} y1={y(0)} x2={WIDTH - RIGHT} y2={y(0)} className={styles.axis} />
+      {area !== '' ? <path d={area} className={styles.area} /> : null}
       <path d={path} className={styles.line} />
-      {points.map((point, index) => (
+      {/* Declutter: render dots only when focused/hovered, or for a lone point */}
+      {activePoint !== null && active !== null ? (
+        <g pointerEvents="none">
+          <circle
+            cx={xs[active]}
+            cy={y(activePoint.tokens)}
+            r={radius + 3.5}
+            className={styles.dotHalo}
+          />
+          <circle
+            cx={xs[active]}
+            cy={y(activePoint.tokens)}
+            r={radius}
+            className={styles.dotActive}
+          />
+        </g>
+      ) : points.length === 1 ? (
         <circle
-          key={point.key}
-          cx={xs[index]}
-          cy={y(point.tokens)}
-          r={active === index ? radius + 2.5 : radius}
-          className={active === index ? styles.dotActive : styles.dot}
+          cx={xs[0]}
+          cy={y(points[0]!.tokens)}
+          r={radius}
+          className={styles.dot}
         />
-      ))}
+      ) : null}
       {activePoint !== null
         ? (
           // The guide line drops from the active point to the x axis.
@@ -245,14 +291,14 @@ export function TrendChart({ rows, hours, requests, from, to, mode = 'interval',
           // a ceiling at the canvas top.
           const label = tipOf(t, activePoint, mode)
           const charWidth = 6.2
-          const labelWidth = label.length * charWidth + 12
+          const labelWidth = label.length * charWidth + 14
           const center = xs[active!]!
           const left = Math.min(Math.max(center - labelWidth / 2, LEFT), WIDTH - RIGHT - labelWidth)
           const labelY = Math.max(y(activePoint.tokens) - 12, TOP + 8)
           return (
             <g className={styles.pointLabel} pointerEvents="none">
-              <rect x={left} y={labelY - 13} width={labelWidth} height={20} rx={5} />
-              <text x={left + labelWidth / 2} y={labelY} textAnchor="middle">{label}</text>
+              <rect x={left} y={labelY - 14} width={labelWidth} height={22} rx={6} />
+              <text x={left + labelWidth / 2} y={labelY + 1} textAnchor="middle">{label}</text>
             </g>
           )
         })()
@@ -271,3 +317,4 @@ export function TrendChart({ rows, hours, requests, from, to, mode = 'interval',
     </svg>
   )
 }
+

@@ -1,0 +1,757 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DSH Token 趋势图现代设计预览</title>
+<style>
+  :root {
+    --dsw-alias-bg-layer-1: #1a1a1c;
+    --dsw-alias-bg-layer-2: #242427;
+    --dsw-alias-bg-layer-3: #2d2d31;
+    --dsw-alias-fill-container: #202023;
+    --dsw-alias-border-l1: rgba(255, 255, 255, 0.08);
+    --dsw-alias-border-l2: rgba(255, 255, 255, 0.14);
+    --dsw-alias-label-primary: #f4f4f5;
+    --dsw-alias-label-secondary: #a1a1aa;
+    --dsw-alias-label-tertiary: #71717a;
+    --dsw-alias-state-success-primary: #22c55e;
+    --page-bg: #141416;
+    --card-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.35);
+
+    /* 默认选用方案 A：DSH 原生极简柔白微光 */
+    --chart-accent: #f4f4f5;
+    --chart-area-top: rgba(244, 244, 245, 0.10);
+    --chart-halo: rgba(244, 244, 245, 0.14);
+  }
+
+  [data-theme="light"] {
+    --dsw-alias-bg-layer-1: #ffffff;
+    --dsw-alias-bg-layer-2: #f4f4f6;
+    --dsw-alias-bg-layer-3: #ffffff;
+    --dsw-alias-fill-container: #f9f9fb;
+    --dsw-alias-border-l1: rgba(0, 0, 0, 0.06);
+    --dsw-alias-border-l2: rgba(0, 0, 0, 0.12);
+    --dsw-alias-label-primary: #18181b;
+    --dsw-alias-label-secondary: #71717a;
+    --dsw-alias-label-tertiary: #a1a1aa;
+    --dsw-alias-state-success-primary: #16a34a;
+    --page-bg: #f4f4f7;
+    --card-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.06);
+
+    --chart-accent: #27272a;
+    --chart-area-top: rgba(24, 24, 27, 0.08);
+    --chart-halo: rgba(24, 24, 27, 0.12);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 28px 20px 60px;
+    background: var(--page-bg);
+    color: var(--dsw-alias-label-primary);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+    transition: background 0.2s ease, color 0.2s ease;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .container {
+    width: 100%;
+    max-width: 860px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  /* 顶部控制栏 */
+  .control-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+    padding: 12px 18px;
+    background: var(--dsw-alias-fill-container);
+    border: 1px solid var(--dsw-alias-border-l1);
+    border-radius: 12px;
+  }
+
+  .title-group h1 {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+  .title-group p {
+    margin: 2px 0 0;
+    font-size: 12px;
+    color: var(--dsw-alias-label-secondary);
+  }
+
+  .palette-selector {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--dsw-alias-label-secondary);
+  }
+
+  .palette-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--dsw-alias-border-l1);
+    background: var(--dsw-alias-bg-layer-2);
+    color: var(--dsw-alias-label-secondary);
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  .palette-pill:hover {
+    color: var(--dsw-alias-label-primary);
+  }
+  .palette-pill.active {
+    border-color: var(--dsw-alias-border-l2);
+    background: var(--dsw-alias-bg-layer-3);
+    color: var(--dsw-alias-label-primary);
+    font-weight: 600;
+  }
+  .palette-color-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+  }
+
+  .btn-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .seg-control {
+    display: inline-flex;
+    background: var(--dsw-alias-bg-layer-2);
+    padding: 3px;
+    border-radius: 8px;
+    border: 1px solid var(--dsw-alias-border-l1);
+  }
+  .seg-btn {
+    border: none;
+    background: transparent;
+    padding: 5px 12px;
+    font-size: 12px;
+    font-weight: 500;
+    border-radius: 6px;
+    color: var(--dsw-alias-label-secondary);
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  .seg-btn.active {
+    background: var(--dsw-alias-bg-layer-3);
+    color: var(--dsw-alias-label-primary);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+    font-weight: 600;
+  }
+
+  .icon-btn {
+    border: 1px solid var(--dsw-alias-border-l1);
+    background: var(--dsw-alias-bg-layer-2);
+    color: var(--dsw-alias-label-primary);
+    padding: 5px 11px;
+    border-radius: 8px;
+    font-size: 12px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  /* 统计卡片区 */
+  .stat-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+  }
+  .stat-card {
+    background: var(--dsw-alias-fill-container);
+    border: 1px solid var(--dsw-alias-border-l1);
+    border-radius: 8px;
+    padding: 10px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .stat-label {
+    font-size: 11px;
+    color: var(--dsw-alias-label-secondary);
+  }
+  .stat-value {
+    font-size: 18px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+  .stat-value.green {
+    color: var(--dsw-alias-state-success-primary);
+  }
+
+  /* 图表卡片容器 */
+  .chart-card {
+    background: var(--dsw-alias-fill-container);
+    border: 1px solid var(--dsw-alias-border-l1);
+    border-radius: 12px;
+    padding: 18px 20px 16px;
+    position: relative;
+    box-shadow: var(--card-shadow);
+  }
+  .chart-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 14px;
+  }
+  .chart-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--dsw-alias-label-primary);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .badge-mode {
+    font-size: 11px;
+    font-weight: 500;
+    padding: 2px 7px;
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--dsw-alias-label-primary) 10%, transparent);
+    color: var(--dsw-alias-label-primary);
+  }
+
+  /* SVG 样式 */
+  .chart-svg {
+    display: block;
+    width: 100%;
+    height: auto;
+    overflow: visible;
+    user-select: none;
+  }
+
+  .grid-line {
+    stroke: var(--dsw-alias-border-l2);
+    stroke-width: 1;
+    stroke-dasharray: 4 4;
+    stroke-opacity: 0.6;
+  }
+  .axis-baseline {
+    stroke: var(--dsw-alias-border-l1);
+    stroke-width: 1;
+  }
+  .tick-text {
+    fill: var(--dsw-alias-label-tertiary);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* 旧版折线与点 */
+  .old-line {
+    fill: none;
+    stroke: var(--dsw-alias-label-primary);
+    stroke-width: 2;
+    stroke-linejoin: round;
+  }
+  .old-dot {
+    fill: var(--dsw-alias-label-primary);
+  }
+
+  /* 新版现代折线与面积 */
+  .modern-line {
+    fill: none;
+    stroke: var(--chart-accent);
+    stroke-width: 2.3;
+    stroke-linejoin: round;
+    stroke-linecap: round;
+    filter: drop-shadow(0 2px 5px rgba(255, 255, 255, 0.15));
+  }
+  .modern-area {
+    fill: url(#chartAreaGradient);
+    pointer-events: none;
+  }
+
+  /* 十字准星与高亮锚点 */
+  .crosshair-line {
+    stroke: var(--dsw-alias-label-secondary);
+    stroke-width: 1;
+    stroke-dasharray: 3 3;
+    stroke-opacity: 0.4;
+  }
+  .active-marker-halo {
+    fill: var(--chart-halo);
+    transition: cx 0.05s ease, cy 0.05s ease;
+  }
+  .active-marker-dot {
+    fill: var(--chart-accent);
+    stroke: var(--dsw-alias-bg-layer-1);
+    stroke-width: 2;
+    transition: cx 0.05s ease, cy 0.05s ease;
+  }
+
+  /* 浮动 Tooltip */
+  .tooltip-card {
+    pointer-events: none;
+  }
+  .tooltip-bg {
+    fill: var(--dsw-alias-bg-layer-3);
+    stroke: var(--dsw-alias-border-l2);
+    stroke-width: 1;
+    filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.28));
+  }
+  .tooltip-time {
+    fill: var(--dsw-alias-label-secondary);
+    font-size: 11px;
+    font-weight: 400;
+  }
+  .tooltip-dot {
+    fill: var(--chart-accent);
+  }
+  .tooltip-val {
+    fill: var(--dsw-alias-label-primary);
+    font-size: 12px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* 说明卡片 */
+  .info-box {
+    background: var(--dsw-alias-fill-container);
+    border: 1px solid var(--dsw-alias-border-l1);
+    border-radius: 12px;
+    padding: 14px 18px;
+    font-size: 12px;
+    color: var(--dsw-alias-label-secondary);
+    line-height: 1.6;
+  }
+  .info-box b {
+    color: var(--dsw-alias-label-primary);
+  }
+</style>
+</head>
+<body>
+
+<div class="container">
+  <!-- 顶部控制栏 -->
+  <div class="control-bar">
+    <div class="title-group">
+      <h1>Token 趋势图设计方案对比</h1>
+      <p>克制、柔和、沉稳的 DSH 原生质感探索</p>
+    </div>
+
+    <!-- 配色快速切换器 -->
+    <div class="palette-selector">
+      <span>色彩风格：</span>
+      <div class="palette-pill active" id="palWhite" onclick="setPalette('white')">
+        <span class="palette-color-dot" style="background: #f4f4f5;"></span>
+        <span>A. 极简柔白 (推荐)</span>
+      </div>
+      <div class="palette-pill" id="palSlate" onclick="setPalette('slate')">
+        <span class="palette-color-dot" style="background: #94a3b8;"></span>
+        <span>B. 冷灰 Slate</span>
+      </div>
+      <div class="palette-pill" id="palMint" onclick="setPalette('mint')">
+        <span class="palette-color-dot" style="background: #34d399;"></span>
+        <span>C. 命中率软青</span>
+      </div>
+    </div>
+
+    <div class="btn-group">
+      <div class="seg-control">
+        <button class="seg-btn active" id="btnModern" onclick="setDesign('modern')">✨ 新版曲线</button>
+        <button class="seg-btn" id="btnOld" onclick="setDesign('old')">原版折线 (24点)</button>
+      </div>
+      <button class="icon-btn" onclick="toggleTheme()" id="themeBtn">🌓 明暗</button>
+    </div>
+  </div>
+
+  <!-- 模拟 DSH 统计卡片 -->
+  <div class="stat-grid">
+    <div class="stat-card">
+      <div class="stat-label">成功请求数</div>
+      <div class="stat-value">49</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">费用</div>
+      <div class="stat-value">¥0.18</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">总 token</div>
+      <div class="stat-value">1.8M</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">命中率</div>
+      <div class="stat-value green">97.7%</div>
+    </div>
+  </div>
+
+  <!-- 核心图表卡片 -->
+  <div class="chart-card">
+    <div class="chart-header">
+      <div class="chart-title">
+        <span>今日用量趋势 (1d 视图 · 24 小时)</span>
+        <span class="badge-mode" id="modeBadge">极简柔白样条 · 10% 微光渐变</span>
+      </div>
+      <div style="font-size: 11px; color: var(--dsw-alias-label-secondary);">
+        移动鼠标体验平滑吸附游标与卡片 Tooltip
+      </div>
+    </div>
+
+    <!-- SVG 绘制区 -->
+    <svg id="chartSvg" class="chart-svg" viewBox="0 0 800 200">
+      <defs>
+        <!-- 柔和通透的三阶微光渐变 -->
+        <linearGradient id="chartAreaGradient" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="var(--chart-accent)" id="gradStop0" stop-opacity="0.25" />
+          <stop offset="55%" stop-color="var(--chart-accent)" id="gradStopM" stop-opacity="0.08" />
+          <stop offset="100%" stop-color="var(--chart-accent)" id="gradStop1" stop-opacity="0.0" />
+        </linearGradient>
+      </defs>
+
+      <!-- 网格参考线与 Y 轴刻度 -->
+      <g id="gridGroup"></g>
+
+      <!-- 基线 (y=0) -->
+      <line id="axisBase" class="axis-baseline" x1="44" y1="160" x2="784" y2="160" />
+
+      <!-- 柔和微光面积填充 -->
+      <path id="areaPathElem" class="modern-area" d="" />
+
+      <!-- 主曲线 -->
+      <path id="linePathElem" class="modern-line" d="" />
+
+      <!-- 旧版 24 个密集白球 (可切换) -->
+      <g id="oldDotsGroup" style="display: none;"></g>
+
+      <!-- 交互游标与高亮锚点 -->
+      <g id="hoverGroup" style="display: none; pointer-events: none;">
+        <line id="crosshair" class="crosshair-line" x1="0" y1="12" x2="0" y2="160" />
+        <circle id="markerHalo" class="active-marker-halo" cx="0" cy="0" r="6.5" />
+        <circle id="markerDot" class="active-marker-dot" cx="0" cy="0" r="3" />
+
+        <!-- 结构化卡片 Tooltip -->
+        <g id="tooltipCard" class="tooltip-card">
+          <rect id="tooltipBg" class="tooltip-bg" x="0" y="0" width="124" height="42" rx="6" />
+          <text id="tipTime" class="tooltip-time" x="12" y="16">11:00</text>
+          <circle id="tipDot" class="tooltip-dot" cx="15" cy="29" r="3" />
+          <text id="tipValue" class="tooltip-val" x="24" y="32">1.2M tokens</text>
+        </g>
+      </g>
+
+      <!-- X 轴刻度文字 -->
+      <g id="xLabelsGroup"></g>
+
+      <!-- 全图感应层 -->
+      <rect id="overlayHit" x="44" y="12" width="740" height="150" fill="transparent" style="cursor: crosshair;" />
+    </svg>
+  </div>
+
+  <div class="info-box">
+    <b>💡 色彩调优说明：</b>
+    已将原先刺眼的高饱和电光蓝移除，推荐使用 <b>A. 极简柔白 (Monochrome)</b>。
+    该方案严格使用 DSH 系统的原生中性层级色（<code>--dsw-alias-label-primary</code> 与 10% 微弱半透明渐变），不喧宾夺主，彻底解决 24 个密集小白球的问题，在深浅色背景下都沉稳通透。
+    您可以点击上方色彩风格按钮对比查看 <b>A (极简柔白)</b>、<b>B (冷灰)</b>、<b>C (薄荷青)</b>。
+  </div>
+</div>
+
+<script>
+const hoursData = [
+  { label: '00:00', tokens: 0 },
+  { label: '01:00', tokens: 0 },
+  { label: '02:00', tokens: 0 },
+  { label: '03:00', tokens: 0 },
+  { label: '04:00', tokens: 0 },
+  { label: '05:00', tokens: 0 },
+  { label: '06:00', tokens: 0 },
+  { label: '07:00', tokens: 0 },
+  { label: '08:00', tokens: 0 },
+  { label: '09:00', tokens: 0 },
+  { label: '10:00', tokens: 0 },
+  { label: '11:00', tokens: 1210000 },
+  { label: '12:00', tokens: 530000 },
+  { label: '13:00', tokens: 0 },
+  { label: '14:00', tokens: 0 },
+  { label: '15:00', tokens: 0 },
+  { label: '16:00', tokens: 0 },
+  { label: '17:00', tokens: 0 },
+  { label: '18:00', tokens: 0 },
+  { label: '19:00', tokens: 0 },
+  { label: '20:00', tokens: 0 },
+  { label: '21:00', tokens: 0 },
+  { label: '22:00', tokens: 0 },
+  { label: '23:00', tokens: 0 },
+];
+
+const WIDTH = 800;
+const HEIGHT = 200;
+const LEFT = 44;
+const RIGHT = 16;
+const TOP = 14;
+const BASE_Y = 160;
+const INNER_HEIGHT = BASE_Y - TOP;
+const INNER_WIDTH = WIDTH - LEFT - RIGHT;
+
+const TOP_VALUE = 1500000;
+const TICKS = [500000, 1000000, 1500000];
+
+let currentDesign = 'modern';
+let currentPalette = 'white';
+
+function getX(index) {
+  return LEFT + (index / (hoursData.length - 1)) * INNER_WIDTH;
+}
+function getY(tokens) {
+  return BASE_Y - (tokens / TOP_VALUE) * INNER_HEIGHT;
+}
+
+const points = hoursData.map((d, i) => ({
+  x: getX(i),
+  y: getY(d.tokens),
+  tokens: d.tokens,
+  label: d.label
+}));
+
+function formatTokens(val) {
+  if (val >= 1000000) return (val / 1000000).toFixed(val % 1000000 === 0 ? 0 : 1) + 'M';
+  if (val >= 1000) return (val / 1000).toFixed(val % 1000 === 0 ? 0 : 1) + 'K';
+  return String(val);
+}
+
+// 直线折线
+function buildPolylinePath(pts) {
+  if (pts.length === 0) return '';
+  return pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+}
+
+// 单调三次样条曲线 (Fritsch-Carlson)
+function buildMonotoneSplinePath(pts) {
+  const n = pts.length;
+  if (n === 0) return '';
+  if (n === 1) return `M${pts[0].x.toFixed(1)},${pts[0].y.toFixed(1)}`;
+  if (n === 2) return `M${pts[0].x.toFixed(1)},${pts[0].y.toFixed(1)} L${pts[1].x.toFixed(1)},${pts[1].y.toFixed(1)}`;
+
+  const dx = [];
+  const dy = [];
+  const slopes = [];
+  for (let i = 0; i < n - 1; i++) {
+    const dX = pts[i + 1].x - pts[i].x;
+    const dY = pts[i + 1].y - pts[i].y;
+    dx.push(dX);
+    dy.push(dY);
+    slopes.push(dX === 0 ? 0 : dY / dX);
+  }
+
+  const m = new Array(n);
+  m[0] = slopes[0];
+  m[n - 1] = slopes[n - 2];
+  for (let i = 1; i < n - 1; i++) {
+    const s0 = slopes[i - 1];
+    const s1 = slopes[i];
+    if (s0 * s1 <= 0) {
+      m[i] = 0;
+    } else {
+      m[i] = (s0 + s1) / 2;
+    }
+  }
+
+  for (let i = 0; i < n - 1; i++) {
+    const slope = slopes[i];
+    if (slope === 0) {
+      m[i] = 0;
+      m[i + 1] = 0;
+    } else {
+      const alpha = m[i] / slope;
+      const beta = m[i + 1] / slope;
+      const dist = alpha * alpha + beta * beta;
+      if (dist > 9) {
+        const tau = 3 / Math.sqrt(dist);
+        m[i] = tau * alpha * slope;
+        m[i + 1] = tau * beta * slope;
+      }
+    }
+  }
+
+  let d = `M${pts[0].x.toFixed(1)},${pts[0].y.toFixed(1)}`;
+  for (let i = 0; i < n - 1; i++) {
+    const dX = dx[i];
+    const p0 = pts[i];
+    const p1 = pts[i + 1];
+    const cp1x = p0.x + dX / 3;
+    const cp1y = p0.y + m[i] * (dX / 3);
+    const cp2x = p1.x - dX / 3;
+    const cp2y = p1.y - m[i + 1] * (dX / 3);
+    d += ` C${cp1x.toFixed(1)},${cp1y.toFixed(1)} ${cp2x.toFixed(1)},${cp2y.toFixed(1)} ${p1.x.toFixed(1)},${p1.y.toFixed(1)}`;
+  }
+  return d;
+}
+
+function buildAreaPath(lineD, pts, baseY) {
+  if (pts.length === 0) return '';
+  const first = pts[0];
+  const last = pts[pts.length - 1];
+  return `${lineD} L${last.x.toFixed(1)},${baseY.toFixed(1)} L${first.x.toFixed(1)},${baseY.toFixed(1)} Z`;
+}
+
+function renderChart() {
+  const gridGroup = document.getElementById('gridGroup');
+  gridGroup.innerHTML = TICKS.map(tick => `
+    <g>
+      <line x1="${LEFT}" y1="${getY(tick)}" x2="${WIDTH - RIGHT}" y2="${getY(tick)}" class="grid-line" />
+      <text x="${LEFT - 8}" y="${getY(tick) + 3}" text-anchor="end" class="tick-text">${formatTokens(tick)}</text>
+    </g>
+  `).join('');
+
+  const xLabelsGroup = document.getElementById('xLabelsGroup');
+  const labelIndices = [0, 11, 23];
+  xLabelsGroup.innerHTML = labelIndices.map(idx => {
+    const anchor = idx === 0 ? 'start' : idx === 23 ? 'end' : 'middle';
+    return `<text x="${getX(idx)}" y="185" text-anchor="${anchor}" class="tick-text">${hoursData[idx].label}</text>`;
+  }).join('');
+
+  const oldDotsGroup = document.getElementById('oldDotsGroup');
+  oldDotsGroup.innerHTML = points.map(p => `
+    <circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="3" class="old-dot" />
+  `).join('');
+
+  updatePaths();
+}
+
+function updatePaths() {
+  const lineElem = document.getElementById('linePathElem');
+  const areaElem = document.getElementById('areaPathElem');
+  const oldDots = document.getElementById('oldDotsGroup');
+  const badge = document.getElementById('modeBadge');
+
+  if (currentDesign === 'modern') {
+    const lineD = buildMonotoneSplinePath(points);
+    lineElem.setAttribute('d', lineD);
+    lineElem.setAttribute('class', 'modern-line');
+
+    const areaD = buildAreaPath(lineD, points, BASE_Y);
+    areaElem.setAttribute('d', areaD);
+    areaElem.style.display = 'block';
+
+    oldDots.style.display = 'none';
+    badge.textContent = currentPalette === 'white'
+      ? '极简柔白样条 · 10% 微光渐变'
+      : currentPalette === 'slate'
+      ? '冷灰 Slate 样条 · 6% 渐变'
+      : '命中率软青样条 · 8% 渐变';
+  } else {
+    const lineD = buildPolylinePath(points);
+    lineElem.setAttribute('d', lineD);
+    lineElem.setAttribute('class', 'old-line');
+
+    areaElem.style.display = 'none';
+    oldDots.style.display = 'block';
+    badge.textContent = '旧版折线 (24点全显)';
+  }
+}
+
+function setDesign(mode) {
+  currentDesign = mode;
+  document.getElementById('btnModern').classList.toggle('active', mode === 'modern');
+  document.getElementById('btnOld').classList.toggle('active', mode === 'old');
+  updatePaths();
+}
+
+function setPalette(pal) {
+  currentPalette = pal;
+  document.getElementById('palWhite').classList.toggle('active', pal === 'white');
+  document.getElementById('palSlate').classList.toggle('active', pal === 'slate');
+  document.getElementById('palMint').classList.toggle('active', pal === 'mint');
+
+  const root = document.documentElement;
+  const isDark = document.body.getAttribute('data-theme') !== 'light';
+
+  if (pal === 'white') {
+    root.style.setProperty('--chart-accent', isDark ? '#f4f4f5' : '#27272a');
+    root.style.setProperty('--chart-area-top', isDark ? 'rgba(244, 244, 245, 0.10)' : 'rgba(24, 24, 27, 0.08)');
+    root.style.setProperty('--chart-halo', isDark ? 'rgba(244, 244, 245, 0.14)' : 'rgba(24, 24, 27, 0.12)');
+  } else if (pal === 'slate') {
+    root.style.setProperty('--chart-accent', '#94a3b8');
+    root.style.setProperty('--chart-area-top', isDark ? 'rgba(148, 163, 184, 0.08)' : 'rgba(100, 116, 139, 0.07)');
+    root.style.setProperty('--chart-halo', 'rgba(148, 163, 184, 0.15)');
+  } else if (pal === 'mint') {
+    root.style.setProperty('--chart-accent', '#34d399');
+    root.style.setProperty('--chart-area-top', isDark ? 'rgba(52, 211, 153, 0.09)' : 'rgba(16, 185, 129, 0.08)');
+    root.style.setProperty('--chart-halo', 'rgba(52, 211, 153, 0.18)');
+  }
+
+  // 更新渐变 stop
+  document.getElementById('gradStop0').setAttribute('stop-opacity', pal === 'white' ? '0.10' : pal === 'slate' ? '0.07' : '0.09');
+  updatePaths();
+}
+
+function toggleTheme() {
+  const isLight = document.body.getAttribute('data-theme') === 'light';
+  document.body.setAttribute('data-theme', isLight ? 'dark' : 'light');
+  setPalette(currentPalette);
+}
+
+// 悬浮交互
+const overlay = document.getElementById('overlayHit');
+const hoverGroup = document.getElementById('hoverGroup');
+const crosshair = document.getElementById('crosshair');
+const markerHalo = document.getElementById('markerHalo');
+const markerDot = document.getElementById('markerDot');
+const tooltipCard = document.getElementById('tooltipCard');
+const tipTime = document.getElementById('tipTime');
+const tipValue = document.getElementById('tipValue');
+
+overlay.addEventListener('mousemove', (e) => {
+  const rect = overlay.getBoundingClientRect();
+  const svgX = ((e.clientX - rect.left) / rect.width) * INNER_WIDTH + LEFT;
+
+  let closestIdx = 0;
+  let minDist = Infinity;
+  for (let i = 0; i < points.length; i++) {
+    const dist = Math.abs(points[i].x - svgX);
+    if (dist < minDist) {
+      minDist = dist;
+      closestIdx = i;
+    }
+  }
+
+  const p = points[closestIdx];
+  hoverGroup.style.display = 'block';
+
+  crosshair.setAttribute('x1', p.x);
+  crosshair.setAttribute('x2', p.x);
+
+  markerHalo.setAttribute('cx', p.x);
+  markerHalo.setAttribute('cy', p.y);
+  markerDot.setAttribute('cx', p.x);
+  markerDot.setAttribute('cy', p.y);
+
+  tipTime.textContent = p.label;
+  tipValue.textContent = `${formatTokens(p.tokens)} tokens`;
+
+  const tipWidth = 124;
+  let tipX = p.x - tipWidth / 2;
+  if (tipX < LEFT) tipX = LEFT;
+  if (tipX + tipWidth > WIDTH - RIGHT) tipX = WIDTH - RIGHT - tipWidth;
+
+  let tipY = p.y - 50;
+  if (tipY < TOP) tipY = p.y + 12;
+
+  tooltipCard.setAttribute('transform', `translate(${tipX}, ${tipY})`);
+});
+
+overlay.addEventListener('mouseleave', () => {
+  hoverGroup.style.display = 'none';
+});
+
+renderChart();
+</script>
+</body>
+</html>

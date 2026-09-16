@@ -10,5 +10,7 @@ export { buildChartPoints, cumulateSeries } from './points.ts'
 export type { ChartSeries } from './points.ts'
 export { dotRadius, labelIndices, scaleSeries } from './scale.ts'
 export type { ScaleResult } from './scale.ts'
-export { gapAfter, seriesPath } from './path.ts'
+export { areaPath, gapAfter, gapPatchedPoints, monotoneSplinePath, seriesPath, smoothSeriesPath } from './path.ts'
 export type { PathStyle } from './path.ts'
+
+
