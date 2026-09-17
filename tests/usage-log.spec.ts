@@ -177,3 +177,116 @@ describe('UsageLog.refileByEventDay', () => {
     expect(await log.refileByEventDay()).toBe(0)
   })
 })
+
+describe('UsageLog.backfillTiming', () => {
+  it('resolves and backfills missing timing figures from session persistence', async () => {
+    const dir = await tempDir()
+    const targetDate = new Date(2026, 0, 15, 8).getTime()
+    const existing = {
+      requestId: 'msg-1',
+      time: targetDate,
+      sessionId: 'session-1',
+      model: 'deepseek-chat',
+      usage: { inputTokens: 10, outputTokens: 5 },
+    }
+    await writeFile(
+      join(dir, 'usage-2026-01-15.jsonl'),
+      `${serializeRecord(existing)}\n`,
+    )
+
+    const fakePersistence = {
+      async list() { return [{ id: 'session-1' as any }] },
+      async inspect(id: string) {
+        if (id !== 'session-1') throw new Error('missing')
+        return {
+          events: [
+            { type: 'step/start', seq: 1, time: targetDate - 3200, data: { turn: 1, step: 1 } },
+            { type: 'assistant/chunk', seq: 2, time: targetDate - 3200 + 420, data: { turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: 'hi' } } },
+            {
+              type: 'assistant/message',
+              seq: 3,
+              time: targetDate,
+              data: {
+                turn: 1,
+                step: 1,
+                message: { id: 'msg-1', role: 'assistant', content: [], source: { kind: 'model', provider: 'p', model: 'm' } },
+              },
+            },
+            { type: 'step/end', seq: 4, time: targetDate + 10, data: { turn: 1, step: 1 } },
+          ],
+        }
+      },
+    }
+
+    const log = new UsageLog(dir)
+    const patched = await log.backfillTiming(fakePersistence as any)
+    expect(patched).toBe(1)
+
+    const content = await readFile(join(dir, 'usage-2026-01-15.jsonl'), 'utf8')
+    const parsed = JSON.parse(content.trim())
+    expect(parsed.latencyMs).toBe(3200)
+    expect(parsed.firstTokenLatencyMs).toBe(420)
+
+    // Second run should be a no-op since the row now has both latencyMs and firstTokenLatencyMs
+    expect(await log.backfillTiming(fakePersistence as any)).toBe(0)
+  })
+
+  it('backfills firstTokenLatencyMs from compact stream for rows with existing latencyMs', async () => {
+    const dir = await tempDir()
+    const targetDate = new Date(2026, 0, 15, 8).getTime()
+    const existing = {
+      requestId: 'msg-2',
+      time: targetDate,
+      sessionId: 'session-2',
+      model: 'deepseek-chat',
+      usage: { inputTokens: 10, outputTokens: 5 },
+      latencyMs: 3200,
+    }
+    await writeFile(
+      join(dir, 'usage-2026-01-15.jsonl'),
+      `${serializeRecord(existing)}\n`,
+    )
+
+    const fakePersistence = {
+      async list() { return [{ id: 'session-2' as any }] },
+      async inspect(id: string) {
+        if (id !== 'session-2') throw new Error('missing')
+        return {
+          events: [
+            { type: 'step/start', seq: 1, time: targetDate - 3200, data: { turn: 1, step: 1 } },
+            {
+              type: 'assistant/message',
+              seq: 2,
+              time: targetDate,
+              data: {
+                turn: 1,
+                step: 1,
+                message: { id: 'msg-2', role: 'assistant', content: [], source: { kind: 'model', provider: 'p', model: 'm' } },
+                stream: [
+                  {
+                    type: 'text-chunks',
+                    time0: targetDate - 3200 + 600,
+                    index: 0,
+                    dt: [],
+                    texts: ['hi'],
+                  },
+                ],
+              },
+            },
+            { type: 'step/end', seq: 3, time: targetDate + 10, data: { turn: 1, step: 1 } },
+          ],
+        }
+      },
+    }
+
+    const log = new UsageLog(dir)
+    const patched = await log.backfillTiming(fakePersistence as any)
+    expect(patched).toBe(1)
+
+    const content = await readFile(join(dir, 'usage-2026-01-15.jsonl'), 'utf8')
+    const parsed = JSON.parse(content.trim())
+    expect(parsed.latencyMs).toBe(3200)
+    expect(parsed.firstTokenLatencyMs).toBe(600)
+  })
+})
+

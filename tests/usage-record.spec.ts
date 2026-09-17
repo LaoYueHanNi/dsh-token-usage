@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import {
+  extractFirstTokenTimeFromStream,
+  isTokenDelta,
   modelOfEvent,
   parseRecord,
   projectUsage,
@@ -68,6 +70,24 @@ describe('recordFromEvent', () => {
   it('omits usage for a usage-less request', () => {
     const record = recordFromEvent(messageEvent({ usage: undefined }), 'session-1')
     expect('usage' in record).toBe(false)
+  })
+
+  it('attaches latencyMs and firstTokenLatencyMs when provided', () => {
+    const record = recordFromEvent(messageEvent(), 'session-1', {
+      latencyMs: 3200,
+      firstTokenLatencyMs: 420,
+    })
+    expect(record.latencyMs).toBe(3200)
+    expect(record.firstTokenLatencyMs).toBe(420)
+  })
+
+  it('omits invalid or negative timing figures', () => {
+    const record = recordFromEvent(messageEvent(), 'session-1', {
+      latencyMs: -10,
+      firstTokenLatencyMs: NaN,
+    })
+    expect('latencyMs' in record).toBe(false)
+    expect('firstTokenLatencyMs' in record).toBe(false)
   })
 })
 
@@ -381,5 +401,110 @@ describe('parseRecord', () => {
       usage: { inputTokens: 1, outputTokens: 1 },
     })
     expect('failureCode' in parseRecord(foreign)!).toBe(false)
+  })
+
+  it('preserves valid timing fields through parsing and drops invalid ones', () => {
+    const valid = JSON.stringify({
+      requestId: 'r1',
+      time: 1_700_000_000_000,
+      sessionId: 's1',
+      model: 'm',
+      latencyMs: 3200,
+      firstTokenLatencyMs: 420,
+    })
+    expect(parseRecord(valid)).toEqual({
+      requestId: 'r1',
+      time: 1_700_000_000_000,
+      sessionId: 's1',
+      model: 'm',
+      latencyMs: 3200,
+      firstTokenLatencyMs: 420,
+    })
+
+    const invalid = JSON.stringify({
+      requestId: 'r1',
+      time: 1_700_000_000_000,
+      sessionId: 's1',
+      model: 'm',
+      latencyMs: 'fast',
+      firstTokenLatencyMs: -50,
+    })
+    const parsed = parseRecord(invalid)
+    expect('latencyMs' in parsed!).toBe(false)
+    expect('firstTokenLatencyMs' in parsed!).toBe(false)
+  })
+})
+
+describe('extractFirstTokenTimeFromStream', () => {
+  it('returns undefined for non-array or empty stream', () => {
+    expect(extractFirstTokenTimeFromStream(undefined)).toBeUndefined()
+    expect(extractFirstTokenTimeFromStream(null)).toBeUndefined()
+    expect(extractFirstTokenTimeFromStream([])).toBeUndefined()
+  })
+
+  it('extracts from text-chunks run with dt offset', () => {
+    const stream = [
+      {
+        type: 'text-chunks',
+        time0: 1000,
+        index: 0,
+        dt: [50, 40],
+        texts: ['', 'hello', 'world'],
+      },
+    ]
+    expect(extractFirstTokenTimeFromStream(stream)).toBe(1050)
+  })
+
+  it('extracts from reasoning-chunks run', () => {
+    const stream = [
+      {
+        type: 'reasoning-chunks',
+        time0: 2000,
+        index: 0,
+        dt: [100],
+        texts: ['Thinking...'],
+      },
+    ]
+    expect(extractFirstTokenTimeFromStream(stream)).toBe(2000)
+  })
+
+  it('extracts from tool-call-chunks with name', () => {
+    const stream = [
+      {
+        type: 'tool-call-chunks',
+        time0: 3000,
+        index: 0,
+        dt: [],
+        id: 'call_1',
+        name: 'grep_search',
+        args: [],
+      },
+    ]
+    expect(extractFirstTokenTimeFromStream(stream)).toBe(3000)
+  })
+
+  it('extracts from tool-call-chunks with args', () => {
+    const stream = [
+      {
+        type: 'tool-call-chunks',
+        time0: 3000,
+        index: 0,
+        dt: [25],
+        id: 'call_1',
+        args: ['', '{"query": "foo"}'],
+      },
+    ]
+    expect(extractFirstTokenTimeFromStream(stream)).toBe(3025)
+  })
+
+  it('extracts from raw chunk record', () => {
+    const stream = [
+      {
+        type: 'chunk',
+        time: 4000,
+        chunk: { type: 'text-delta', index: 0, text: 'Hi' },
+      },
+    ]
+    expect(extractFirstTokenTimeFromStream(stream)).toBe(4000)
   })
 })

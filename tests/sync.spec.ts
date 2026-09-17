@@ -52,6 +52,54 @@ describe('syncHistory', () => {
     expect(log.rows.map(row => row.requestId)).toEqual(['m1'])
   })
 
+  it('extracts latencyMs and firstTokenLatencyMs across step boundaries', async () => {
+    const log = new FakeLog()
+    const persistence = fakePersistence([
+      {
+        id: 's1',
+        events: [
+          { type: 'step/start', seq: 0, time: 1000, data: { turn: 1, step: 1 } } as SessionEvent,
+          { type: 'assistant/chunk', seq: 1, time: 1420, data: { turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: 'Hello' } } } as SessionEvent,
+          { type: 'assistant/chunk', seq: 2, time: 2000, data: { turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: ' world' } } } as SessionEvent,
+          messageEvent({ messageId: 'm1', seq: 3, time: 4200, turn: 1, step: 1 }),
+          { type: 'step/end', seq: 4, time: 4210, data: { turn: 1, step: 1 } } as SessionEvent,
+        ],
+      },
+    ])
+    const result = await syncHistory({ persistence, log })
+    expect(result.added).toBe(1)
+    expect(log.rows[0].latencyMs).toBe(3200)
+    expect(log.rows[0].firstTokenLatencyMs).toBe(420)
+  })
+
+  it('extracts firstTokenLatencyMs from compact assistant stream when chunks are not in log', async () => {
+    const log = new FakeLog()
+    const msg = messageEvent({ messageId: 'm1', seq: 2, time: 4200, turn: 1, step: 1 })
+    ;(msg.data as Record<string, unknown>).stream = [
+      {
+        type: 'text-chunks',
+        time0: 1550,
+        index: 0,
+        dt: [100],
+        texts: ['first token'],
+      },
+    ]
+    const persistence = fakePersistence([
+      {
+        id: 's1',
+        events: [
+          { type: 'step/start', seq: 0, time: 1000, data: { turn: 1, step: 1 } } as SessionEvent,
+          msg,
+          { type: 'step/end', seq: 3, time: 4210, data: { turn: 1, step: 1 } } as SessionEvent,
+        ],
+      },
+    ])
+    const result = await syncHistory({ persistence, log })
+    expect(result.added).toBe(1)
+    expect(log.rows[0].latencyMs).toBe(3200)
+    expect(log.rows[0].firstTokenLatencyMs).toBe(550)
+  })
+
   it('dedupes rows already written this process', async () => {
     const log = new FakeLog()
     await log.recordRow('m1')

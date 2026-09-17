@@ -2,7 +2,7 @@ import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { isInitialized, markInitialized, markMetaSynced } from '../src/sync-state.ts'
+import { isInitialized, markInitialized, markMetaSynced, markTimingSynced } from '../src/sync-state.ts'
 
 async function tempDir(): Promise<string> {
   return mkdtemp(join(tmpdir(), 'token-usage-state-'))
@@ -71,5 +71,26 @@ describe('metaSyncedAt markers', () => {
     await markMetaSynced(dir, () => new Date(9))
     const text = await readFile(join(dir, 'state.json'), 'utf8')
     expect(JSON.parse(text)).toEqual({ initializedAt: 1, metaSyncedAt: 9 })
+  })
+})
+
+describe('timingSyncedAt markers', () => {
+  it('markInitialized(withMeta, withTiming) writes all markers together', async () => {
+    const dir = await tempDir()
+    await markInitialized(dir, () => new Date(1_700_000_000_000), true, true)
+    const text = await readFile(join(dir, 'state.json'), 'utf8')
+    expect(JSON.parse(text)).toEqual({
+      initializedAt: 1_700_000_000_000,
+      metaSyncedAt: 1_700_000_000_000,
+      timingSyncedAt: 1_700_000_000_000,
+    })
+  })
+
+  it('markTimingSynced stamps the backfill and preserves existing markers', async () => {
+    const dir = await tempDir()
+    await writeFile(join(dir, 'state.json'), JSON.stringify({ initializedAt: 1, metaSyncedAt: 2 }))
+    await markTimingSynced(dir, () => new Date(9))
+    const text = await readFile(join(dir, 'state.json'), 'utf8')
+    expect(JSON.parse(text)).toEqual({ initializedAt: 1, metaSyncedAt: 2, timingSyncedAt: 9 })
   })
 })

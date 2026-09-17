@@ -19,13 +19,17 @@ const TMP_FILE = 'state.json.tmp'
 
 /** Contents of the marker file. `metaSyncedAt` is optional: installs that
  * predate the session table never wrote it, and its absence is exactly the
- * "one metadata backfill still owed" condition. */
+ * "one metadata backfill still owed" condition. `timingSyncedAt` is optional:
+ * installs that predate request timing backfill never wrote it. */
 export interface SyncState {
   /** Epoch milliseconds when the first automatic sync completed. */
   initializedAt: number
   /** Epoch milliseconds when a sync last folded session metadata into
    * `sessions.json`; absent on pre-session-table installs. */
   metaSyncedAt?: number
+  /** Epoch milliseconds when timing figures (latencyMs, firstTokenLatencyMs)
+   * were backfilled into day files; absent on pre-timing installs. */
+  timingSyncedAt?: number
 }
 
 function isSyncState(value: unknown): value is SyncState {
@@ -84,17 +88,19 @@ export async function writeSyncState(dir: string, state: SyncState): Promise<voi
 
 /**
  * Persist the initialized marker (and, when the caller says the same run
- * folded the metadata, the meta marker alongside it). An existing
- * `metaSyncedAt` survives: the first-sync write must not revoke a backfill
- * an earlier upgrade already completed.
+ * folded the metadata or timing, their markers alongside it). An existing
+ * `metaSyncedAt` or `timingSyncedAt` survives: the first-sync write must not
+ * revoke a backfill an earlier upgrade already completed.
  * @param dir - the data directory holding the marker.
  * @param now - clock source (test seam).
  * @param withMeta - whether this run also folded session metadata.
+ * @param withTiming - whether this run also wrote timing figures.
  */
 export async function markInitialized(
   dir: string,
   now: () => Date = () => new Date(),
   withMeta = false,
+  withTiming = false,
 ): Promise<void> {
   const existing = await readSyncState(dir)
   await writeSyncState(dir, {
@@ -102,16 +108,38 @@ export async function markInitialized(
     ...(existing?.metaSyncedAt !== undefined
       ? { metaSyncedAt: existing.metaSyncedAt }
       : withMeta ? { metaSyncedAt: now().getTime() } : {}),
+    ...(existing?.timingSyncedAt !== undefined
+      ? { timingSyncedAt: existing.timingSyncedAt }
+      : withTiming ? { timingSyncedAt: now().getTime() } : {}),
   })
 }
 
 /**
- * Stamp the metadata backfill as done, preserving `initializedAt`.
+ * Stamp the metadata backfill as done, preserving `initializedAt` and `timingSyncedAt`.
  * @param dir - the data directory holding the marker.
  * @param now - clock source (test seam).
  */
 export async function markMetaSynced(dir: string, now: () => Date = () => new Date()): Promise<void> {
   const existing = await readSyncState(dir)
   const initializedAt = existing?.initializedAt ?? now().getTime()
-  await writeSyncState(dir, { initializedAt, metaSyncedAt: now().getTime() })
+  await writeSyncState(dir, {
+    initializedAt,
+    metaSyncedAt: now().getTime(),
+    ...(existing?.timingSyncedAt !== undefined ? { timingSyncedAt: existing.timingSyncedAt } : {}),
+  })
+}
+
+/**
+ * Stamp the timing backfill as done, preserving `initializedAt` and `metaSyncedAt`.
+ * @param dir - the data directory holding the marker.
+ * @param now - clock source (test seam).
+ */
+export async function markTimingSynced(dir: string, now: () => Date = () => new Date()): Promise<void> {
+  const existing = await readSyncState(dir)
+  const initializedAt = existing?.initializedAt ?? now().getTime()
+  await writeSyncState(dir, {
+    initializedAt,
+    ...(existing?.metaSyncedAt !== undefined ? { metaSyncedAt: existing.metaSyncedAt } : {}),
+    timingSyncedAt: now().getTime(),
+  })
 }

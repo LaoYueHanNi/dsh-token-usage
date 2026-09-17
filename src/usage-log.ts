@@ -10,8 +10,10 @@
 
 import { appendFile, mkdir, readdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import type { SessionId } from '@deepseek-ai/dsh-session'
 import { consoleLogger, type LoggerLike } from './log.ts'
-import { parseRecord, serializeRecord, type UsageRecord } from './usage-record.ts'
+import { extractFirstTokenTimeFromStream, isTokenDelta, parseRecord, serializeRecord, type UsageRecord } from './usage-record.ts'
+import { readerOf, type SyncPersistence } from './sync.ts'
 
 const DAY_FILE = /^usage-\d{4}-\d{2}-\d{2}\.jsonl$/u
 
@@ -160,6 +162,26 @@ export class UsageLog {
     this.queue = task.catch(() => {})
     return task.then(() => moved).catch((error: unknown) => {
       this.logger.error('[token-usage] refile by event day failed:', error)
+      return 0
+    })
+  }
+
+  /**
+   * Backfill missing latencyMs and firstTokenLatencyMs into existing day files
+   * from the authoritative session persistence events.
+   * Runs on the append queue so a live write cannot interleave with the rewrite.
+   * @param persistence - host session persistence.
+   * @returns the number of rows that were backfilled with timing.
+   */
+  backfillTiming(persistence: SyncPersistence): Promise<number> {
+    let patched = 0
+    const task = this.queue.then(async () => {
+      await this.ensureDir()
+      patched = await backfillDayFilesTiming(this.dir, persistence, this.logger)
+    })
+    this.queue = task.catch(() => {})
+    return task.then(() => patched).catch((error: unknown) => {
+      this.logger.error('[token-usage] timing backfill failed:', error)
       return 0
     })
   }
@@ -396,3 +418,122 @@ async function reconcileDayFiles(dir: string, sets: ReconcileSets, logger: Logge
   }
   return dropped
 }
+
+/**
+ * Scan day files for plain requests lacking latencyMs, resolve their timing
+ * from session persistence events, and rewrite touched day files atomically.
+ */
+export async function backfillDayFilesTiming(
+  dir: string,
+  persistence: SyncPersistence,
+  logger: LoggerLike = consoleLogger,
+): Promise<number> {
+  let names: string[]
+  try {
+    names = (await readdir(dir)).filter(name => DAY_FILE.test(name)).sort()
+  } catch (error) {
+    logger.error('[token-usage] cannot list data dir ' + dir + ':', error)
+    return 0
+  }
+  const fileLines = new Map<string, DayLine[]>()
+  const missingBySession = new Map<string, Map<string, UsageRecord>>()
+
+  for (const name of names) {
+    const lines = await readDayLines(dir, name, logger)
+    let fileHasMissing = false
+    for (const line of lines) {
+      if (line.record === null) continue
+      // Only plain requests lacking latencyMs or firstTokenLatencyMs are backfill candidates
+      if (line.record.kind === undefined && (line.record.latencyMs === undefined || line.record.firstTokenLatencyMs === undefined)) {
+        fileHasMissing = true
+        let sessionMap = missingBySession.get(line.record.sessionId)
+        if (sessionMap === undefined) {
+          sessionMap = new Map()
+          missingBySession.set(line.record.sessionId, sessionMap)
+        }
+        sessionMap.set(line.record.requestId, line.record)
+      }
+    }
+    if (fileHasMissing) {
+      fileLines.set(name, lines)
+    }
+  }
+
+  if (missingBySession.size === 0) return 0
+
+  const reader = readerOf(persistence)
+  let patchedCount = 0
+
+  for (const [sessionId, targetMap] of missingBySession) {
+    try {
+      const inspection = await reader.read(sessionId as SessionId)
+      let openStep: { turn: number; step: number; startTime: number; firstTokenTime?: number } | null = null
+      for (const event of inspection.events) {
+        if (event.type === 'step/start') {
+          openStep = {
+            turn: event.data.turn,
+            step: event.data.step,
+            startTime: event.time,
+          }
+        } else if (event.type === 'assistant/chunk') {
+          if (openStep !== null
+            && openStep.turn === event.data.turn
+            && openStep.step === event.data.step
+            && openStep.firstTokenTime === undefined
+            && isTokenDelta(event.data.chunk)) {
+            openStep.firstTokenTime = event.time
+          }
+        } else if (event.type === 'assistant/message') {
+          if (targetMap.has(event.data.message.id)) {
+            const targetRecord = targetMap.get(event.data.message.id)!
+            if (openStep !== null
+              && openStep.turn === event.data.turn
+              && openStep.step === event.data.step) {
+              targetRecord.latencyMs = Math.max(0, event.time - openStep.startTime)
+              let firstTokenTime = openStep.firstTokenTime
+              if (firstTokenTime === undefined && 'stream' in event.data && event.data.stream) {
+                firstTokenTime = extractFirstTokenTimeFromStream(event.data.stream)
+              }
+              if (firstTokenTime !== undefined) {
+                targetRecord.firstTokenLatencyMs = Math.max(0, firstTokenTime - openStep.startTime)
+              }
+              patchedCount += 1
+            }
+          }
+          openStep = null
+        } else if (event.type === 'step/end' || event.type === 'turn/end') {
+          openStep = null
+        }
+      }
+    } catch (error) {
+      logger.warn(`[token-usage] session ${sessionId} unreadable during timing backfill, skipped:`, error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  if (patchedCount === 0) return 0
+
+  for (const [name, lines] of fileLines) {
+    const stay: UsageRecord[] = []
+    const stray: string[] = []
+    for (const line of lines) {
+      if (line.record === null) {
+        stray.push(line.raw)
+      } else {
+        stay.push(line.record)
+      }
+    }
+    if (stray.length > 0) {
+      const target = join(dir, name)
+      const body = `${stay.map(serializeRecord).join('\n')}${stay.length > 0 ? '\n' : ''}${stray.join('\n')}\n`
+      const tmp = join(dir, `${name}.tmp`)
+      await writeFile(tmp, body, 'utf8')
+      await unlink(target).catch(() => undefined)
+      await rename(tmp, target)
+    } else {
+      await rewriteDayFile(dir, name, stay)
+    }
+  }
+
+  return patchedCount
+}
+

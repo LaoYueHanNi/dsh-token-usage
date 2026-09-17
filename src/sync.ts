@@ -26,7 +26,7 @@ import type {} from '@deepseek-ai/dsh-compaction/types'
 // Type-only: pulls the merged `llm/retry` payload into this program.
 import type {} from '@deepseek-ai/dsh-llm-retry/types'
 import { markInitialized, markMetaSynced, readSyncState } from './sync-state.ts'
-import { modelOfEvent, recordOfEvent } from './usage-record.ts'
+import { extractFirstTokenTimeFromStream, isTokenDelta, modelOfEvent, recordOfEvent, type RequestTiming } from './usage-record.ts'
 import type { UsageLog } from './usage-log.ts'
 
 /** Outcome of one sync run. */
@@ -165,7 +165,7 @@ export interface SyncDeps {
 
 /** One generation-normalized read surface: {@link syncHistory} walks sessions
  * through this and never sees the seam split again. */
-interface SessionReader {
+export interface SessionReader {
   /** Every materialized session id, in arbitrary order. */
   list(signal?: AbortSignal): Promise<readonly SessionId[]>
   /** Immutable logical event log of one session, with its header facts. */
@@ -185,7 +185,7 @@ interface SessionReader {
  * newer than either generation), which must fail loudly rather than report
  * every session as unreadable.
  */
-function readerOf(persistence: SyncPersistence): SessionReader {
+export function readerOf(persistence: SyncPersistence): SessionReader {
   const { open, inspect } = persistence
   const idOf = (entry: SyncSessionEntry): SessionId => 'header' in entry ? entry.header.id : entry.id
   if (typeof open === 'function') {
@@ -298,13 +298,50 @@ export async function syncHistory(
     // seen is the current title — a rename, an auto-generated title, and a
     // fallback all land as the same append, one fold covers every source.
     let title: string | undefined
+    let openStep: { turn: number; step: number; startTime: number; firstTokenTime?: number } | null = null
     for (const event of inspection.events) {
       signal?.throwIfAborted()
+      if (event.type === 'step/start') {
+        openStep = {
+          turn: event.data.turn,
+          step: event.data.step,
+          startTime: event.time,
+        }
+      } else if (event.type === 'assistant/chunk') {
+        if (openStep !== null
+          && openStep.turn === event.data.turn
+          && openStep.step === event.data.step
+          && openStep.firstTokenTime === undefined
+          && isTokenDelta(event.data.chunk)) {
+          openStep.firstTokenTime = event.time
+        }
+      }
       const revealed = modelOfEvent(event)
       if (revealed !== undefined) model = revealed
       const revealedTitle = titleOfEvent(event)
       if (revealedTitle !== undefined) title = revealedTitle
-      const record = recordOfEvent(event, id, model, deps.recordCompaction !== false)
+      let timing: RequestTiming | undefined
+      if (event.type === 'assistant/message'
+        && openStep !== null
+        && openStep.turn === event.data.turn
+        && openStep.step === event.data.step) {
+        const latencyMs = Math.max(0, event.time - openStep.startTime)
+        let firstTokenTime = openStep.firstTokenTime
+        if (firstTokenTime === undefined && 'stream' in event.data && event.data.stream) {
+          firstTokenTime = extractFirstTokenTimeFromStream(event.data.stream)
+        }
+        const firstTokenLatencyMs = firstTokenTime !== undefined
+          ? Math.max(0, firstTokenTime - openStep.startTime)
+          : undefined
+        timing = {
+          latencyMs,
+          ...(firstTokenLatencyMs !== undefined ? { firstTokenLatencyMs } : {}),
+        }
+        openStep = null
+      } else if (event.type === 'step/end' || event.type === 'turn/end') {
+        openStep = null
+      }
+      const record = recordOfEvent(event, id, model, deps.recordCompaction !== false, timing)
       if (record === null) continue
       // Keep the id whether the row was already saved or lands now: the
       // reconcile pass keeps exactly the ids this walk produced.
@@ -357,7 +394,7 @@ export async function autoSyncIfNeeded(deps: SyncDeps, dir: string): Promise<Syn
   const state = await readSyncState(dir)
   if (state !== null && state.metaSyncedAt !== undefined) return null
   const result = await syncHistory({ ...deps, reconcile: false })
-  if (state === null) await markInitialized(dir, undefined, true)
+  if (state === null) await markInitialized(dir, undefined, true, true)
   else await markMetaSynced(dir)
   return result
 }

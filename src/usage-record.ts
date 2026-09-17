@@ -62,6 +62,83 @@ export interface UsageRecord {
    * failed with (RATE_LIMIT, TRANSPORT, QUOTA, …). Absent on every other
    * kind; a future code renders verbatim. */
   failureCode?: string
+  /** Wall time in milliseconds from request dispatch (`step/start`) to message settlement (`assistant/message`). */
+  latencyMs?: number
+  /** Wall time in milliseconds from request dispatch (`step/start`) to the first non-empty token delta chunk. */
+  firstTokenLatencyMs?: number
+}
+
+/** Optional timing figures for one model request. */
+export interface RequestTiming {
+  /** Wall time in milliseconds from request dispatch (`step/start`) to message settlement (`assistant/message`). */
+  latencyMs?: number
+  /** Wall time in milliseconds from request dispatch (`step/start`) to the first non-empty token delta chunk. */
+  firstTokenLatencyMs?: number
+}
+
+/** Whether a stream chunk carries a non-empty first-token delta. */
+export function isTokenDelta(chunk: unknown): boolean {
+  if (typeof chunk !== 'object' || chunk === null) return false
+  const c = chunk as { type?: string; text?: string; argumentsDelta?: string; name?: string }
+  switch (c.type) {
+    case 'text-delta':
+    case 'reasoning-delta':
+      return typeof c.text === 'string' && c.text !== ''
+    case 'tool-call-delta':
+      return (typeof c.argumentsDelta === 'string' && c.argumentsDelta !== '') || c.name !== undefined
+    default:
+      return false
+  }
+}
+
+/**
+ * Extract the timestamp of the first token delta from an assistant stream run/chunks array.
+ * Mirrors DSH llm assistantStreamFirstTokenTime for durable compact streams.
+ */
+export function extractFirstTokenTimeFromStream(stream: unknown): number | undefined {
+  if (!Array.isArray(stream)) return undefined
+  for (const record of stream) {
+    if (typeof record !== 'object' || record === null) continue
+    const r = record as {
+      type?: string
+      time?: unknown
+      time0?: unknown
+      dt?: unknown
+      texts?: unknown
+      args?: unknown
+      name?: unknown
+      chunk?: unknown
+    }
+    if (r.type === 'chunk') {
+      if (typeof r.time === 'number' && isTokenDelta(r.chunk)) {
+        return r.time
+      }
+    } else if (r.type === 'tool-call-chunks') {
+      if (typeof r.time0 === 'number' && r.name !== undefined) {
+        return r.time0
+      }
+      if (typeof r.time0 === 'number' && Array.isArray(r.args)) {
+        let time = r.time0
+        for (let i = 0; i < r.args.length; i++) {
+          if (i > 0 && Array.isArray(r.dt) && typeof r.dt[i - 1] === 'number') {
+            time += r.dt[i - 1] as number
+          }
+          if (typeof r.args[i] === 'string' && r.args[i] !== '') return time
+        }
+      }
+    } else if (r.type === 'text-chunks' || r.type === 'reasoning-chunks') {
+      if (typeof r.time0 === 'number' && Array.isArray(r.texts)) {
+        let time = r.time0
+        for (let i = 0; i < r.texts.length; i++) {
+          if (i > 0 && Array.isArray(r.dt) && typeof r.dt[i - 1] === 'number') {
+            time += r.dt[i - 1] as number
+          }
+          if (typeof r.texts[i] === 'string' && r.texts[i] !== '') return time
+        }
+      }
+    }
+  }
+  return undefined
 }
 
 function isCount(value: unknown): value is number {
@@ -88,14 +165,19 @@ export function projectUsage(usage: TokenUsage | undefined): UsageFields | undef
 export function recordFromEvent(
   event: SessionEvent<'assistant/message'>,
   sessionId: string,
+  timing?: RequestTiming,
 ): UsageRecord {
   const usage = projectUsage(event.data.usage)
+  const latency = isCount(timing?.latencyMs) ? { latencyMs: timing.latencyMs } : {}
+  const firstToken = isCount(timing?.firstTokenLatencyMs) ? { firstTokenLatencyMs: timing.firstTokenLatencyMs } : {}
   return {
     requestId: event.data.message.id,
     time: event.time,
     sessionId,
     model: event.data.message.source.model,
     ...(usage !== undefined ? { usage } : {}),
+    ...latency,
+    ...firstToken,
   }
 }
 
@@ -217,10 +299,11 @@ export function recordOfEvent(
   sessionId: string,
   lastModel: string,
   recordCompaction = true,
+  timing?: RequestTiming,
 ): UsageRecord | null {
   switch (event.type) {
     case 'assistant/message':
-      return recordFromEvent(event, sessionId)
+      return recordFromEvent(event, sessionId, timing)
     case 'compaction/summary':
       return recordCompaction ? recordFromCompaction(event, sessionId) : null
     case 'turn/end':
@@ -286,6 +369,8 @@ export function coerceRecord(value: unknown): UsageRecord | null {
   // (a non-string or foreign-kind code normalizes to omission).
   const failureCode = isFailure && typeof record.failureCode === 'string' && record.failureCode !== ''
     ? { failureCode: record.failureCode } : {}
+  const latency = isCount(record.latencyMs) ? { latencyMs: record.latencyMs } : {}
+  const firstToken = isCount(record.firstTokenLatencyMs) ? { firstTokenLatencyMs: record.firstTokenLatencyMs } : {}
   if (record.usage === undefined || record.usage === null) {
     return {
       requestId: record.requestId as string,
@@ -294,6 +379,8 @@ export function coerceRecord(value: unknown): UsageRecord | null {
       model: record.model as string,
       ...kind,
       ...failureCode,
+      ...latency,
+      ...firstToken,
     }
   }
   const fields = record.usage as Record<string, unknown>
@@ -306,6 +393,8 @@ export function coerceRecord(value: unknown): UsageRecord | null {
     model: record.model as string,
     ...kind,
     ...failureCode,
+    ...latency,
+    ...firstToken,
     usage: {
       inputTokens: fields.inputTokens as number,
       outputTokens: fields.outputTokens as number,

@@ -42,7 +42,8 @@ import { UsageLog } from './usage-log.ts'
 import { SessionMetaStore } from './session-meta.ts'
 import { cleanSource, copyData, type MigrationProgress } from './migrate.ts'
 import { resolvePricingUrl, syncCloudPricing, type PricingSourceInput } from './pricing.ts'
-import { modelOfEvent, recordOfEvent } from './usage-record.ts'
+import { extractFirstTokenTimeFromStream, isTokenDelta, modelOfEvent, recordOfEvent, type RequestTiming } from './usage-record.ts'
+import { markTimingSynced, readSyncState } from './sync-state.ts'
 import { autoSyncIfNeeded, syncHistory, titleOfEvent } from './sync.ts'
 import { clearRecordCache, warmRecordCache } from './record-cache.ts'
 import { ROLLUP_FILE_NAME, ROLLUP_TMP_FILE_NAME } from './rollup.ts'
@@ -703,6 +704,13 @@ export function apply(ctx: Context, config: Config = {}) {
     // events the sync walk does (request/context route changes, then
     // assistant/message confirmations). Bounded by the session count.
     const lastModel = new Map<string, string>()
+    interface ActiveStepTiming {
+      turn: number
+      step: number
+      startTime: number
+      firstTokenTime?: number
+    }
+    const activeSteps = new Map<string, ActiveStepTiming>()
     // Header facts are immutable, so one upsert per session is enough even
     // though events keep arriving; the index store dedupes the write anyway.
     const headerSeen = new Set<string>()
@@ -729,10 +737,49 @@ export function apply(ctx: Context, config: Config = {}) {
         }
         if (Object.keys(patch).length > 0) void meta.upsert(session.id, patch).catch(error => logger.warn('[token-usage] session header upsert failed:', error))
       }
+      if (event.type === 'step/start') {
+        activeSteps.set(session.id, {
+          turn: event.data.turn,
+          step: event.data.step,
+          startTime: event.time,
+        })
+      } else if (event.type === 'assistant/chunk') {
+        const currentStep = activeSteps.get(session.id)
+        if (currentStep !== undefined
+          && currentStep.turn === event.data.turn
+          && currentStep.step === event.data.step
+          && currentStep.firstTokenTime === undefined
+          && isTokenDelta(event.data.chunk)) {
+          currentStep.firstTokenTime = event.time
+        }
+      }
+      let timing: RequestTiming | undefined
+      if (event.type === 'assistant/message') {
+        const currentStep = activeSteps.get(session.id)
+        if (currentStep !== undefined
+          && currentStep.turn === event.data.turn
+          && currentStep.step === event.data.step) {
+          const latencyMs = Math.max(0, event.time - currentStep.startTime)
+          let firstTokenTime = currentStep.firstTokenTime
+          if (firstTokenTime === undefined && 'stream' in event.data && event.data.stream) {
+            firstTokenTime = extractFirstTokenTimeFromStream(event.data.stream)
+          }
+          const firstTokenLatencyMs = firstTokenTime !== undefined
+            ? Math.max(0, firstTokenTime - currentStep.startTime)
+            : undefined
+          timing = {
+            latencyMs,
+            ...(firstTokenLatencyMs !== undefined ? { firstTokenLatencyMs } : {}),
+          }
+          activeSteps.delete(session.id)
+        }
+      } else if (event.type === 'step/end' || event.type === 'turn/end') {
+        activeSteps.delete(session.id)
+      }
       const revealed = modelOfEvent(event)
       if (revealed !== undefined) lastModel.set(session.id, revealed)
       const record = recordOfEvent(
-        event, session.id, lastModel.get(session.id) ?? '', recordCompaction,
+        event, session.id, lastModel.get(session.id) ?? '', recordCompaction, timing,
       )
       if (record === null) return
       // Fire-and-forget: the log serializes appends and reports its own failures.
@@ -754,7 +801,7 @@ export function apply(ctx: Context, config: Config = {}) {
             logger.warn(`[token-usage] session ${id} unreadable, skipped:`, error instanceof Error ? error.message : String(error))
           } }, dir)
       })
-      .then((result) => {
+      .then(async (result) => {
         if (result !== null) {
           logger.info(`[token-usage] first-run sync: ${result.added} added, ${result.skipped} skipped, ${String(result.removed)} removed, ${String(result.failedSessions)} failed sessions`)
           // Appended rows (compactions backfilled by an upgrade, or requests
@@ -763,6 +810,15 @@ export function apply(ctx: Context, config: Config = {}) {
           // the new contents — including writes into frozen day files the
           // rollup may already have absorbed.
           if (result.added > 0 || result.removed > 0) invalidateDerivedState(dir)
+        }
+        const state = await readSyncState(dir, logger)
+        if (state !== null && state.timingSyncedAt === undefined && ctx.sessionPersistence !== undefined) {
+          const patched = await log.backfillTiming(ctx.sessionPersistence)
+          if (patched > 0) {
+            logger.info(`[token-usage] backfilled timing figures for ${String(patched)} historical records`)
+            invalidateDerivedState(dir)
+          }
+          await markTimingSynced(dir)
         }
         return warmRecordCache(dir, undefined, logger)
       })
