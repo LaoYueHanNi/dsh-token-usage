@@ -425,4 +425,33 @@ describe('TokenUsageCard', () => {
     expect((screen.getByLabelText('数据目录') as HTMLInputElement).value).toBe('')
     expect(screen.queryByText('未保存')).toBeNull()
   })
+
+  it('renders only the summary description when view is summary', () => {
+    const scope = new FakeScope(ready({}))
+    const props = { ...propsOf(scope), view: 'summary' as const }
+    render(<TokenUsageCard {...props} />)
+    expect(screen.getByText('数据目录与定价数据源')).not.toBeNull()
+    expect(screen.queryByRole('button', { name: /展开|折叠/ })).toBeNull()
+    expect(screen.queryByLabelText('数据目录')).toBeNull()
+  })
+
+  it('defaults to open when view is page under plugins.bundle.config', () => {
+    const scope = new FakeScope(ready({ value: { path: 'D:/custom/path' } }))
+    const props = { ...propsOf(scope), view: 'page' as const }
+    render(<TokenUsageCard {...props} />)
+    // Directly visible without manual expansion
+    const input = screen.getByLabelText('数据目录') as HTMLInputElement
+    expect(input.value).toBe('D:/custom/path')
+    expect(screen.getByRole('button', { name: '折叠: Token 用量' })).not.toBeNull()
+  })
+
+  it('discards staged edits automatically when unmounted', () => {
+    const scope = new FakeScope(ready({}))
+    const discard = vi.fn()
+    const props = { ...propsOf(scope), discard, view: 'page' as const }
+    const { unmount } = render(<TokenUsageCard {...props} />)
+    expect(discard).not.toHaveBeenCalled()
+    unmount()
+    expect(discard).toHaveBeenCalledTimes(1)
+  })
 })

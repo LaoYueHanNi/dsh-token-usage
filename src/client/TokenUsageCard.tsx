@@ -16,16 +16,22 @@
  * @module token-usage/client/TokenUsageCard
  */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { IconChevronDownOutline14 } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
+import type { InjectFace, PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import type { CardActions, CardStore } from './card-form.ts'
 import { FULL_SYNC_PATH, type FullSyncView } from '../wire.ts'
 import css from './TokenUsageCard.module.css'
 
+/** The view the Plugins page asks for under `plugins.bundle.config`. */
+export interface PluginConfigViewProps {
+  /** `summary` renders the one-liner; `page` renders the form. */
+  readonly view?: 'summary' | 'page'
+}
+
 /** Props the renderer binds for the token-usage settings card. */
 export type TokenUsageCardProps =
-  PropsRuntime<'settings.plugin.item'>
+  PluginConfigViewProps
   & PropsLocale<'token-usage'>
   & InjectFace<TokenUsageCardFace>
 
@@ -49,11 +55,20 @@ export interface TokenUsageCardFace extends CardActions {
  * @returns the card, or nothing when the namespace is unavailable.
  */
 export function TokenUsageCard(props: TokenUsageCardProps) {
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(props.view === 'page')
   const [picking, setPicking] = useState(false)
   const { t } = props
   const state = props.useTokenUsageCard(snapshot => snapshot)
+
+  // Discard unstaged changes when navigating away from the page.
+  const discardRef = useRef(props.discard)
+  discardRef.current = props.discard
+  useEffect(() => () => { discardRef.current() }, [])
+
   if (!state.available) return null
+  if (props.view === 'summary') {
+    return <span className={css.description}>{t('card.description')}</span>
+  }
   const migrating = state.migration !== undefined
   const lockInput = !state.writable || migrating
   const lockActions = !state.dirty || state.saving || migrating

@@ -30,6 +30,15 @@ import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 // ('settings.plugin.item') into this program. The value face stays
 // uncompromised: cross-plugin collaboration goes through the slot system.
 import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
+
+declare module '@deepseek-ai/dsh-client-ui-slots' {
+  interface SlotMap {
+    /**
+     * A bundle's own configuration on the Plugins page, keyed by package name.
+     */
+    'plugins.bundle.config': { kind: 'keyed'; scope: 'root'; owner: { readonly view: 'summary' | 'page' } }
+  }
+}
 // Type-only: pulls the ui-conversation SlotMap merge ('conversation.view')
 // so the Usage view tab registers against the same slot the Chat and
 // Trajectory tabs live in. No runtime import — the slot service provides
@@ -163,21 +172,27 @@ export function apply(ctx: ClientContext): void {
     inject: () => ({ modelDirectory }),
   }, QuotaButton))
 
-  // The Plugins configuration tab dispatches keyed cards for the namespaces
-  // the Host serves; the token-usage host half registers this key, so the
-  // pricing card pairs with it without any upstream change.
+  // The Plugins page dispatches keyed configuration for bundles through
+  // `plugins.bundle.config` (keyed by the bundle's package name); we also register
+  // against the legacy `settings.plugin.item` slot (keyed by namespace) for backward
+  // compatibility with pre-0.1.6 harnesses.
   const form = new CardForm(ctx.settingsScope.bind<SectionValue>({ namespace: TOKEN_USAGE_NS }))
   const store = form.bind()
-  ctx.slots.inject('settings.plugin.item', () => ctx.slots.register({
-    name: 'settings.plugin.item',
-    key: TOKEN_USAGE_NS,
-    locale: NS,
-    inject: () => ({
-      hooks: { tokenUsageCard: store },
-      ...form.actions(),
-      // The shell's own directory picker (the workspace flows' chooser):
-      // resolves the chosen absolute path, or null when the user dismisses.
-      pickDirectory: () => ctx.uiWorkspace.pickDirectory(),
-    }),
-  }, TokenUsageCard))
+  const registerCard = (name: 'plugins.bundle.config' | 'settings.plugin.item', key: string) => {
+    ctx.slots.inject(name, () => ctx.slots.register({
+      name,
+      key,
+      locale: NS,
+      inject: () => ({
+        hooks: { tokenUsageCard: store },
+        ...form.actions(),
+        // The shell's own directory picker (the workspace flows' chooser):
+        // resolves the chosen absolute path, or null when the user dismisses.
+        pickDirectory: () => ctx.uiWorkspace.pickDirectory(),
+      }),
+    }, TokenUsageCard))
+  }
+
+  registerCard('plugins.bundle.config', '@laoyuehanni/dsh-token-usage')
+  registerCard('settings.plugin.item', TOKEN_USAGE_NS)
 }
