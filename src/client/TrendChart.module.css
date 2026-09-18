@@ -78,9 +78,13 @@
   stroke-opacity: 0.45;
 }
 
-/* Invisible per-day hit target: fills the column around its point. */
+/* Invisible per-day hit target: fills the column around its point.
+ * The focus state is already conveyed by the halo / guide / floating label,
+ * so suppress the browser's default focus ring (Chromium always paints it
+ * on clicked focusable SVG elements, ignoring the :focus-visible heuristic). */
 .hit {
   cursor: crosshair;
+  outline: none;
 }
 
 /* The floating per-day label: card-like box above the active point. */
