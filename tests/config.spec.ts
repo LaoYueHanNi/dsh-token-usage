@@ -46,18 +46,6 @@ describe('validateConfig', () => {
     expect(() => validateConfig({ foo: 1 } as unknown as Config)).toThrow(/unknown key "foo"/)
   })
 
-  it('accepts a non-negative startup deferral and rejects a negative one', () => {
-    expect(() => validateConfig({ startupDeferMs: 0 })).not.toThrow()
-    expect(() => validateConfig({ startupDeferMs: 500 })).not.toThrow()
-    expect(() => validateConfig({ startupDeferMs: -1 } as unknown as Config)).toThrow(/non-negative/)
-  })
-
-  it('accepts a non-negative settings-less startup cap and rejects a negative one', () => {
-    expect(() => validateConfig({ startupCapMs: 0 })).not.toThrow()
-    expect(() => validateConfig({ startupCapMs: 30_000 })).not.toThrow()
-    expect(() => validateConfig({ startupCapMs: -1 } as unknown as Config)).toThrow(/non-negative/)
-  })
-
   it('accepts a recordCompaction boolean and rejects a non-boolean', () => {
     expect(() => validateConfig({ recordCompaction: true })).not.toThrow()
     expect(() => validateConfig({ recordCompaction: false })).not.toThrow()

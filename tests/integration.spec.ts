@@ -195,7 +195,7 @@ describe('plugin integration', () => {
     await next.plugin(persistenceService(sessions))
     // No settings service: the settings-less cap must fire immediately so the
     // assertions below observe the composition-entry directory without delay.
-    await next.plugin(plugin, { startupDeferMs: 0, startupCapMs: 0 })
+    await next.plugin(plugin, {})
     ctx = next
     return { dir: join(home, 'token-usage') }
   }
@@ -317,7 +317,7 @@ describe('plugin integration', () => {
     const next = new Context()
     await next.plugin(MockSessions)
     await next.plugin(persistenceService(sessions))
-    await next.plugin(plugin, { startupDeferMs: 0, startupCapMs: 0, recordCompaction: false })
+    await next.plugin(plugin, { recordCompaction: false })
     ctx = next
     const dir = join(home, 'token-usage')
     await waitForState(dir)
@@ -552,7 +552,7 @@ describe('live data-directory relocation', () => {
     const next = new Context()
     await next.plugin(MockSessions)
     await next.plugin(persistenceService(sessions))
-    await next.plugin(plugin, { startupCapMs: 20 })
+    await next.plugin(plugin, {})
     host = next
 
     // The cap fires, opens the default directory, and the plugin keeps

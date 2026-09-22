@@ -18,9 +18,51 @@
  * @module token-usage/client/card-form
  */
 
-import type { SettingsScope, SettingsScopeSnapshot } from '@deepseek-ai/dsh-client-ui-settings/client'
 import type { DirectoryGuardView } from '../wire.ts'
 import { DIR_GUARD_PATH, MIGRATION_PATH } from '../wire.ts'
+
+/**
+ * Minimal snapshot contract of a configuration scope or form.
+ * Matches both pre-0.1.7 SettingsScopeSnapshot and 0.1.7+ ConfigFormSnapshot.
+ */
+export interface CardFormTargetSnapshot<T = SectionValue> {
+  /** Loading, ready, or unavailable state. */
+  status: 'loading' | 'ready' | 'unavailable'
+  /** Resolved section value. */
+  value?: T
+  /** Raw user override layer, if present. */
+  user?: unknown
+  /** Whether the scope accepts writes. */
+  writable: boolean
+}
+
+/**
+ * Common abstraction over the configuration source backing the card.
+ * Structurally compatible with both `SettingsScope<T>` (pre-0.1.7) and `ConfigForm<T>` (0.1.7+).
+ */
+export interface CardFormTarget<T = SectionValue> {
+  /** Current snapshot view. */
+  getSnapshot(): CardFormTargetSnapshot<T>
+  /** Subscribe to snapshot changes. Returns disposer. */
+  subscribe(listener: () => void): () => void
+  /** Write one scalar field. */
+  set(field: string, value: unknown): Promise<boolean>
+  /** Clear one scalar field back to inherited configuration. */
+  unset(field: string): Promise<boolean>
+}
+
+/** Fallback target when neither configForms nor settingsScope is present in the host. */
+export function createFallbackTarget(): CardFormTarget<SectionValue> {
+  return {
+    getSnapshot: () => ({
+      status: 'unavailable',
+      writable: false,
+    }),
+    subscribe: () => () => {},
+    set: async () => false,
+    unset: async () => false,
+  }
+}
 
 /** The fields this card edits. */
 export const CARD_FIELDS = ['path', 'pricingRegion'] as const
@@ -126,11 +168,11 @@ export class CardForm {
   private pollTimer: ReturnType<typeof setInterval> | undefined
 
   /**
-   * @param scope - the bound settings scope for the `token-usage` namespace.
+   * @param target - the configuration source backing the card (ConfigForm or SettingsScope).
    */
-  constructor(private readonly scope: SettingsScope<SectionValue>) {
+  constructor(private readonly target: CardFormTarget<SectionValue>) {
     this.snapshotValue = this.project()
-    scope.subscribe(() => { this.publish() })
+    target.subscribe(() => { this.publish() })
     // A relocation another surface started (or one left over from a boot)
     // shows its progress here too.
     void this.pollMigration()
@@ -217,8 +259,8 @@ export class CardForm {
     let landed = true
     try {
       for (const [field, text] of intended) {
-        if (text === '') await this.scope.unset(field)
-        else await this.scope.set(field, text)
+        if (text === '') await this.target.unset(field)
+        else await this.target.set(field, text)
       }
       // Read back: the Host's validators own the constraints no schema
       // expresses, so acceptance is judged from the stored layers.
@@ -312,8 +354,8 @@ export class CardForm {
     }
   }
 
-  private snapshot(): SettingsScopeSnapshot<SectionValue> {
-    return this.scope.getSnapshot()
+  private snapshot(): CardFormTargetSnapshot<SectionValue> {
+    return this.target.getSnapshot()
   }
 
   /** The raw user layer narrowed to a record; the wire answer is `unknown`. */

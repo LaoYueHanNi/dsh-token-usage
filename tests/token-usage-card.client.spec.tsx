@@ -23,7 +23,7 @@ import { zh } from '../src/client/locales.ts'
 // The chevron icon is decoration; stubbing it keeps the katex css inside the
 // primitives package out of the node test environment.
 vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
-  IconChevronDownOutline14: (props: { className?: string }) => <span className={props.className} />,
+  IconChevronDownOutlineMedium: (props: { className?: string }) => <span className={props.className} />,
 }))
 
 /** zh-bound translate stub over this plugin's dictionary. */

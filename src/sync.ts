@@ -26,7 +26,7 @@ import type {} from '@deepseek-ai/dsh-compaction/types'
 // Type-only: pulls the merged `llm/retry` payload into this program.
 import type {} from '@deepseek-ai/dsh-llm-retry/types'
 import { markInitialized, markMetaSynced, readSyncState } from './sync-state.ts'
-import { extractFirstTokenTimeFromStream, isTokenDelta, modelOfEvent, recordOfEvent, type RequestTiming } from './usage-record.ts'
+import { extractFirstTokenTimeFromStream, modelOfEvent, recordOfEvent, type RequestTiming } from './usage-record.ts'
 import type { UsageLog } from './usage-log.ts'
 
 /** Outcome of one sync run. */
@@ -298,7 +298,7 @@ export async function syncHistory(
     // seen is the current title — a rename, an auto-generated title, and a
     // fallback all land as the same append, one fold covers every source.
     let title: string | undefined
-    let openStep: { turn: number; step: number; startTime: number; firstTokenTime?: number } | null = null
+    let openStep: { turn: number; step: number; startTime: number } | null = null
     for (const event of inspection.events) {
       signal?.throwIfAborted()
       if (event.type === 'step/start') {
@@ -306,14 +306,6 @@ export async function syncHistory(
           turn: event.data.turn,
           step: event.data.step,
           startTime: event.time,
-        }
-      } else if (event.type === 'assistant/chunk') {
-        if (openStep !== null
-          && openStep.turn === event.data.turn
-          && openStep.step === event.data.step
-          && openStep.firstTokenTime === undefined
-          && isTokenDelta(event.data.chunk)) {
-          openStep.firstTokenTime = event.time
         }
       }
       const revealed = modelOfEvent(event)
@@ -326,10 +318,11 @@ export async function syncHistory(
         && openStep.turn === event.data.turn
         && openStep.step === event.data.step) {
         const latencyMs = Math.max(0, event.time - openStep.startTime)
-        let firstTokenTime = openStep.firstTokenTime
-        if (firstTokenTime === undefined && 'stream' in event.data && event.data.stream) {
-          firstTokenTime = extractFirstTokenTimeFromStream(event.data.stream)
-        }
+        // dsh 0.1.7 embeds the timed model stream inside assistant/message;
+        // the first token delta's timestamp is read from those compact records.
+        const firstTokenTime = 'stream' in event.data && event.data.stream
+          ? extractFirstTokenTimeFromStream(event.data.stream)
+          : undefined
         const firstTokenLatencyMs = firstTokenTime !== undefined
           ? Math.max(0, firstTokenTime - openStep.startTime)
           : undefined

@@ -18,8 +18,6 @@
 // Type-only: pulls the ctx.slots declaration merge (owned by ui-renderer,
 // whose published types no longer re-declare it through ui-session).
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
-import type { SessionId } from '@deepseek-ai/dsh-client-connection/client'
-import type { ISessions } from '@deepseek-ai/dsh-api-session-controller/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 // Type-only: pulls ctx.uiWorkspace (directory picker) into this program.
 import type {} from '@deepseek-ai/dsh-client-ui-workspace/client'
@@ -47,7 +45,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 // Type-only: pulls the locale service's Context merge (ctx.locale) and the
 // shared `common` vocabulary into the `t` seat's key domain.
 import type {} from '@deepseek-ai/dsh-client-locale/client'
-import { CardForm, type SectionValue } from './card-form.ts'
+import { CardForm, createFallbackTarget, type CardFormTarget, type SectionValue } from './card-form.ts'
 import { QuotaButton, type ModelSelectionSource } from './QuotaButton.tsx'
 import { SessionStatsChip } from './SessionStatsChip.tsx'
 import { TokenUsageCard } from './TokenUsageCard.tsx'
@@ -61,11 +59,53 @@ import { en, NS, zh } from './locales.ts'
  */
 const TOKEN_USAGE_NS = 'token-usage'
 
+/**
+ * Candidate keys under which the Host may serve this plugin's settings
+ * form. The 0.1.7 host keys `ConfigForms.get` by the plugin's ENTRY ID (the
+ * namespace); the full package name stays as a fallback for a host that keyed
+ * it by package instead.
+ */
+const CONFIG_FORM_KEYS = [TOKEN_USAGE_NS, '@laoyuehanni/dsh-token-usage'] as const
+
+/** Minimal describe-mirror face: the served namespaces, subscription, first read. */
+interface DescribeMirrorLike {
+  getSnapshot(): { view?: { namespaces?: ReadonlyArray<{ ns: string }> } }
+  subscribe(listener: () => void): () => void
+  ensure?(): Promise<void>
+}
+
+/** The `configForms` service face as this plugin consumes it. */
+interface ConfigFormsLike {
+  /** Entry-id keyed form controller; the 0.1.7 host NEVER returns undefined. */
+  get<T>(entryId: string): CardFormTarget<T>
+  /** The shared describe mirror the forms derive from. */
+  describe?(): DescribeMirrorLike | undefined
+}
+
+/**
+ * Resolve the form target from the describe mirror's LIVE namespace list.
+ * The 0.1.7 `ConfigForms.get()` unconditionally creates and caches a
+ * controller for ANY key — it never returns undefined — so key validity must
+ * come from the namespaces the mirror actually serves. A `get()` on a key the
+ * mirror does not list yields a controller stuck at 'unavailable' forever,
+ * and the card renders nothing. No view yet (mirror still loading) answers
+ * undefined so the caller keeps its current target.
+ */
+const resolveConfigFormsTarget = (forms: ConfigFormsLike): CardFormTarget<SectionValue> | undefined => {
+  const namespaces = typeof forms.describe === 'function'
+    ? forms.describe()?.getSnapshot()?.view?.namespaces
+    : undefined
+  if (namespaces === undefined) return undefined
+  const served = CONFIG_FORM_KEYS.find(key => namespaces.some(row => row.ns === key))
+  return served === undefined ? undefined : forms.get<SectionValue>(served)
+}
+
 /** Required services: the slot registry, the locale dictionaries, the
- * settings scope, the workspace navigation service (its native directory
- * picker backs the card's browse button), and the session controller (the
- * stats page's Ctrl+click session jump reads the list and opens the target). */
-export const inject = ['slots', 'locale', 'connection', 'remote', 'settingsScope', 'uiWorkspace', 'sessions']
+ * workspace navigation service (its native directory picker backs the card's
+ * browse button), and the session controller (the stats page's Ctrl+click
+ * session jump reads the list and opens the target). Configuration sources
+ * (`configForms` in dsh 0.1.7+, `settingsScope` in pre-0.1.7) attach dynamically. */
+export const inject = ['slots', 'locale', 'connection', 'remote', 'uiWorkspace', 'sessions']
 
 /**
  * Register the dictionary pair, then the settings page and the plugin
@@ -77,24 +117,15 @@ export function apply(ctx: ClientContext): void {
   // Stable per-namespace translate reading the active locale at call time;
   // the label thunk re-evaluates it per read, so the nav row follows switches.
   const t = ctx.locale.bind(NS)
-  // The stats page's session jump: the pure predicate drives the Ctrl-hover
-  // affordance (a session outside the controller's list — archived, or a
-  // pre-install log row the list never saw — renders no dashed underline and
-  // refuses the click), and the jump closes the settings panel and opens the
-  // session. The conversation view then lands on whatever tab the session
-  // last used (the host persists the per-session view preference), so a
-  // session that previously showed its usage tab opens directly on it.
-  // Cast over the merge: the host program's `sessions` (a Session[]) and the
-  // client's ISessions share the service name, so the cordis Context merge
-  // is ambiguous here — the runtime inject is the client instance.
-  const clientSessions = (ctx as unknown as { sessions: ISessions }).sessions
-  const sessionListed = (id: string): boolean =>
-    clientSessions.list.getSnapshot().byId[id as SessionId] !== undefined
-  const openSession = (id: string): boolean => {
-    if (!sessionListed(id)) return false
-    clientSessions.open(id as SessionId)
-    return true
-  }
+  // The stats page's session jump is parked for the dsh 0.1.7 session
+  // controller: ISessions.open (the old navigation entry point) is gone —
+  // retention is the new acquisition shape and navigation belongs to view
+  // owners — and no drop-in replacement is wired yet. Both predicates
+  // answer false so the page renders no jump affordance and refuses the
+  // click, keeping the hint and the behavior in sync until the jump
+  // returns.
+  const sessionListed = (_id: string): boolean => false
+  const openSession = (_id: string): boolean => false
   ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',
     id: 'token-usage',
@@ -172,27 +203,100 @@ export function apply(ctx: ClientContext): void {
     inject: () => ({ modelDirectory }),
   }, QuotaButton))
 
-  // The Plugins page dispatches keyed configuration for bundles through
-  // `plugins.bundle.config` (keyed by the bundle's package name); we also register
-  // against the legacy `settings.plugin.item` slot (keyed by namespace) for backward
-  // compatibility with pre-0.1.6 harnesses.
-  const form = new CardForm(ctx.settingsScope.bind<SectionValue>({ namespace: TOKEN_USAGE_NS }))
-  const store = form.bind()
-  const registerCard = (name: 'plugins.bundle.config' | 'settings.plugin.item', key: string) => {
-    ctx.slots.inject(name, () => ctx.slots.register({
-      name,
-      key,
-      locale: NS,
-      inject: () => ({
-        hooks: { tokenUsageCard: store },
-        ...form.actions(),
-        // The shell's own directory picker (the workspace flows' chooser):
-        // resolves the chosen absolute path, or null when the user dismisses.
-        pickDirectory: () => ctx.uiWorkspace.pickDirectory(),
-      }),
-    }, TokenUsageCard))
+  // Configuration source resolution:
+  // - dsh 0.1.7+: ctx.configForms provides ConfigForm (keyed by the entry id
+  //   the describe mirror actually serves; see resolveConfigFormsTarget)
+  // - pre-0.1.7: ctx.settingsScope provides SettingsScope (bound by namespace)
+  // - fallback: unavailable target preventing runtime errors if neither is mounted
+  const lookupCurrentTarget = (): CardFormTarget<SectionValue> | undefined => {
+    const configForms = ctx.get('configForms') as ConfigFormsLike | undefined
+    if (configForms && typeof configForms.get === 'function') {
+      const byMirror = resolveConfigFormsTarget(configForms)
+      if (byMirror !== undefined) return byMirror
+    }
+    const settingsScope = ctx.get('settingsScope') as {
+      bind<T>(options: { namespace: string }): CardFormTarget<T>
+    } | undefined
+    if (settingsScope && typeof settingsScope.bind === 'function') {
+      return settingsScope.bind<SectionValue>({ namespace: TOKEN_USAGE_NS })
+    }
+    return undefined
   }
 
-  registerCard('plugins.bundle.config', '@laoyuehanni/dsh-token-usage')
-  registerCard('settings.plugin.item', TOKEN_USAGE_NS)
+  const initialTarget = lookupCurrentTarget()
+  let activeTarget: CardFormTarget<SectionValue> = initialTarget ?? createFallbackTarget()
+  const targetListeners = new Set<() => void>()
+  let unsubActive: (() => void) | undefined = activeTarget.subscribe(() => {
+    for (const listener of targetListeners) listener()
+  })
+
+  const switchTarget = (next: CardFormTarget<SectionValue>): void => {
+    if (next === activeTarget) return
+    unsubActive?.()
+    activeTarget = next
+    unsubActive = activeTarget.subscribe(() => {
+      for (const listener of targetListeners) listener()
+    })
+    for (const listener of targetListeners) listener()
+  }
+
+  ctx.inject(['configForms'], (configCtx) => {
+    configCtx.effect(() => {
+      const forms = configCtx.get('configForms') as ConfigFormsLike | undefined
+      if (!forms || typeof forms.get !== 'function') return () => {}
+      // The describe mirror loads asynchronously (its first snapshot holds no
+      // view), so besides resolving now, follow the mirror: the moment the
+      // namespace appears — or the host re-keys it — re-resolve and bind.
+      const mirror = typeof forms.describe === 'function' ? forms.describe() : undefined
+      const resolve = (): void => {
+        const target = resolveConfigFormsTarget(forms)
+        if (target !== undefined) switchTarget(target)
+      }
+      resolve()
+      void mirror?.ensure?.()
+      const unsubscribe = mirror?.subscribe(() => { resolve() })
+      return () => { unsubscribe?.() }
+    }, 'token-usage: configForms dynamic target')
+  })
+
+  ctx.inject(['settingsScope'], (scopeCtx) => {
+    scopeCtx.effect(() => {
+      const scopeService = scopeCtx.get('settingsScope') as {
+        bind<T>(options: { namespace: string }): CardFormTarget<T>
+      } | undefined
+      if (scopeService && typeof scopeService.bind === 'function') {
+        switchTarget(scopeService.bind<SectionValue>({ namespace: TOKEN_USAGE_NS }))
+      }
+      return () => {}
+    }, 'token-usage: settingsScope dynamic target')
+  })
+
+  const dynamicTarget: CardFormTarget<SectionValue> = {
+    getSnapshot: () => activeTarget.getSnapshot(),
+    subscribe: (listener) => {
+      targetListeners.add(listener)
+      return () => { targetListeners.delete(listener) }
+    },
+    set: (field, value) => activeTarget.set(field, value),
+    unset: (field) => activeTarget.unset(field),
+  }
+
+  // The Plugins page dispatches keyed configuration for bundles through
+  // `plugins.bundle.config` (keyed by the bundle's package name).
+  const form = new CardForm(dynamicTarget)
+  const store = form.bind()
+  ctx.slots.inject('plugins.bundle.config', () => ctx.slots.register({
+    name: 'plugins.bundle.config',
+    key: '@laoyuehanni/dsh-token-usage',
+    locale: NS,
+    inject: () => ({
+      hooks: { tokenUsageCard: store },
+      ...form.actions(),
+      // The shell's own directory picker (the workspace flows' chooser):
+      // resolves the chosen absolute path, or null when the user dismisses.
+      pickDirectory: () => (ctx.get('uiWorkspace') as {
+        pickDirectory?: () => Promise<string | null>
+      } | undefined)?.pickDirectory?.() ?? Promise.resolve(null),
+    }),
+  }, TokenUsageCard))
 }

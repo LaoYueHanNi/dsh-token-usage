@@ -34,12 +34,12 @@ describe.skipIf(!built)('client bundle', () => {
       (spec) => {
         if (spec.endsWith('.css')) return {}
         if (spec === '@deepseek-ai/dsh-client-ui-primitives') {
-          return { IconChevronDownOutline14: () => null }
+          return { IconChevronDownOutlineMedium: () => null }
         }
         return require(spec)
       },
     ) as { apply?: unknown; inject?: unknown }
     expect(typeof exports.apply).toBe('function')
-    expect(exports.inject).toEqual(['slots', 'locale', 'connection', 'remote', 'settingsScope', 'uiWorkspace', 'sessions'])
+    expect(exports.inject).toEqual(['slots', 'locale', 'connection', 'remote', 'uiWorkspace', 'sessions'])
   })
 })
