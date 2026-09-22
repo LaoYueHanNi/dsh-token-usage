@@ -201,7 +201,6 @@ describe('UsageLog.backfillTiming', () => {
         return {
           events: [
             { type: 'step/start', seq: 1, time: targetDate - 3200, data: { turn: 1, step: 1 } },
-            { type: 'assistant/chunk', seq: 2, time: targetDate - 3200 + 420, data: { turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: 'hi' } } },
             {
               type: 'assistant/message',
               seq: 3,
@@ -210,6 +209,11 @@ describe('UsageLog.backfillTiming', () => {
                 turn: 1,
                 step: 1,
                 message: { id: 'msg-1', role: 'assistant', content: [], source: { kind: 'model', provider: 'p', model: 'm' } },
+                // dsh 0.1.7 embeds the timed stream inside assistant/message;
+                // the first token delta sits 420ms after the step start.
+                stream: [
+                  { type: 'text-chunks', time0: targetDate - 3200 + 420, index: 0, dt: [], texts: ['hi'] },
+                ],
               },
             },
             { type: 'step/end', seq: 4, time: targetDate + 10, data: { turn: 1, step: 1 } },

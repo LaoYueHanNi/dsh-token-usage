@@ -218,7 +218,7 @@ describe('quota integration', () => {
     webServer = next.get('webServer') as MockWebServer
     const fetchMock = vi.fn(async () => new Response(ZHIPU_BODY, { status: 200 }))
     vi.stubGlobal('fetch', fetchMock)
-    await next.plugin(plugin, { ...config, startupDeferMs: 0 })
+    await next.plugin(plugin, { ...config})
     host = next
     return fetchMock
   }

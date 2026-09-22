@@ -5,13 +5,15 @@
  * installed). When a webServer exists, the plugin also serves the stats
  * route backing the web settings page (browser half in `src/client`).
  *
- * The settings namespace `token-usage` registers through the settings
- * service's `installSection` (the composition entry as its base layer), and
- * both of its fields take effect live. A stored region pick (or a mirror
- * override) re-resolves the feed URL and re-syncs the mirror; a stored data
- * directory switches writes to the new location and migrates every row and
- * companion file across (verbatim file copy, then source cleanup), so no
- * restart and no manual data move is needed.
+ * The user-editable Config fields (`path`, `pricingRegion`) are declared
+ * `.volatile()` so the dsh 0.1.7 settings service projects them into the
+ * `token-usage` settings form (the browser card edits them through
+ * `configForms`; saves land in the profile patch and commit live through
+ * the loader without a plugin reload). A region pick re-resolves the feed
+ * URL and re-syncs the mirror; a data directory change switches writes to
+ * the new location and migrates every row and companion file across
+ * (verbatim file copy, then source cleanup), so no restart and no manual
+ * data move is needed.
  *
  * @module token-usage
  */
@@ -19,13 +21,13 @@
 import { homedir } from 'node:os'
 import { unlink } from 'node:fs/promises'
 import { join } from 'node:path'
-import type { Context } from '@deepseek-ai/cordis'
+import type { Context, Volatile } from '@deepseek-ai/cordis'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
-// Type-only: pulls the ctx.settings declaration merge into the program.
-// dsh 0.1.2 removed the installSettingsSection/settingsNamespace value
-// helpers; the service's own installSection/get methods with plain-string
-// namespaces replace them.
+// Type-only: pulls the ctx.settings declaration merge (SettingsForms:
+// configure/describe) and the `loader/volatile-update` event declaration
+// into this program.
 import type {} from '@deepseek-ai/dsh-settings'
+import type {} from '@deepseek-ai/cordis-plugin-loader'
 import z from '@deepseek-ai/schemastery'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 // Type-only: pulls the ctx.sessionPersistence declaration merge into the program.
@@ -42,7 +44,7 @@ import { UsageLog } from './usage-log.ts'
 import { SessionMetaStore } from './session-meta.ts'
 import { cleanSource, copyData, type MigrationProgress } from './migrate.ts'
 import { resolvePricingUrl, syncCloudPricing, type PricingSourceInput } from './pricing.ts'
-import { extractFirstTokenTimeFromStream, isTokenDelta, modelOfEvent, recordOfEvent, type RequestTiming } from './usage-record.ts'
+import { extractFirstTokenTimeFromStream, modelOfEvent, recordOfEvent, type RequestTiming } from './usage-record.ts'
 import { markTimingSynced, readSyncState } from './sync-state.ts'
 import { autoSyncIfNeeded, syncHistory, titleOfEvent } from './sync.ts'
 import { clearRecordCache, warmRecordCache } from './record-cache.ts'
@@ -57,38 +59,44 @@ import {
   type CredentialRecordReader, type CredentialResolver, type ProviderDirectory, type SettingsReader,
 } from './quota/credentials.ts'
 
+/**
+ * Read through the volatile wrapper the dsh 0.1.7 loader places over
+ * `.volatile()` Config fields: volatile commits swap the snapshot in place
+ * without a reload, so every read resolves at call time. A bare value (test
+ * doubles, the pre-wrap apply argument) passes through unchanged.
+ */
+function readVolatile<T>(value: Volatile<T> | T | undefined): T | undefined {
+  if (value === undefined) return undefined
+  if (typeof value === 'object' && value !== null && 'get' in value && typeof (value as { get: unknown }).get === 'function') {
+    return (value as Volatile<T>).get() as T
+  }
+  return value as T
+}
+
 export interface Config {
   /** Data directory; defaults to `$DSH_HOME/token-usage` (`~/.dsh/token-usage`). */
-  path?: string
+  path?: Volatile<string | undefined> | string
   /** Explicit cloud pricing feed URL mirrored on every startup; wins over
    * every region setting. Defaults to the model-price-table repository the
-   * analyzer also pulls from. */
+   * analyzer also pulls from. Composition-only — never projected into the
+   * settings form. */
   pricingUrl?: string
-  /** Domestic (China) mirror; defaults to the gitee model-price-table feed. */
+  /** Domestic (China) mirror; defaults to the gitee model-price-table feed.
+   * Composition-only. */
   pricingUrlDomestic?: string
-  /** Overseas mirror; defaults to the github model-price-table feed. */
+  /** Overseas mirror; defaults to the github model-price-table feed.
+   * Composition-only. */
   pricingUrlOverseas?: string
   /** Which mirror to pull when `pricingUrl` is unset: `domestic` (default,
    * gitee) or `overseas` (github). Set once per install — no IP sniffing. */
-  pricingRegion?: 'domestic' | 'overseas'
-  /** How long the first start waits for a settings service to repoint the
-   * section source before falling back to the composition entry. Only armed
-   * when the composition entry pins an explicit `path`; otherwise the first
-   * start comes from the settings attach itself. Never user-facing — a
-   * test-only tilt at the boot deferral. */
-  startupDeferMs?: number
-  /** How long the first start waits for a settings service before starting
-   * the default directory when the composition entry pins no explicit
-   * `path`. The cap only ever fires on hosts that mount no settings service
-   * at all, so it must outlast any real boot. Never user-facing — a
-   * test-only tilt at the settings-less cap. */
-  startupCapMs?: number
+  pricingRegion?: Volatile<'domestic' | 'overseas' | undefined> | 'domestic' | 'overseas'
   /** The provider quota feature (the input-bar button): enabled by default,
-   * with the poll cadence the host asks the browser to follow. */
+   * with the poll cadence the host asks the browser to follow.
+   * Composition-only. */
   quota?: QuotaConfig
   /** Whether compaction summarize requests (`compaction/summary` events)
    * are recorded and billed like plain requests (default `true`). `false`
-   * skips them in both the live hook and the history sync. */
+   * skips them in both the live hook and the history sync. Composition-only. */
   recordCompaction?: boolean
 }
 
@@ -103,20 +111,24 @@ export interface QuotaConfig {
 /**
  * Loading-time schema of the composition config (the official Cordis shape:
  * a `Config` type plus a same-named standard schema, validated by the loader
- * before `apply` runs). Keys stay optional — absent keys stay absent, because
- * the plugin's own resolution (`validateConfig` + section-based defaults)
- * is where defaults and unknown-key rejection live. Schemastery's object
- * keeps unknown keys in non-strict mode, so `validateConfig` remains the
- * loud rejection point for misspelled keys.
+ * before `apply` runs). The `.volatile()` fields (`path`, `pricingRegion`)
+ * are what the 0.1.7 settings service projects into the settings form — a
+ * namespace with no volatile field is skipped by `settings.describe()` and
+ * its browser card never appears. Keys stay optional — absent keys stay
+ * absent, because the plugin's own resolution (`validateConfig` +
+ * section-based defaults) is where defaults and unknown-key rejection live.
+ * Schemastery's object keeps unknown keys in non-strict mode, so
+ * `validateConfig` remains the loud rejection point for misspelled keys.
  */
-export const Config: z<Config> = z.object({
-  path: z.string(),
+// (No `z<Config>` annotation: the `.volatile()` wrappers widen the schema's
+// inferred type past the plain `Config` shape, exactly as the reference
+// migration in dsh-git-worktree does it.)
+export const Config = z.object({
+  path: z.string().volatile(),
   pricingUrl: z.string(),
   pricingUrlDomestic: z.string(),
   pricingUrlOverseas: z.string(),
-  pricingRegion: z.union([z.const('domestic'), z.const('overseas')]),
-  startupDeferMs: z.number().min(0),
-  startupCapMs: z.number().min(0),
+  pricingRegion: z.union([z.const('domestic'), z.const('overseas')]).volatile(),
   recordCompaction: z.boolean(),
   quota: z.object({
     enabled: z.boolean(),
@@ -128,14 +140,14 @@ export const Config: z<Config> = z.object({
 export function validateConfig(config: Config): void {
   const unknown = Object.keys(config).find(key =>
     key !== 'path' && key !== 'pricingUrl' && key !== 'pricingUrlDomestic'
-    && key !== 'pricingUrlOverseas' && key !== 'pricingRegion' && key !== 'startupDeferMs'
-    && key !== 'startupCapMs'
+    && key !== 'pricingUrlOverseas' && key !== 'pricingRegion'
     && key !== 'recordCompaction'
     && key !== 'quota')
   if (unknown !== undefined) {
     throw new Error(`TokenUsageConfig: unknown key "${unknown}"`)
   }
-  if (config.path !== undefined && (typeof config.path !== 'string' || config.path.length === 0)) {
+  const path = readVolatile(config.path)
+  if (path !== undefined && (typeof path !== 'string' || path.length === 0)) {
     throw new Error('TokenUsageConfig: "path" must be a non-empty string')
   }
   if (config.pricingUrl !== undefined && (typeof config.pricingUrl !== 'string' || config.pricingUrl.length === 0)) {
@@ -149,17 +161,10 @@ export function validateConfig(config: Config): void {
       && (typeof config.pricingUrlOverseas !== 'string' || config.pricingUrlOverseas.length === 0)) {
     throw new Error('TokenUsageConfig: "pricingUrlOverseas" must be a non-empty string')
   }
-  if (config.pricingRegion !== undefined
-      && config.pricingRegion !== 'domestic' && config.pricingRegion !== 'overseas') {
+  const pricingRegion = readVolatile(config.pricingRegion)
+  if (pricingRegion !== undefined
+      && pricingRegion !== 'domestic' && pricingRegion !== 'overseas') {
     throw new Error('TokenUsageConfig: "pricingRegion" must be "domestic" or "overseas"')
-  }
-  if (config.startupDeferMs !== undefined
-      && (!Number.isFinite(config.startupDeferMs) || config.startupDeferMs < 0)) {
-    throw new Error('TokenUsageConfig: "startupDeferMs" must be a non-negative number')
-  }
-  if (config.startupCapMs !== undefined
-      && (!Number.isFinite(config.startupCapMs) || config.startupCapMs < 0)) {
-    throw new Error('TokenUsageConfig: "startupCapMs" must be a non-negative number')
   }
   if (config.recordCompaction !== undefined && typeof config.recordCompaction !== 'boolean') {
     throw new Error('TokenUsageConfig: "recordCompaction" must be a boolean')
@@ -235,28 +240,14 @@ export interface SectionConfig {
   pricingRegion?: 'domestic' | 'overseas'
 }
 
-/** Schema resolving the `token-usage` settings section. */
-export const sectionSchema: z<SectionConfig> = z.object({
-  path: z.string(),
-  pricingRegion: z.union([z.const('domestic'), z.const('overseas')]),
-})
-
-/** The section-shaped view of a config: absent keys stay absent (`exactOptionalPropertyTypes`). */
+/** The section-shaped view of a config: absent keys stay absent
+ * (`exactOptionalPropertyTypes`); volatile fields resolve at call time. */
 function sectionOf(config: Config): SectionConfig {
+  const path = readVolatile(config.path)
+  const pricingRegion = readVolatile(config.pricingRegion)
   return {
-    ...(config.path === undefined ? {} : { path: config.path }),
-    ...(config.pricingRegion === undefined ? {} : { pricingRegion: config.pricingRegion }),
-  }
-}
-
-/**
- * Reject an empty stored path: the schema cannot (an empty string is a valid
- * string), and it would silently disable the explicit-directory intent.
- * @param value - the resolved section, schema-valid by construction.
- */
-export function validateSection(value: SectionConfig): void {
-  if (value.path !== undefined && value.path.length === 0) {
-    throw new Error('token-usage: "path" must be a non-empty string')
+    ...(path === undefined ? {} : { path }),
+    ...(pricingRegion === undefined ? {} : { pricingRegion }),
   }
 }
 
@@ -313,34 +304,19 @@ export function directoryGuard(proposed: string | undefined, guard: SectionGuard
   return { blocked: guard.interactingSessions > 0, interactingSessions: guard.interactingSessions }
 }
 
-/**
- * Vet one section write before it persists: a directory change is refused
- * outright while any session is mid-conversation — their events append to the
- * source mid-copy, so a stored move could not run safely, and a silently stored
- * move that never runs is worse than a refused save. Region-only edits and
- * no-op path writes pass freely; the first start (no running directory yet)
- * adopts the stored path without migration, so it passes too.
- * @param value - the resolved section, schema-valid by construction.
- * @param guard - the running directory and mid-conversation session count.
- */
-export function validateSectionChange(value: SectionConfig, guard: SectionGuard): void {
-  validateSection(value)
-  const verdict = directoryGuard(value.path, guard)
-  if (verdict.blocked) {
-    throw new Error(`cannot change the data directory while ${String(verdict.interactingSessions)} session(s) are mid-conversation; let them finish and save again`)
-  }
-}
-
 export function apply(ctx: Context, config: Config = {}) {
   validateConfig(config)
   // The plugin's named logger: every diagnostic joins the framework's log
   // pipeline instead of raw console output (the Cordis logging service).
   const logger = ctx.logger('token-usage')
-  // The section source: the composition entry until a settings service
-  // attaches, then `setSource` repoints it at the resolved settings scope.
-  // A thunk, not a snapshot — reads see the current resolution at call time,
-  // so both the pricing region and the data directory follow a stored edit.
-  let sectionSource: () => SectionConfig = () => sectionOf(config)
+  // The live entry config: volatile commits swap the snapshot inside
+  // ctx.fiber.config in place (no reload), so every read goes through the
+  // fiber first and falls back to the apply argument only off-fiber.
+  const currentConfig = (): Config => (ctx.fiber?.config as Config | undefined) ?? config
+  // The section source, as a thunk: reads see the current resolution at
+  // call time, so both the pricing region and the data directory follow a
+  // stored edit the moment the loader commits it.
+  const sectionSource: () => SectionConfig = () => sectionOf(currentConfig())
   // The directory, log, and metadata index currently in force. Registrations
   // below read them per event and per request, so a settings-driven move
   // swaps the running directory without re-registering anything.
@@ -609,9 +585,31 @@ export function apply(ctx: Context, config: Config = {}) {
   })
   ctx.inject(['settings'], (settingsCtx) => {
     settingsCtx.effect(() => {
-      quotaReadSettings = (ns) => settingsCtx.settings.get(ns)
+      // 0.1.7 SettingsForms serves every live namespace value through
+      // describe() (the per-namespace get is gone); the credentials chain
+      // reads provider sections (e.g. an apiKeyEnv placement) through it.
+      quotaReadSettings = (ns) => settingsCtx.settings.describe().find(entry => entry.ns === ns)?.value
       return () => { quotaReadSettings = () => undefined }
     }, 'token-usage: quota settings reader')
+  })
+  // The host's default model selection: what a brand-new, never-requesting
+  // session would dispatch to. Optional seam — a deployment without the
+  // service leaves the quota button hidden until the session's first
+  // request names its provider.
+  let defaultProviderSelection: (() => string | undefined) | undefined
+  ctx.inject(['agentDefaultModel'], (agentCtx) => {
+    agentCtx.effect(() => {
+      const service = (agentCtx as unknown as {
+        agentDefaultModel?: { currentSelection?: () => { provider?: unknown } }
+      }).agentDefaultModel
+      if (service !== undefined && typeof service.currentSelection === 'function') {
+        defaultProviderSelection = () => {
+          const provider = service.currentSelection?.().provider
+          return typeof provider === 'string' && provider !== '' ? provider : undefined
+        }
+      }
+      return () => { defaultProviderSelection = undefined }
+    }, 'token-usage: default model selection seam')
   })
   ctx.inject(['credentials'], (credentialsCtx) => {
     credentialsCtx.effect(() => {
@@ -655,14 +653,7 @@ export function apply(ctx: Context, config: Config = {}) {
     resolveProvider: sessionId => resolveCurrentProvider({
       tracker: quotaTracker,
       ...(sessionId !== undefined ? { sessionId } : {}),
-      defaultProvider: () => {
-        // A brand-new, never-requesting session would use the host's
-        // default model selection; absent or unregistered → undefined.
-        const section = quotaReadSettings('agent-default-model')
-        if (typeof section !== 'object' || section === null) return undefined
-        const provider = (section as { provider?: unknown }).provider
-        return typeof provider === 'string' && provider !== '' ? provider : undefined
-      },
+      defaultProvider: () => defaultProviderSelection?.(),
     }),
     resolveCredentials: async provider => withCatalogBaseUrl(provider, await resolveQuotaCredentials({
       provider,
@@ -708,7 +699,6 @@ export function apply(ctx: Context, config: Config = {}) {
       turn: number
       step: number
       startTime: number
-      firstTokenTime?: number
     }
     const activeSteps = new Map<string, ActiveStepTiming>()
     // Header facts are immutable, so one upsert per session is enough even
@@ -743,27 +733,20 @@ export function apply(ctx: Context, config: Config = {}) {
           step: event.data.step,
           startTime: event.time,
         })
-      } else if (event.type === 'assistant/chunk') {
-        const currentStep = activeSteps.get(session.id)
-        if (currentStep !== undefined
-          && currentStep.turn === event.data.turn
-          && currentStep.step === event.data.step
-          && currentStep.firstTokenTime === undefined
-          && isTokenDelta(event.data.chunk)) {
-          currentStep.firstTokenTime = event.time
-        }
       }
       let timing: RequestTiming | undefined
       if (event.type === 'assistant/message') {
         const currentStep = activeSteps.get(session.id)
         if (currentStep !== undefined
-          && currentStep.turn === event.data.turn
-          && currentStep.step === event.data.step) {
+            && currentStep.turn === event.data.turn
+            && currentStep.step === event.data.step) {
           const latencyMs = Math.max(0, event.time - currentStep.startTime)
-          let firstTokenTime = currentStep.firstTokenTime
-          if (firstTokenTime === undefined && 'stream' in event.data && event.data.stream) {
-            firstTokenTime = extractFirstTokenTimeFromStream(event.data.stream)
-          }
+          // dsh 0.1.7 embeds the timed model stream inside assistant/message
+          // (the assistant/chunk event is gone); the first token delta's
+          // timestamp is read from those compact records.
+          const firstTokenTime = 'stream' in event.data && event.data.stream
+            ? extractFirstTokenTimeFromStream(event.data.stream)
+            : undefined
           const firstTokenLatencyMs = firstTokenTime !== undefined
             ? Math.max(0, firstTokenTime - currentStep.startTime)
             : undefined
@@ -878,55 +861,23 @@ export function apply(ctx: Context, config: Config = {}) {
     logger.info(`[token-usage] plugin loaded (data dir: ${dir})`)
   }
 
-  // A stored section acts on both concerns live: a directory change
-  // relocates, a region switch (any effective-URL change) re-syncs the
-  // pricing mirror. The first start intentionally defers (see the deferred
-  // startup below): the settings inject's onChange fires after setSource and
-  // opens the plugin on the settings-resolved directory; with no settings
-  // service the long cap opens the default directory instead.
-  // dsh 0.1.2 folded installSettingsSection into the settings service
-  // itself (installSection takes the consumer context as its first
-  // argument); the wiring semantics — inject-time registration, entry
-  // fallback when the provider detaches, onChange after setSource — are the
-  // ones the old helper performed around register().
-  ctx.inject(['settings'], (settingsCtx) => {
-    settingsCtx.settings.installSection(ctx, TOKEN_USAGE_NS, sectionSchema, sectionOf(config), {
-      validate: (value) => validateSectionChange(value, {
-        runningDir: current?.dir,
-        interactingSessions: countInteractingSessions(ctx.sessions.list().map(session => session.snapshotEvents())),
-      }),
-      setSource: (source) => { sectionSource = source },
-      onChange: () => { start(); requestSync() },
-    })
-  })
-  // The bootstrap defers the first start. The dsh Loader mounts every profile
-  // entry CONCURRENTLY, so this plugin's apply() runs in no guaranteed order
-  // relative to the base bundle's settings-file provider: probing the settings
-  // service synchronously cannot tell "not attached yet" from "never
-  // attached", and starting before the attach on an entry without an explicit
-  // `path` opens the DEFAULT directory — the boot's own pricing sync and state
-  // writes then land there and relocate away the moment settings attach,
-  // churning every boot on hosts whose settings provider mounts late (the
-  // 0.1.2 base bundle rows ahead of it push the attach past any sub-second
-  // window). So the short-deferred fallback only fires for an explicit
-  // composition `path` — an explicit placement is intent, and a differing
-  // stored path later relocates as a genuine edit; an entry without one waits
-  // for the settings inject (whose onChange start()s on the resolved
-  // directory) and only the long cap below starts the default directory when
-  // no settings service ever mounts. The idempotent start makes every
-  // overlapping call a no-op.
   const startFromSource = (): void => { start(); requestSync() }
-  const startupDeferMs = config.startupDeferMs ?? 500
-  const startup = config.path === undefined
-    ? undefined
-    : setTimeout(startFromSource, startupDeferMs)
-  const startupCapMs = config.startupCapMs ?? 30_000
-  const settingsless = setTimeout(() => {
-    if (current !== undefined) return
-    startFromSource()
-  }, startupCapMs)
-  ctx.effect(() => () => {
-    if (startup !== undefined) clearTimeout(startup)
-    clearTimeout(settingsless)
-  }, 'token-usage: deferred startup')
+
+  // dsh 0.1.7 settings wiring. The volatile Config fields above are what the
+  // settings service projects into the `token-usage` form; `auto: false`
+  // declares that this plugin renders its own card (the browser half's
+  // `plugins.bundle.config` entry) rather than a schema-generated page.
+  ctx.inject(['settings'], (settingsCtx) => {
+    settingsCtx.effect(() => settingsCtx.settings.configure({ auto: false }, ctx.fiber), 'token-usage: settings presentation policy')
+  })
+
+  // The loader resolves the composition entry's config (composition layer
+  // under the profile patch) before apply runs, so the first start reads the
+  // final values directly — no deferred settings-attach wait. Saves from the
+  // browser card commit volatile fields in place without a reload;
+  // `loader/volatile-update` (dispatched to this fiber only) re-runs the
+  // section-driven start: a directory change relocates, a region switch
+  // re-syncs the pricing mirror.
+  startFromSource()
+  ctx.on('loader/volatile-update', () => { start(); requestSync() })
 }

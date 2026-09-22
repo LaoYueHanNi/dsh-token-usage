@@ -12,7 +12,7 @@ import { appendFile, mkdir, readdir, readFile, rename, unlink, writeFile } from 
 import { join } from 'node:path'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import { consoleLogger, type LoggerLike } from './log.ts'
-import { extractFirstTokenTimeFromStream, isTokenDelta, parseRecord, serializeRecord, type UsageRecord } from './usage-record.ts'
+import { extractFirstTokenTimeFromStream, parseRecord, serializeRecord, type UsageRecord } from './usage-record.ts'
 import { readerOf, type SyncPersistence } from './sync.ts'
 
 const DAY_FILE = /^usage-\d{4}-\d{2}-\d{2}\.jsonl$/u
@@ -467,21 +467,13 @@ export async function backfillDayFilesTiming(
   for (const [sessionId, targetMap] of missingBySession) {
     try {
       const inspection = await reader.read(sessionId as SessionId)
-      let openStep: { turn: number; step: number; startTime: number; firstTokenTime?: number } | null = null
+      let openStep: { turn: number; step: number; startTime: number } | null = null
       for (const event of inspection.events) {
         if (event.type === 'step/start') {
           openStep = {
             turn: event.data.turn,
             step: event.data.step,
             startTime: event.time,
-          }
-        } else if (event.type === 'assistant/chunk') {
-          if (openStep !== null
-            && openStep.turn === event.data.turn
-            && openStep.step === event.data.step
-            && openStep.firstTokenTime === undefined
-            && isTokenDelta(event.data.chunk)) {
-            openStep.firstTokenTime = event.time
           }
         } else if (event.type === 'assistant/message') {
           if (targetMap.has(event.data.message.id)) {
@@ -490,10 +482,10 @@ export async function backfillDayFilesTiming(
               && openStep.turn === event.data.turn
               && openStep.step === event.data.step) {
               targetRecord.latencyMs = Math.max(0, event.time - openStep.startTime)
-              let firstTokenTime = openStep.firstTokenTime
-              if (firstTokenTime === undefined && 'stream' in event.data && event.data.stream) {
-                firstTokenTime = extractFirstTokenTimeFromStream(event.data.stream)
-              }
+              // dsh 0.1.7 embeds the timed model stream inside assistant/message.
+              const firstTokenTime = 'stream' in event.data && event.data.stream
+                ? extractFirstTokenTimeFromStream(event.data.stream)
+                : undefined
               if (firstTokenTime !== undefined) {
                 targetRecord.firstTokenLatencyMs = Math.max(0, firstTokenTime - openStep.startTime)
               }
