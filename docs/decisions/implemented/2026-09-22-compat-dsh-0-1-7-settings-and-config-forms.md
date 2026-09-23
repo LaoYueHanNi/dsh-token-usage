@@ -25,18 +25,18 @@ Status: implemented
 
 5. **quota 链路重接**：凭据链的 `readSettings` 改经 `settings.describe()` 按 ns 查 resolved value（替代被删的 `get`）；全新会话的默认 provider 改经可选注入的 `agentDefaultModel` 服务 `currentSelection()`（替代读 `agent-default-model` 设置节）。
 
-6. **0.1.7 事件与 API 适配**：`assistant/chunk` 流事件已被 `assistant/message` 内嵌的 `stream: AssistantStreamRecord[]`（compact 记录）取代——live 记录、历史回填、timing 回填三处删除 chunk 分支，首字延迟统一由既有 `extractFirstTokenTimeFromStream` 从 compact 记录提取；客户端 `ISessions.open` 无直接替代（导航归视图层所有），统计页 Ctrl+click 会话跳转暂时降级为不可用（提示与行为同步关闭）；图标 `IconChevronDownOutline14` 更名 `IconChevronDownOutlineMedium`；删除 legacy `settings.plugin.item` 槽注册。
+6. **0.1.7 事件与 API 适配**：`assistant/chunk` 流事件已被 `assistant/message` 内嵌的 `stream: AssistantStreamRecord[]`（compact 记录）取代——live 记录、历史回填、timing 回填三处删除 chunk 分支，首字延迟统一由既有 `extractFirstTokenTimeFromStream` 从 compact 记录提取；客户端 `ISessions.open` 被移除，会话导航收敛至视图所有者 `ctx.uiWorkspace.openSession(target)`，统计页 Ctrl+click 经 `sessionListed` 校验 controller 快照后恢复跳转；图标 `IconChevronDownOutline14` 更名 `IconChevronDownOutlineMedium`；删除 legacy `settings.plugin.item` 槽注册。
 
 7. **客户端解析保留既有修复**：`configForms` 双 key 候选（entry id 优先、包名兜底）以 `describe()` 镜像快照判定有效性，动态 effect 订阅镜像 + `ensure()` 首读，namespace 出现即重绑定。
 
 ## Alternatives considered
 
 - **双版本运行时兼容（本轮推翻）**：前一轮已实施 installSection 探测分支 + settingsScope 降级。volatile 范式侵入 schema 声明、字段类型、运行时读取全链路（`Volatile<T>|T` + 处处解包），双轨并存的类型噪声与测试面失控；且 dsh-git-worktree 决策记录已论证 alpha 期 peer 严格隔离下双兼容不可维护。插件发布面由版本号区分宿主代际（0.4.x 为 0.1.2~0.1.6 终线）。
-- **保留旧会话跳转功能**：0.1.7 `ISessions` 改为 retain/using 引用模型且导航归属视图层，无插件侧平替 API；与其接线不成熟的内部服务，不如暂时优雅降级（两谓词恒 false）待宿主稳定后专项恢复。
+- **保留旧 ISessions.open 链路**：0.1.7 `ISessions` 改为 retain/using 引用模型且导航归属视图层，直接调用已被废除；改走视图层服务 `uiWorkspace.openSession` 规范实现跳转。
 - **服务端保留 validateSectionChange 写入守卫**：SettingsForms 写链（mutate/update）不接受插件 validate 回调，只有 schema 校验；会话进行中拒迁移的约束由客户端 guard 路由（保存前预检）承担，服务端 relocate 自身仍有活跃会话拒绝保护，双保险保留。
 
 ## Consequences
 
 - **所得**：`token-usage` 进入宿主 describe 镜像，插件详情页配置区块与卡片具备出现的全部前提（volatile 投射 + 客户端镜像驱动绑定齐备）；配置保存写回 profile patch 后经 volatile 原地提交热生效，无插件重载。
 - **所得**：依赖图与宿主 0.1.7-alpha.1 对齐，`typecheck` 0 错误；测试套件随 API 变化同步更新（chunk→stream、configure/volatile-update 新用例、废键用例移除、integration/quota-integration 适配全部收尾，39 个测试文件 100% 通过）。
-- **代价**：不再兼容 0.1.6 及更早宿主（安装新版即需宿主 ≥0.1.7-alpha.1）；统计页会话跳转暂缺；npm 依赖解析依赖 `.npmrc` 的 `legacy-peer-deps`。
+- **代价**：不再兼容 0.1.6 及更早宿主（安装新版即需宿主 ≥0.1.7-alpha.1）；npm 依赖解析依赖 `.npmrc` 的 `legacy-peer-deps`。

@@ -40,6 +40,6 @@ describe.skipIf(!built)('client bundle', () => {
       },
     ) as { apply?: unknown; inject?: unknown }
     expect(typeof exports.apply).toBe('function')
-    expect(exports.inject).toEqual(['slots', 'locale', 'connection', 'remote', 'uiWorkspace', 'sessions'])
+    expect(exports.inject).toEqual(['slots', 'locale', 'connection', 'remote', 'uiWorkspace', 'sessions', 'workspaces'])
   })
 })

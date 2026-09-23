@@ -155,6 +155,7 @@
   color: inherit;
   background: none;
   border: none;
+  border-bottom: 1.5px dashed transparent;
   text-align: left;
   max-width: 100%;
 }
@@ -163,9 +164,13 @@
  * cursor — the visual contract that a click leaves the settings page. */
 .jumpable {
   cursor: pointer;
-  text-decoration: underline dashed;
-  text-decoration-color: var(--dsw-alias-label-tertiary);
-  text-underline-offset: 3px;
+  border-bottom-color: var(--dsw-alias-label-secondary);
+  color: var(--dsw-alias-label-primary);
+  text-decoration: none;
+}
+
+.jumpable:hover {
+  border-bottom-color: var(--dsw-alias-label-primary);
 }
 
 .badge {

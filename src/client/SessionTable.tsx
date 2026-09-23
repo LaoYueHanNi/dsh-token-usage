@@ -114,15 +114,21 @@ export function SessionTable({ rows, view, t, sessionListed, openSession }: {
   // a focus loss can swallow the keyup and strand the state on.
   const [ctrlHeld, setCtrlHeld] = useState(false)
   useEffect(() => {
-    const down = (event: KeyboardEvent): void => { if (event.key === 'Control') setCtrlHeld(true) }
-    const up = (event: KeyboardEvent): void => { if (event.key === 'Control') setCtrlHeld(false) }
+    const down = (event: KeyboardEvent): void => { if (event.key === 'Control' || event.key === 'Meta') setCtrlHeld(true) }
+    const up = (event: KeyboardEvent): void => { if (event.key === 'Control' || event.key === 'Meta') setCtrlHeld(false) }
+    const move = (event: MouseEvent): void => {
+      const active = event.ctrlKey || event.metaKey
+      setCtrlHeld(previous => (previous === active ? previous : active))
+    }
     const blur = (): void => setCtrlHeld(false)
     window.addEventListener('keydown', down)
     window.addEventListener('keyup', up)
+    window.addEventListener('mousemove', move)
     window.addEventListener('blur', blur)
     return () => {
       window.removeEventListener('keydown', down)
       window.removeEventListener('keyup', up)
+      window.removeEventListener('mousemove', move)
       window.removeEventListener('blur', blur)
     }
   }, [])
@@ -237,7 +243,7 @@ export function SessionTable({ rows, view, t, sessionListed, openSession }: {
               type="button"
               className={jump ? `${styles['sessionName']} ${styles['jumpable']}` : styles['sessionName']}
               title={jump ? t('session.openHint') : undefined}
-              onClick={jump
+              onClick={jump || ctrlHeld
                 ? event => {
                   event.preventDefault()
                   openSession?.(row.sessionId)

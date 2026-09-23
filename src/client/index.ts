@@ -45,6 +45,25 @@ import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 // Type-only: pulls the locale service's Context merge (ctx.locale) and the
 // shared `common` vocabulary into the `t` seat's key domain.
 import type {} from '@deepseek-ai/dsh-client-locale/client'
+import type { ISessions } from '@deepseek-ai/dsh-api-session-controller/client'
+import type { UiWorkspace } from '@deepseek-ai/dsh-client-ui-workspace/client'
+import type { SessionId } from '@deepseek-ai/dsh-client-connection/client'
+
+interface WorkspaceItemLike {
+  readonly workspaceId: string
+  readonly sessionIds: readonly SessionId[]
+}
+
+interface WorkspaceSnapshotLike {
+  readonly items: readonly WorkspaceItemLike[]
+  readonly phase?: 'pending' | 'ready'
+}
+
+interface WorkspacesLike {
+  readonly list?: {
+    getSnapshot(): WorkspaceSnapshotLike
+  }
+}
 import { CardForm, createFallbackTarget, type CardFormTarget, type SectionValue } from './card-form.ts'
 import { QuotaButton, type ModelSelectionSource } from './QuotaButton.tsx'
 import { SessionStatsChip } from './SessionStatsChip.tsx'
@@ -105,7 +124,7 @@ const resolveConfigFormsTarget = (forms: ConfigFormsLike): CardFormTarget<Sectio
  * browse button), and the session controller (the stats page's Ctrl+click
  * session jump reads the list and opens the target). Configuration sources
  * (`configForms` in dsh 0.1.7+, `settingsScope` in pre-0.1.7) attach dynamically. */
-export const inject = ['slots', 'locale', 'connection', 'remote', 'uiWorkspace', 'sessions']
+export const inject = ['slots', 'locale', 'connection', 'remote', 'uiWorkspace', 'sessions', 'workspaces']
 
 /**
  * Register the dictionary pair, then the settings page and the plugin
@@ -117,15 +136,40 @@ export function apply(ctx: ClientContext): void {
   // Stable per-namespace translate reading the active locale at call time;
   // the label thunk re-evaluates it per read, so the nav row follows switches.
   const t = ctx.locale.bind(NS)
-  // The stats page's session jump is parked for the dsh 0.1.7 session
-  // controller: ISessions.open (the old navigation entry point) is gone —
-  // retention is the new acquisition shape and navigation belongs to view
-  // owners — and no drop-in replacement is wired yet. Both predicates
-  // answer false so the page renders no jump affordance and refuses the
-  // click, keeping the hint and the behavior in sync until the jump
-  // returns.
-  const sessionListed = (_id: string): boolean => false
-  const openSession = (_id: string): boolean => false
+  // The stats page's session jump: the pure predicate drives the Ctrl-hover
+  // affordance (a session outside the controller's list — archived, or a
+  // pre-install log row the list never saw — renders no dashed underline and
+  // refuses the click), and the jump closes the settings panel and opens the
+  // session via uiWorkspace.openSession.
+  const getSessions = (): ISessions | undefined =>
+    (ctx.get?.('sessions') as ISessions | undefined) ?? (ctx as unknown as { sessions?: ISessions }).sessions
+  const getUiWorkspace = (): UiWorkspace | undefined =>
+    (ctx.get?.('uiWorkspace') as UiWorkspace | undefined) ?? (ctx as unknown as { uiWorkspace?: UiWorkspace }).uiWorkspace
+  const getWorkspaces = (): WorkspacesLike | undefined =>
+    (ctx.get?.('workspaces') as WorkspacesLike | undefined) ?? (ctx as unknown as { workspaces?: WorkspacesLike }).workspaces
+
+  const isSessionInController = (id: string): boolean => {
+    const list = getSessions()?.list?.getSnapshot()
+    return list?.byId?.[id as SessionId] !== undefined
+  }
+
+  const isWorkspaceAlive = (id: string): boolean => {
+    const ws = getWorkspaces()?.list?.getSnapshot()
+    if (!ws || ws.phase === 'pending') return true
+    const sid = id as SessionId
+    return ws.items.some(item => item.sessionIds.includes(sid))
+  }
+
+  const sessionListed = (id: string): boolean => {
+    return isSessionInController(id) && isWorkspaceAlive(id)
+  }
+
+  const openSession = (id: string): { ok: boolean; reason?: 'workspaceDeleted' | 'sessionNotFound' } => {
+    if (!isSessionInController(id)) return { ok: false, reason: 'sessionNotFound' }
+    if (!isWorkspaceAlive(id)) return { ok: false, reason: 'workspaceDeleted' }
+    getUiWorkspace()?.openSession(id as SessionId)
+    return { ok: true }
+  }
   ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',
     id: 'token-usage',

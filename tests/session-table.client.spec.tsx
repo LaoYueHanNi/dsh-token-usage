@@ -177,9 +177,12 @@ describe('SessionTable', () => {
     fireEvent.click(root)
     expect(opened).toEqual(['s-root'])
     // An unlisted session (archived / unknown to the controller) never
-    // invites the jump even while Ctrl is held.
+    // invites the jump even while Ctrl is held, but Ctrl+click forwards to
+    // openSession so the parent can show feedback (e.g. workspace deleted toast).
     const bare = within(table).getByText('s-bare · 2026-01-10 – 2026-01-10')
     expect(bare.className).not.toMatch(/jumpable/)
+    fireEvent.click(bare)
+    expect(opened).toEqual(['s-root', 's-bare'])
     // Ctrl released: the affordance retracts.
     fireEvent.keyUp(window, { key: 'Control' })
     expect(root.className).not.toMatch(/jumpable/)

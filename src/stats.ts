@@ -609,7 +609,7 @@ export function attachCosts(
 
 /** How many session rows the route sends, counted after the fold — the
  * truncation that makes folding a server-side concern in the first place. */
-export const SESSION_ROW_LIMIT = 20
+export const SESSION_ROW_LIMIT = 1000
 
 /** One entry of the session-metadata index the fold reads identities from
  * (the duck-typed projection of `session-meta.ts`'s store). */

@@ -18,6 +18,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SettingsSectionOwnerProps } from '@deepseek-ai/dsh-client-ui-settings/client'
+import { IconWarningOutlineRegular, Toast } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { UsageSummary } from '../wire.ts'
 import { STATS_PATH } from '../wire.ts'
 import { useAsyncResource } from './async-resource.ts'
@@ -172,10 +173,36 @@ function FilterBar({ filters, models, onChange, onPricingTable, t }: {
 export function TokenUsageSection({ t, close, sessionListed, openSession }: SettingsSectionOwnerProps & {
   t: TranslateNS<'token-usage'>
   sessionListed?: (id: string) => boolean
-  openSession?: (id: string) => boolean
+  openSession?: (id: string) => boolean | { ok: boolean; reason?: string }
 }): ReactNode {
   const rootRef = useRef<HTMLDivElement>(null)
   useColorSchemeMirror(rootRef)
+  const [toastText, setToastText] = useState<string | null>(null)
+  const [toastSeq, setToastSeq] = useState(0)
+  const showToast = useCallback((text: string) => {
+    setToastSeq(previous => previous + 1)
+    setToastText(text)
+  }, [])
+  const dismissToast = useCallback(() => {
+    setToastText(null)
+  }, [])
+
+  const handleOpenSession = useCallback((id: string) => {
+    if (!openSession) return
+    const result = openSession(id)
+    if (result && typeof result === 'object' && 'ok' in result) {
+      if (result.ok) {
+        close()
+      } else if (result.reason === 'workspaceDeleted') {
+        showToast(t('session.workspaceDeleted'))
+      }
+      return
+    }
+    if (result === true) {
+      close()
+    }
+  }, [openSession, close, showToast, t])
+
   // Entering the page starts on today's window (the 1d quick range).
   const [filters, setFilters] = useState<Filters>(() => ({ model: '', ...quickRange(1) }))
   // The detail-table block's mode: by model (default, the historical table,
@@ -428,7 +455,7 @@ export function TokenUsageSection({ t, close, sessionListed, openSession }: Sett
                             view={view}
                             t={t}
                             {...sessionListed !== undefined && openSession !== undefined
-                              ? { sessionListed, openSession: id => { if (openSession(id)) close() } }
+                              ? { sessionListed, openSession: handleOpenSession }
                               : {}}
                           />
                         )
@@ -450,6 +477,14 @@ export function TokenUsageSection({ t, close, sessionListed, openSession }: Sett
               : null}
           </>
         )}
+      {toastText !== null && (
+        <Toast
+          key={toastSeq}
+          text={toastText}
+          icon={<IconWarningOutlineRegular />}
+          onDone={dismissToast}
+        />
+      )}
     </div>
   )
 }

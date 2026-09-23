@@ -21,6 +21,10 @@ import type { PricingOverviewPayload, UsageSummary } from '../src/wire.ts'
 vi.mock('@deepseek-ai/dsh-client-ui-primitives', async () => {
   const { cloneElement, useState } = await import('react')
   return {
+    Toast: ({ text, onDone }: { text: string; onDone?: () => void }) => (
+      <div role="alert" onClick={onDone}>{text}</div>
+    ),
+    IconWarningOutlineRegular: () => <span data-testid="icon-warning" />,
     Tooltip: ({ label, disabled, children }: {
       label: string
       disabled?: boolean
@@ -934,6 +938,43 @@ describe('MenuSelect', () => {
     expect(focused.getAttribute('aria-selected')).toBe('true')
     expect(focused.textContent).toContain('deepseek-reasoner')
     expect(scrolled).toContain(focused)
+  })
+
+  it('shows a toast warning when opening a session whose workspace is deleted', async () => {
+    const payload: UsageSummary = {
+      ...SUMMARY,
+      sessionRows: [
+        {
+          sessionId: 's1',
+          title: 'Writing tests',
+          cwd: '/repo',
+          firstTime: 100,
+          lastTime: 200,
+          cost: 0.01,
+          totals: { requests: 1, inputTokens: 10, outputTokens: 10, cacheReadTokens: 0, cacheWriteTokens: 0 },
+        },
+      ],
+    }
+    stubFetch(async () => ({ ok: true, json: async () => payload }))
+    const close = vi.fn()
+    const openSession = vi.fn(() => ({ ok: false, reason: 'workspaceDeleted' }))
+    render(
+      <TokenUsageSection
+        close={close}
+        t={t}
+        sessionListed={() => false}
+        openSession={openSession}
+      />,
+    )
+    await screen.findAllByText('总 token')
+    // Switch to By Session view
+    fireEvent.click(screen.getByRole('button', { name: '按会话' }))
+    const sessionBtn = await screen.findByText('Writing tests')
+    fireEvent.keyDown(window, { key: 'Control' })
+    fireEvent.click(sessionBtn)
+    expect(openSession).toHaveBeenCalledWith('s1')
+    expect(close).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert').textContent).toBe('该会话所属工作区已删除，无法跳转')
   })
 })
 
