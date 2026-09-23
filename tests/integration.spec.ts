@@ -4,7 +4,6 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Context, Service } from '@deepseek-ai/cordis'
-import SettingsProvider, { type SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import { SessionSeq } from '@deepseek-ai/dsh-session'
 import * as plugin from '../src/index.ts'
 import { DEFAULT_PRICING_URL_OVERSEAS } from '../src/pricing.ts'
@@ -48,81 +47,34 @@ class MockSessions extends Service {
   }
 }
 
-/**
- * Minimal mutable settings service: stores committed sections per namespace
- * and announces each commit the way a settings-document change does, driving
- * `onChange` the way a real provider would.
- */
-class FakeSettings extends Service {
-  private readonly sections = new Map<string, Record<string, unknown>>()
-  private readonly bases = new Map<string, Record<string, unknown>>()
-  private readonly validators = new Map<string, ((value: Record<string, unknown>) => void) | undefined>()
-  private readonly watchers = new Set<() => void>()
+/** Simulates deepseek-harness 0.1.7+ SettingsForms. */
+class FakeSettingsForms extends Service {
+  public readonly configured: Array<{ auto?: boolean; owner: unknown }> = []
 
   constructor(ctx: Context) {
     super(ctx, 'settings')
   }
 
-  register(ns: string, _schema: unknown, options: { base?: Record<string, unknown>, validate?: (value: Record<string, unknown>) => void }) {
-    const base = options.base ?? {}
-    this.bases.set(ns, base)
-    this.validators.set(ns, options.validate)
-    return {
-      get: (): Record<string, unknown> => ({ ...base, ...this.sections.get(ns) }),
-      watch: (listener: () => void): (() => void) => {
-        this.watchers.add(listener)
-        return () => { this.watchers.delete(listener) }
-      },
-    }
+  get writable(): boolean { return true }
+
+  configure(presentation: { auto?: boolean }, owner?: unknown): () => void {
+    this.configured.push({ auto: presentation.auto, owner })
+    return () => {}
   }
 
-  /**
-   * Store one namespace's user layer and announce the commit — after the
-   * registered validator vets the resolved section, the way the real
-   * provider refuses a write before anything persists.
-   */
-  async commit(ns: string, section: Record<string, unknown>): Promise<void> {
-    const validate = this.validators.get(ns)
-    if (validate !== undefined) validate({ ...this.bases.get(ns), ...section })
-    this.sections.set(ns, section)
-    for (const watcher of this.watchers) watcher()
-  }
-
-  /** dsh 0.1.2 shape: register + source sink + change notification. */
-  installSection(
-    _owner: unknown,
-    ns: string,
-    _schema: unknown,
-    entry: Record<string, unknown>,
-    hooks: { setSource: (source: () => unknown) => void, onChange: () => void, validate?: (value: Record<string, unknown>) => void },
-  ): void {
-    const scope = this.register(ns, undefined, { base: entry, validate: hooks.validate })
-    hooks.setSource(() => scope.get())
-    hooks.onChange()
-    scope.watch(() => hooks.onChange())
+  describe(): Array<{ ns: string; value?: unknown }> {
+    return []
   }
 }
 
-/** In-process settings provider with one fixed document (mirrors harness tests). */
-class BareSettingsProvider extends SettingsProvider {
-  private readonly doc: Record<string, unknown>
-
-  constructor(ctx: Context, doc: Record<string, unknown>) {
-    super(ctx)
-    this.doc = doc
+/** Simulate host loader updating volatile entry config and emitting volatile-update. */
+function updateVolatileConfig(ctx: Context, update: Partial<plugin.Config>): void {
+  const runtime = ctx.registry.get(plugin) as { fibers?: Iterable<{ config?: plugin.Config }> } | undefined
+  const fiber = runtime?.fibers ? Array.from(runtime.fibers)[0] : undefined
+  if (fiber) {
+    fiber.config = { ...fiber.config, ...update }
   }
-
-  override get writable(): boolean {
-    return true
-  }
-
-  protected load(): Promise<Record<string, unknown>> {
-    return Promise.resolve(structuredClone(this.doc))
-  }
-
-  protected persist(_ns: SettingsNamespace, _section: Record<string, unknown>): Promise<void> {
-    return Promise.resolve()
-  }
+  ctx.emit('loader/volatile-update', [Object.keys(update)])
 }
 
 /** Wait until a day file exists and return its raw text. */
@@ -403,9 +355,8 @@ describe('plugin integration', () => {
     const next = new Context()
     await next.plugin(MockSessions)
     await next.plugin(persistenceService(sessions))
-    // A stored region (the web card's "overseas") must drive the startup sync.
-    await next.plugin(BareSettingsProvider, { 'token-usage': { pricingRegion: 'overseas' } })
-    await next.plugin(plugin)
+    // In dsh 0.1.7, stored region from profile patch enters as entry config.
+    await next.plugin(plugin, { pricingRegion: 'overseas' })
     ctx = next
 
     // Wait for the first fetch, then give transient startup events a beat to
@@ -425,18 +376,16 @@ describe('plugin integration', () => {
 
 describe('live data-directory relocation', () => {
   let host: Context | undefined
-  let settings: FakeSettings | undefined
   let sessionsService: MockSessions | undefined
   let home: string
   const sessions: Array<{ id: string; events: unknown[] }> = []
 
   /** Mount the plugin with the settings service over an initial section. */
-  async function mountWith(section: { path?: string }): Promise<void> {
+  async function mountWith(section: plugin.Config): Promise<void> {
     const next = new Context()
     await next.plugin(MockSessions)
     await next.plugin(persistenceService(sessions))
-    await next.plugin(FakeSettings)
-    settings = next.get('settings') as FakeSettings
+    await next.plugin(FakeSettingsForms)
     sessionsService = next.get('sessions') as MockSessions
     await next.plugin(plugin, section)
     host = next
@@ -478,7 +427,6 @@ describe('live data-directory relocation', () => {
     if (host !== undefined) {
       host.registry.delete(plugin)
       host = undefined
-      settings = undefined
     }
     vi.unstubAllEnvs()
     vi.unstubAllGlobals()
@@ -486,77 +434,22 @@ describe('live data-directory relocation', () => {
 
   it('starts directly on the stored directory without a boot-time migration', async () => {
     const dirB = join(home, 'B')
-    const next = new Context()
-    await next.plugin(MockSessions)
-    await next.plugin(persistenceService(sessions))
-    await next.plugin(FakeSettings)
-    settings = next.get('settings') as FakeSettings
-    sessionsService = next.get('sessions') as MockSessions
-    // The stored override from a previous run, present BEFORE the plugin
-    // loads — the way settings.yaml reads at boot.
-    await settings.commit('token-usage', { path: dirB })
-    await next.plugin(plugin, {})
-    host = next
+    await mountWith({ path: dirB })
 
     // The running directory is the stored one...
-    host.emit('session/event', { id: 's1' }, messageEvent({ messageId: 'm1' }))
+    host!.emit('session/event', { id: 's1' }, messageEvent({ messageId: 'm1' }))
     await pollLogFile(dirB)
-    // ...and the default directory was never opened, let alone migrated
-    // away: a synchronous first start would have opened it before the
-    // settings attach repointed the section source.
+    // ...and the default directory was never opened, let alone migrated away.
     expect(existsSync(join(home, 'token-usage'))).toBe(false)
   })
 
-  it('settles onto the stored directory when mounted concurrently with the settings service', async () => {
-    // The dsh Loader mounts every profile entry concurrently, so the plugin
-    // and the settings provider start in no guaranteed order. The deferred
-    // boot must still settle on the stored directory, never the default.
-    const dirB = join(home, 'B')
-    const next = new Context()
-    await Promise.all([
-      next.plugin(MockSessions),
-      next.plugin(persistenceService(sessions)),
-      next.plugin(BareSettingsProvider, { 'token-usage': { path: dirB } }),
-      next.plugin(plugin),
-    ])
-    host = next
-
-    host.emit('session/event', { id: 's1' }, messageEvent({ messageId: 'm1' }))
-    await pollLogFile(dirB)
-    expect(existsSync(join(home, 'token-usage'))).toBe(false)
-  })
-
-  it('waits for a late settings provider instead of opening the default directory', async () => {
-    const dirB = join(home, 'B')
-    const next = new Context()
-    await next.plugin(MockSessions)
-    await next.plugin(persistenceService(sessions))
-    // The plugin mounts with no explicit path and no settings service: the
-    // first start must come from the settings attach, not a short fallback.
-    await next.plugin(plugin)
-    // The settings provider mounts well after the plugin — the way the 0.1.2
-    // base bundle's rows ahead of the settings-file provider push the attach
-    // past any sub-second window.
-    await new Promise(resolve => setTimeout(resolve, 100))
-    await next.plugin(BareSettingsProvider, { 'token-usage': { path: dirB } })
-    host = next
-
-    host.emit('session/event', { id: 's1' }, messageEvent({ messageId: 'm1' }))
-    await pollLogFile(dirB)
-    // The default directory was never opened, so there is nothing to churn
-    // and nothing to relocate: the boot is silent.
-    expect(existsSync(join(home, 'token-usage'))).toBe(false)
-  })
-
-  it('starts the default directory via the settings-less cap when no settings service mounts', async () => {
+  it('starts the default directory when no path is specified', async () => {
     const next = new Context()
     await next.plugin(MockSessions)
     await next.plugin(persistenceService(sessions))
     await next.plugin(plugin, {})
     host = next
 
-    // The cap fires, opens the default directory, and the plugin keeps
-    // working exactly as it did before settings existed.
     await waitForState(join(home, 'token-usage'))
     host.emit('session/event', { id: 's1' }, messageEvent({ messageId: 'm1' }))
     await pollLogFile(join(home, 'token-usage'))
@@ -570,21 +463,22 @@ describe('live data-directory relocation', () => {
     host!.emit('session/event', { id: 's1' }, messageEvent({ messageId: 'm1' }))
     await pollLogFile(dirA)
 
-    // A mid-conversation session vetoes the WRITE: nothing persists, nothing copies.
+    // A mid-conversation session vetoes the move: nothing copies, source stays intact.
     sessionsService!.interacting = 2
-    await expect(settings!.commit('token-usage', { path: dirB })).rejects.toThrow(/session/)
+    updateVolatileConfig(host!, { path: dirB })
+    await new Promise(resolve => setTimeout(resolve, 50))
     expect(existsSync(dirA)).toBe(true)
     expect(existsSync(join(dirB, 'usage-2026-08-17.jsonl'))).toBe(false)
     // Events keep landing in the unchanged directory.
     host!.emit('session/event', { id: 's1' }, messageEvent({ messageId: 'm2' }))
-    await new Promise(resolve => setTimeout(resolve, 100))
+    await new Promise(resolve => setTimeout(resolve, 50))
     expect((await allIds(dirA)).sort()).toEqual(['m1', 'm2'])
 
     // The sessions idle but stay present: existence alone never blocks, and
     // the same save goes through with the data following.
     sessionsService!.interacting = 0
     sessionsService!.idle = 2
-    await settings!.commit('token-usage', { path: dirB })
+    updateVolatileConfig(host!, { path: dirB })
     await pollGone(dirA)
     expect((await allIds(dirB)).sort()).toEqual(['m1', 'm2'])
   })
@@ -594,7 +488,7 @@ describe('live data-directory relocation', () => {
     await mountWith({ path: dirA })
     sessionsService!.interacting = 1
     // A region-only write changes no directory: the veto must not fire.
-    await expect(settings!.commit('token-usage', { path: dirA, pricingRegion: 'overseas' })).resolves.toBeUndefined()
+    expect(() => updateVolatileConfig(host!, { pricingRegion: 'overseas' })).not.toThrow()
   })
 
   it('moves files verbatim (per-day names kept), live writes follow, source is cleaned', async () => {
@@ -606,7 +500,7 @@ describe('live data-directory relocation', () => {
     await pollLogFile(dirA)
     await waitForState(dirA)
 
-    await settings!.commit('token-usage', { path: dirB })
+    updateVolatileConfig(host!, { path: dirB })
     await pollGone(dirA)
 
     // The row and marker landed in B under their own names.
@@ -614,7 +508,7 @@ describe('live data-directory relocation', () => {
     expect(existsSync(join(dirB, 'state.json'))).toBe(true)
     // Events after the move write into B.
     host!.emit('session/event', { id: 's1' }, messageEvent({ messageId: 'm2' }))
-    await new Promise(resolve => setTimeout(resolve, 100))
+    await new Promise(resolve => setTimeout(resolve, 50))
     expect((await allIds(dirB)).sort()).toEqual(['m1', 'm2'])
   })
 
@@ -628,13 +522,13 @@ describe('live data-directory relocation', () => {
     await pollLogFile(dirDefault)
 
     // Store an explicit path: the data moves into it.
-    await settings!.commit('token-usage', { path: dirA })
+    updateVolatileConfig(host!, { path: dirA })
     await pollGone(dirDefault)
     expect((await allIds(dirA)).sort()).toEqual(['m1'])
 
     // Clearing the stored layer reverts to the composition entry, whose
     // absent path resolves back to the default — the data follows.
-    await settings!.commit('token-usage', {})
+    updateVolatileConfig(host!, { path: undefined })
     await pollGone(dirA)
     expect((await allIds(dirDefault)).sort()).toEqual(['m1'])
   })

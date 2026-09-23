@@ -47,12 +47,12 @@ class MockSessions extends Service {
 }
 
 /**
- * Settings service whose `get` answers any namespace another plugin
+ * Settings service whose `describe` answers any namespace another plugin
  * "registered" (the way llm-pi-ai registers its own section on a real
- * host), layered base-over-section like the real provider.
+ * host), matching dsh 0.1.7 SettingsForms.
  */
 class FakeSettings extends Service {
-  private readonly bases = new Map<string, Record<string, unknown>>()
+  private readonly descriptors = new Map<string, unknown>()
 
   constructor(ctx: Context) {
     super(ctx, 'settings')
@@ -60,33 +60,26 @@ class FakeSettings extends Service {
 
   /** Simulate another plugin registering a namespace (its base layer). */
   declare(ns: string, section: Record<string, unknown>): void {
-    this.bases.set(ns, section)
+    this.descriptors.set(ns, section)
   }
 
-  register(ns: string, _schema: unknown, options: { base?: Record<string, unknown> }) {
-    if (options.base !== undefined) this.bases.set(ns, options.base)
-    return {
-      get: (): Record<string, unknown> => ({ ...this.bases.get(ns) }),
-      watch: (): (() => void) => () => {},
-    }
+  describe(): Array<{ ns: string; value?: unknown }> {
+    return Array.from(this.descriptors.entries()).map(([ns, value]) => ({ ns, value }))
   }
 
-  get(ns: string): unknown {
-    return structuredClone(this.bases.get(ns))
+  configure(_presentation: { auto?: boolean }, _owner?: unknown): () => void {
+    return () => {}
+  }
+}
+
+/** dsh 0.1.7 host default model service. */
+class FakeAgentDefaultModel extends Service {
+  constructor(ctx: Context) {
+    super(ctx, 'agentDefaultModel')
   }
 
-  /** dsh 0.1.2 shape: register + source sink + change notification. */
-  installSection(
-    _owner: unknown,
-    ns: string,
-    _schema: unknown,
-    entry: Record<string, unknown>,
-    hooks: { setSource: (source: () => unknown) => void, onChange: () => void },
-  ): void {
-    const scope = this.register(ns, undefined, { base: entry })
-    hooks.setSource(() => scope.get())
-    hooks.onChange()
-    scope.watch(() => hooks.onChange())
+  currentSelection(): { provider?: string; model?: string } {
+    return { provider: 'zai-coding-cn', model: 'glm-5.2' }
   }
 }
 
@@ -207,7 +200,7 @@ describe('quota integration', () => {
     settings = next.get('settings') as FakeSettings
     settings.declare('llm-pi-ai', { providers: { 'zai-coding-cn': { apiKeyEnv: 'ZAI_KEY' } } })
     if (options.defaultProvider) {
-      settings.declare('agent-default-model', { provider: 'zai-coding-cn', model: 'glm-5.2' })
+      await next.plugin(FakeAgentDefaultModel)
     }
     await next.plugin(FakeCredentials)
     credentials = next.get('credentials') as FakeCredentials

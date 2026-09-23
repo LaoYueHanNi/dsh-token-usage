@@ -38,5 +38,5 @@ Status: implemented
 ## Consequences
 
 - **所得**：`token-usage` 进入宿主 describe 镜像，插件详情页配置区块与卡片具备出现的全部前提（volatile 投射 + 客户端镜像驱动绑定齐备）；配置保存写回 profile patch 后经 volatile 原地提交热生效，无插件重载。
-- **所得**：依赖图与宿主 0.1.7-alpha.1 对齐，`typecheck` 0 错误；测试套件随 API 变化同步更新（chunk→stream、configure/volatile-update 新用例、废键用例移除）。
-- **代价**：不再兼容 0.1.6 及更早宿主（安装新版即需宿主 ≥0.1.7-alpha.1）；统计页会话跳转暂缺；npm 依赖解析依赖 `.npmrc` 的 `legacy-peer-deps`；integration/quota-integration 少量用例的 0.1.7 语义适配仍在分支上进行。
+- **所得**：依赖图与宿主 0.1.7-alpha.1 对齐，`typecheck` 0 错误；测试套件随 API 变化同步更新（chunk→stream、configure/volatile-update 新用例、废键用例移除、integration/quota-integration 适配全部收尾，39 个测试文件 100% 通过）。
+- **代价**：不再兼容 0.1.6 及更早宿主（安装新版即需宿主 ≥0.1.7-alpha.1）；统计页会话跳转暂缺；npm 依赖解析依赖 `.npmrc` 的 `legacy-peer-deps`。
