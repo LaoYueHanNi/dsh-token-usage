@@ -123,7 +123,7 @@ export interface QuotaConfig {
 // (No `z<Config>` annotation: the `.volatile()` wrappers widen the schema's
 // inferred type past the plain `Config` shape, exactly as the reference
 // migration in dsh-git-worktree does it.)
-export const Config = z.object({
+export const Config: z<any> = z.object({
   path: z.string().volatile(),
   pricingUrl: z.string(),
   pricingUrlDomestic: z.string(),
