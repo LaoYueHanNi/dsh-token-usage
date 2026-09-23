@@ -105,11 +105,12 @@ dsh plugin --profile web remove @laoyuehanni/dsh-token-usage
 构建一次、装符号链接、迭代：
 
 ```sh
-npm install
-npm run build && npm run build:client
+pnpm install
+pnpm build:all
+pnpm test                # vitest
 dsh plugin --profile web add link:D:/plugins/dsh-token-usage
 ```
 
-重新构建并重启 `dsh web` 即生效（插件目录跑 `npx tsdown --watch` 可热重载客户端）。刻意不设 `prepare` 脚本——`lib/` 从不进仓库，`npm publish` 现场构建打进 tarball。
+重新构建并重启 `dsh web` 即生效（插件目录跑 `pnpm watch:client` 可热重载客户端）。刻意不设 `prepare` 脚本——`lib/` 从不进仓库，`pnpm publish` 现场构建打进 tarball。
 
 临时挂载（仅当次启动生效，不动 profile）：复制 `cordis.example.yml` 为 `cordis.yml`，把 `name` 改成你机器上 `lib/index.js` 的绝对 `file://` URL，然后 `dsh web --patch <插件目录>/cordis.yml`。此模式数据记录照常，开发 UI 请用上面的 `link:` 安装。

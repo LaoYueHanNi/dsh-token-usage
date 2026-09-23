@@ -4,7 +4,7 @@
  * harness's shared client preset — same banner/footer handoff, same
  * platform-module externals, same inlined CSS Modules — but standalone, so
  * this package builds itself without the harness monorepo. The node half is
- * built by tsc (`npm run build`); this config only emits the client bundle.
+ * built by tsc (`pnpm run build`); this config only emits the client bundle.
  */
 
 import { readFile } from 'node:fs/promises'

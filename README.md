@@ -105,11 +105,12 @@ Data files under `$DSH_HOME/token-usage/` are kept — delete them manually if y
 Build once, install a symlink, iterate:
 
 ```sh
-npm install
-npm run build && npm run build:client
+pnpm install
+pnpm build:all
+pnpm test                # vitest
 dsh plugin --profile web add link:D:/plugins/dsh-token-usage
 ```
 
-Rebuild and restart `dsh web` to apply changes (`npx tsdown --watch` in the plugin directory hot-reloads the client). No `prepare` script by design — `lib/` never enters the repo; `npm publish` builds it fresh into the tarball.
+Rebuild and restart `dsh web` to apply changes (`pnpm watch:client` in the plugin directory hot-reloads the client). No `prepare` script by design — `lib/` never enters the repo; `pnpm publish` builds it fresh into the tarball.
 
 Temporary host-only mount (this launch only, no profile changes): copy `cordis.example.yml` to `cordis.yml`, point `name` at the absolute `file://` URL of your `lib/index.js`, then `dsh web --patch <plugin-dir>/cordis.yml`. Data recording works in this mode; for UI work use the `link:` install above.

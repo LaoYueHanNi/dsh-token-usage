@@ -2,7 +2,7 @@
  * Built client bundle smoke: loads lib/client.js the way the browser module
  * loader does (register the factory, then run it against an injected require)
  * and checks the cordis entry surface. Self-skips when the bundle has not
- * been built (`npm run build:client`).
+ * been built (`pnpm run build:client`).
  */
 import { existsSync } from 'node:fs'
 import { createRequire } from 'node:module'

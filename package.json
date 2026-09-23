@@ -62,13 +62,16 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "build:client": "tsdown",
+    "build:all": "pnpm run build && pnpm run build:client",
+    "watch:client": "tsdown --watch",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "prepublishOnly": "npm run typecheck && npm run test && npm run build && npm run build:client"
+    "prepublishOnly": "pnpm run typecheck && pnpm test && pnpm run build:all"
   },
   "engines": {
     "node": ">=22.19"
   },
+  "packageManager": "pnpm@11.8.0",
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.3",
     "@deepseek-ai/dsh-credentials": "0.1.7-alpha.1",
