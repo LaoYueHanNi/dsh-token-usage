@@ -868,7 +868,7 @@ export function apply(ctx: Context, config: Config = {}) {
   // declares that this plugin renders its own card (the browser half's
   // `plugins.bundle.config` entry) rather than a schema-generated page.
   ctx.inject(['settings'], (settingsCtx) => {
-    settingsCtx.effect(() => settingsCtx.settings.configure({ auto: false }, ctx.fiber), 'token-usage: settings presentation policy')
+    settingsCtx.effect(() => settingsCtx.settings?.configure?.({ auto: false }, ctx.fiber), 'token-usage: settings presentation policy')
   })
 
   // The loader resolves the composition entry's config (composition layer
