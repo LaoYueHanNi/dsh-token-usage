@@ -8,7 +8,7 @@ Status: implemented
 
 ## Decision
 
-<决定了什么。已实施的用现在时，描述实际落地的样子。>
+<决定了什么。用现在时，描述实际落地的样子。>
 
 ## Alternatives considered
 
