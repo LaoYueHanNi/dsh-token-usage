@@ -60,9 +60,9 @@
   max-height: 240px;
   overflow-y: auto;
   padding: 6px;
-  border: 1px solid var(--dsw-alias-border-inverted);
+  border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 12px;
-  background: var(--dsw-specific-menu);
+  background: var(--dsw-alias-bg-layer-2);
   box-shadow: var(--dsw-shadow-lv3);
   font-size: 13px;
   line-height: 20px;

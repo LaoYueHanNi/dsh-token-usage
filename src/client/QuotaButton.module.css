@@ -86,6 +86,7 @@
   border: 1px solid var(--dsw-alias-border-inverted);
   border-radius: 12px;
   background: var(--dsw-specific-menu);
+  backdrop-filter: var(--dsw-menu-backdrop-filter);
   box-shadow: var(--dsw-shadow-lv3);
   font-size: 12px;
   line-height: 20px;
