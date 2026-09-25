@@ -206,7 +206,7 @@ describe('TokenUsageSection', () => {
     expect(screen.getByText('失败 1')).toBeTruthy()
     expect(screen.getByRole('columnheader', { name: '成功/失败' })).toBeTruthy()
     // The cost card and the per-model cost column share the same ¥ figure.
-    expect(screen.getAllByText('¥0.00').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('0.00￥').length).toBeGreaterThan(0)
     expect(screen.getByText('47')).toBeTruthy()
     expect(screen.getByText('9.1%')).toBeTruthy()
     // Same four-bucket colour as the header chip: 9.1% is `critical`.
@@ -232,7 +232,7 @@ describe('TokenUsageSection', () => {
     expect(within(table).getByText('100')).toBeTruthy()
     expect(within(table).getByText('60')).toBeTruthy()
     expect(within(table).getByText('40')).toBeTruthy()
-    expect(within(table).getByText('¥0.00')).toBeTruthy()
+    expect(within(table).getByText('0.00￥')).toBeTruthy()
     // The priced model row carries the pricing affordance; no dialog yet.
     expect(within(table).getByRole('button', { name: '查看 deepseek-reasoner 定价' })).toBeTruthy()
     expect(screen.queryByRole('dialog')).toBeNull()
@@ -304,7 +304,7 @@ describe('TokenUsageSection', () => {
     render(<TokenUsageSection close={() => {}} t={t} />)
     // The cost card and the per-model cost column both read $1.00.
     expect(await screen.findAllByText('总 token')).toHaveLength(2)
-    expect(screen.getAllByText('$1.00').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('1.00$').length).toBeGreaterThan(0)
 
     // The pricing dialog converts every rate: ¥4/¥16 → $0.5714/$2.2857,
     // cache read ¥1 → $0.1429, cache write falls back to input $0.5714.
@@ -334,7 +334,7 @@ describe('TokenUsageSection', () => {
     }))
     render(<TokenUsageSection close={() => {}} t={t} />)
     // The unpriced placeholder is a converted zero, not a hard ¥.
-    expect(await screen.findByText(/费用按 \$0\.00 计/)).toBeTruthy()
+    expect(await screen.findByText(/费用按 0\.00\$ 计/)).toBeTruthy()
     const table = screen.getByRole('table', { name: '按模型' })
     expect(within(table).getByText('—')).toBeTruthy()
   })
@@ -590,19 +590,19 @@ describe('TokenUsageSection filtering', () => {
     // tier, then the root peak slot with both of its windows. Slots carrying
     // `daysOfWeek` render by label + windows only — the weekday restriction
     // stays out of the condition text.
-    expect(within(glmTable).getAllByText('默认')[0]!.closest('tr')!.textContent).toBe('默认¥2¥8¥2¥2')
-    expect(within(glmTable).getByText('上下文 ≥512K').closest('tr')!.textContent).toBe('上下文 ≥512K¥6¥24¥6¥6')
+    expect(within(glmTable).getAllByText('默认')[0]!.closest('tr')!.textContent).toBe('默认￥2￥8￥2￥2')
+    expect(within(glmTable).getByText('上下文 ≥512K').closest('tr')!.textContent).toBe('上下文 ≥512K￥6￥24￥6￥6')
     expect(within(glmTable).getByText('峰时 09:00-12:00、14:00-18:00').closest('tr')!.textContent)
-      .toBe('峰时 09:00-12:00、14:00-18:00¥4¥16¥4¥4')
+      .toBe('峰时 09:00-12:00、14:00-18:00￥4￥16￥4￥4')
     // …then the time rule gets its own group with its date window, an
     // isolated default, its own tier, and its own peak slot.
     expect(within(glmTable).getByText('原价 2026-01-01 ~ 2026-02-01')).toBeTruthy()
     expect(within(glmTable).getAllByText('默认')).toHaveLength(2)
-    expect(within(glmTable).getAllByText('默认')[1]!.closest('tr')!.textContent).toBe('默认¥1¥2¥1¥1')
-    expect(within(glmTable).getByText('上下文 ≥128K').closest('tr')!.textContent).toBe('上下文 ≥128K¥3¥6¥3¥3')
+    expect(within(glmTable).getAllByText('默认')[1]!.closest('tr')!.textContent).toBe('默认￥1￥2￥1￥1')
+    expect(within(glmTable).getByText('上下文 ≥128K').closest('tr')!.textContent).toBe('上下文 ≥128K￥3￥6￥3￥3')
     expect(within(glmTable).getByText('上下文 ≥512K · 峰时 10:00-11:00').closest('tr')!.textContent)
-      .toBe('上下文 ≥512K · 峰时 10:00-11:00¥6.50¥26¥6.50¥6.50')
-    expect(within(glmTable).getByText('峰时 10:00-11:00').closest('tr')!.textContent).toBe('峰时 10:00-11:00¥1.50¥3¥1.50¥1.50')
+      .toBe('上下文 ≥512K · 峰时 10:00-11:00￥6.50￥26￥6.50￥6.50')
+    expect(within(glmTable).getByText('峰时 10:00-11:00').closest('tr')!.textContent).toBe('峰时 10:00-11:00￥1.50￥3￥1.50￥1.50')
 
     // The close button dismisses the dialog.
     fireEvent.click(within(dialog).getByRole('button', { name: '关闭' }))
@@ -614,7 +614,7 @@ describe('TokenUsageSection filtering', () => {
     const flatDialog = await screen.findByRole('dialog')
     const flatTable = within(flatDialog).getByRole('table')
     expect(within(flatTable).queryByText('常规（规则期外）')).toBeNull()
-    expect(within(flatTable).getByText('默认').closest('tr')!.textContent).toBe('默认¥4¥16¥1¥4')
+    expect(within(flatTable).getByText('默认').closest('tr')!.textContent).toBe('默认￥4￥16￥1￥4')
   })
 
   it('drops the bogus 1970 start of a since-forever time rule', async () => {

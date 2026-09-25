@@ -139,13 +139,15 @@ export function hitRateDisplay(totals: UsageTotals): HitRateDisplay {
  * divisor every wire amount (always RMB) divides by for display.
  */
 export interface CurrencyView {
-  symbol: '¥' | '$'
+  symbol: '￥' | '$'
   /** RMB per USD; 1 in the CNY view (amounts pass through untouched). */
   rate: number
 }
 
-/** The RMB display view: amounts render as stored. */
-const CNY_VIEW: CurrencyView = { symbol: '¥', rate: 1 }
+/** The RMB display view: amounts render as stored. The CNY sign is the
+ * fullwidth ￥ (U+FFE5) — the standard RMB glyph in a Chinese UI, and the
+ * suffix the number-first cost idiom reads naturally with. */
+const CNY_VIEW: CurrencyView = { symbol: '￥', rate: 1 }
 
 /**
  * The display view of one stats summary: USD when the region pick says so
@@ -158,15 +160,17 @@ export function currencyViewOf(summary: Pick<UsageSummary, 'currency' | 'usdExch
 }
 
 /**
- * Cost as display text: the view's symbol plus two decimals, following the
- * analyzer's cost formatting (`¥1.25`, `$0.18`). A cost is always shown,
- * never omitted. USD divides the wire's RMB amount by the exchange rate.
+ * Cost as display text: two decimals plus the view's symbol SUFFIXED —
+ * `1.25¥` — matching the dock row's number-first unit idiom (`12.2M tok`,
+ * `98%`), where every reading leads with its magnitude. USD divides the
+ * wire's RMB amount by the exchange rate (`0.18$` under a rate-7 view).
+ * A cost is always shown, never omitted.
  * @param cost - a non-negative cost in ¥ (as carried on the wire).
  * @param view - the display currency view.
- * @returns e.g. `¥1.25`, or `$0.18` under a rate-7 USD view.
+ * @returns e.g. `1.25¥`, or `0.18$` under a rate-7 USD view.
  */
 export function formatCost(cost: number, view: CurrencyView = CNY_VIEW): string {
-  return `${view.symbol}${(cost / view.rate).toFixed(2)}`
+  return `${(cost / view.rate).toFixed(2)}${view.symbol}`
 }
 
 /**

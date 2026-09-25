@@ -20,41 +20,45 @@ function waapiAvailable(el: HTMLElement): boolean {
   return typeof el.animate === 'function'
 }
 
-/** Scale bounce on the cost figure (`costPop`). */
+/** Scale bounce on the cost figure (`costPop`). The mix base is the pill's
+ * resting tertiary (NOT label-primary): the pill reads tertiary beside the
+ * official pills, and a primary-tinted final frame would leave the figure
+ * permanently highlighted after the animation's fill. */
 export function runCostPop(el: HTMLElement, v: CostInflateVars): Animation | null {
   if (!motionAllowed() || !waapiAvailable(el)) return null
   const popScale = Number(v.popScale)
   const echo = 1 + (popScale - 1) * 0.28
   const warnMix = v.warnMix
   return el.animate([
-    { transform: 'scale(1)', color: 'var(--dsw-alias-label-primary)' },
+    { transform: 'scale(1)', color: 'var(--dsw-alias-label-tertiary)' },
     {
       transform: `scale(${String(popScale)})`,
-      color: `color-mix(in srgb, var(--dsw-alias-state-warn-primary) ${warnMix}, var(--dsw-alias-label-primary))`,
+      color: `color-mix(in srgb, var(--dsw-alias-state-warn-primary) ${warnMix}, var(--dsw-alias-label-tertiary))`,
       offset: 0.35,
     },
     {
       transform: `scale(${String(echo)})`,
-      color: `color-mix(in srgb, var(--dsw-alias-state-warn-primary) ${warnMix}, var(--dsw-alias-label-primary))`,
+      color: `color-mix(in srgb, var(--dsw-alias-state-warn-primary) ${warnMix}, var(--dsw-alias-label-tertiary))`,
       offset: 0.70,
     },
-    { transform: 'scale(1)', color: 'var(--dsw-alias-label-primary)' },
+    { transform: 'scale(1)', color: 'var(--dsw-alias-label-tertiary)' },
   ], {
     duration: v.inflateMs,
     easing: 'cubic-bezier(0.25, 0.85, 0.35, 1)',
-    fill: 'both',
   })
 }
 
-/** +Δ label rise (`deltaRise`). Caller must position the element (absolute). */
+/** +Δ label fall (`deltaFall`). Caller must position the element (absolute,
+ * below the pill — the dock sits under the composer, so the label falls
+ * away from the message scrollport rather than climbing into it). */
 export function runDeltaFly(el: HTMLElement, v: CostInflateVars): Animation | null {
   if (!motionAllowed() || !waapiAvailable(el)) return null
   return el.animate([
-    { opacity: 0, transform: 'translate(-50%, -20%)' },
-    { opacity: 1, transform: 'translate(-50%, -20%)', offset: 0.15 },
+    { opacity: 0, transform: 'translate(-50%, 20%)' },
+    { opacity: 1, transform: 'translate(-50%, 20%)', offset: 0.15 },
     {
       opacity: 0,
-      transform: `translate(calc(-50% + ${v.flyX}), calc(-100% - ${v.flyY}))`,
+      transform: `translate(calc(-50% + ${v.flyX}), calc(100% + ${v.flyY}))`,
     },
   ], {
     duration: v.inflateMs,

@@ -2,7 +2,7 @@ import { useLayoutEffect, useRef } from 'react'
 import type { ReactNode } from 'react'
 import { runDeltaFly } from './cost-inflate-motion.ts'
 import type { CostInflateVars } from './cost-inflate.ts'
-import styles from './SessionStatsChip.module.css'
+import styles from './CostPill.module.css'
 
 /** One +Δ fly label; animation starts on mount via WAAPI. */
 export function CostDeltaFlyLabel({ text, vars }: { text: string; vars: CostInflateVars }): ReactNode {

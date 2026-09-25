@@ -257,7 +257,7 @@ describe('UsageView', () => {
     expectText('失败 2')
     expect(screen.getAllByText('失败 2')).toHaveLength(1)
     expect(screen.getByRole('columnheader', { name: '成功/失败' })).toBeTruthy()
-    expectText('¥12.34') // cost
+    expectText('12.34￥') // cost
     // hit rate: 40K cache reads / (120K + 40K) served input = 25%.
     expectText('25%')
     // Same four-bucket colour as the header chip: 25% is `critical`.
@@ -281,7 +281,7 @@ describe('UsageView', () => {
     // The subagent table lists the child with its own totals from `children`.
     expect(screen.getByText('Child Agent')).toBeTruthy()
     expectText('3')
-    expectText('¥3.21')
+    expectText('3.21￥')
   })
 
   it('switches the scope to the whole subtree with repeated sessionId params', async () => {
@@ -298,7 +298,7 @@ describe('UsageView', () => {
     await waitFor(() => expect(sawCall(fetch, ['root', 'child'], [['child']])).toBe(true))
     // The tree aggregate renders: 13 requests, ¥15.55.
     expectText('13')
-    expectText('¥15.55')
+    expectText('15.55￥')
     // Per-model cells are `A/B` from that row's totals: the child's
     // reasoner has zero failures, so the cell is just `3` — no `/0`.
     expect(screen.getByText('deepseek-reasoner')).toBeTruthy()
@@ -370,7 +370,7 @@ describe('UsageView', () => {
   it('marks a subagent row that owns nested subagents of its own', async () => {
     stubFetch()
     renderView({ byId: NESTED_BY_ID, liveStats: LIVE_STATS })
-    await waitFor(() => expectText('¥12.34'))
+    await waitFor(() => expectText('12.34￥'))
     // The child row carries its own nested count (1), the other rows none.
     const badge = screen.getByLabelText('含 1 个子会话')
     expect(badge).toBeTruthy()
@@ -395,8 +395,8 @@ describe('UsageView', () => {
     fireEvent.click(await screen.findByRole('button', { name: '含子会话' }))
     await waitFor(() => expect(sawCall(fetch, ['root', 'child', 'grandchild'], [['child', 'grandchild']])).toBe(true))
     expectText('18')
-    expectText('¥21.22')
-    expectText('¥8.88')
+    expectText('21.22￥')
+    expectText('8.88￥')
   })
 
   it('shows the failure and retries the fetch', async () => {
@@ -408,7 +408,7 @@ describe('UsageView', () => {
     expect(await screen.findByText(/加载失败/)).toBeTruthy()
     fail.mockImplementation(async () => ({ ok: true, status: 200, json: async () => ROOT_SUMMARY }))
     fireEvent.click(screen.getByRole('button', { name: '重试' }))
-    await waitFor(() => expectText('¥12.34'))
+    await waitFor(() => expectText('12.34￥'))
   })
 
   it('folds the request series into time buckets when the summary carries one', async () => {
@@ -420,7 +420,7 @@ describe('UsageView', () => {
     }))
     const fetch = stubFetch({ root: { ...ROOT_SUMMARY, requestSeries: series } })
     renderView({ liveStats: LIVE_STATS })
-    await waitFor(() => expectText('¥12.34'))
+    await waitFor(() => expectText('12.34￥'))
     expect(screen.getByLabelText('按时间分段的 token 曲线')).toBeTruthy()
     expect(screen.getAllByLabelText(/请求/).length).toBe(2)
   })
@@ -470,7 +470,7 @@ describe('UsageView', () => {
     })
     vi.stubGlobal('fetch', fetch)
     const { setMirror } = renderView({ liveStats: LIVE_STATS })
-    await waitFor(() => expectText('¥12.34'))
+    await waitFor(() => expectText('12.34￥'))
     // A request completed: the mirror churns (new byId identity). Switching
     // the scope triggers a render that picks the new mirror up, and the
     // debounced effect refetches at the new scope.
@@ -482,10 +482,10 @@ describe('UsageView', () => {
     await waitFor(() => expect(treeCalls).toBe(1))
     // While the fetch is pending, the OLD figures stay on screen — no
     // loading flash, no blank.
-    expectText('¥12.34')
+    expectText('12.34￥')
     expect(screen.queryByText('加载中…')).toBeNull()
     // The response lands: figures update in place.
     resolveSecond({ ok: true, status: 200, json: async () => ({ ...TREE_SUMMARY, totalCost: 99.99 }) })
-    await waitFor(() => expectText('¥99.99'))
+    await waitFor(() => expectText('99.99￥'))
   })
 })

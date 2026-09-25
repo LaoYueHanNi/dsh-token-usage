@@ -1,0 +1,201 @@
+/* Composer-dock usage pill (browser half). The trigger copies the official
+ * StatsPills pill verbatim (borderless tertiary capsule, hover affordance,
+ * `· text` separator idiom) so the dock row reads as one family; the detail
+ * panel borrows the harness menu chrome (specific-menu background + lv3
+ * shadow). */
+
+.root {
+  position: relative;
+  display: inline-flex;
+  min-width: 0;
+}
+
+/* Trigger pill — the official StatsPills .pill, kept field-for-field:
+ * borderless tertiary reading, hover/expanded secondary lift. */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  box-sizing: border-box;
+  max-width: 100%;
+  padding: 1px 8px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: calc(var(--dsh-content-font-size-secondary, 13px) - 1px);
+  line-height: calc(20px + var(--dsh-content-font-delta-secondary, 0px));
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.glyph {
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+
+button.pill {
+  cursor: pointer;
+}
+
+button.pill:hover,
+button.pill[aria-expanded='true'] {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-secondary);
+}
+
+/* The cost figure: WAAPI pop target (costPop scales it in place). */
+.cost {
+  display: inline-flex;
+  transform-origin: 50% 50%;
+  position: relative;
+  z-index: 2;
+}
+
+.deltaLayer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: visible;
+  z-index: 3;
+}
+
+/* +Δ fly: FALLS below the pill. The dock sits under the composer, so the
+ * header chip's upward rise would climb into the message scrollport. */
+.deltaFly {
+  position: absolute;
+  left: 50%;
+  top: 100%;
+  margin-top: 2px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--dsw-alias-state-warn-primary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  pointer-events: none;
+  text-shadow: 0 0 8px color-mix(in srgb, var(--dsw-alias-state-warn-primary) 35%, transparent);
+}
+
+/* Defense in depth for reduced motion: the inflate hook refuses to spawn
+ * flies and WAAPI ignores `animation: none`, so hiding the class is the
+ * only CSS-level guard that actually holds. */
+@media (prefers-reduced-motion: reduce) {
+  .deltaFly {
+    display: none;
+  }
+}
+
+/* Detail panel: menu chrome, upward of the dock row. */
+.panel {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  width: 300px;
+  background: var(--dsw-specific-menu);
+  backdrop-filter: var(--dsw-menu-backdrop-filter);
+  border: 1px solid var(--dsw-alias-border-inverted);
+  border-radius: 12px;
+  box-shadow: var(--dsw-shadow-lv3);
+  padding: 12px 14px;
+  z-index: 30;
+  font-size: calc(var(--dsh-content-font-size-secondary, 13px) - 1px);
+  color: var(--dsw-alias-label-primary);
+}
+
+.panelHead {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+}
+
+.panelTitle {
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.scopeTag {
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--dsw-alias-label-secondary);
+  padding: 1px 5px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 8px;
+}
+
+.panelTotal {
+  font-size: 14px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.usageLine {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+.dot {
+  color: var(--dsw-alias-separator-primary);
+}
+
+.rows {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+}
+
+.row {
+  display: flex;
+  justify-content: space-between;
+  padding: 4px 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.rowLabel {
+  color: var(--dsw-alias-label-secondary);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.rowValue {
+  color: var(--dsw-alias-label-primary);
+}
+
+.rowSub .rowValue {
+  color: var(--dsw-alias-label-secondary);
+}
+
+.tok {
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+  margin-left: 6px;
+}
+
+.groupLabel {
+  margin-top: 10px;
+  font-size: 10px;
+  color: var(--dsw-alias-label-tertiary);
+  letter-spacing: 0.06em;
+}
+
+.requests {
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+}
+
+.unpriced .rowLabel,
+.unpriced .rowValue {
+  color: var(--dsw-alias-label-tertiary);
+  font-style: italic;
+}
+
+.pending {
+  color: var(--dsw-alias-label-tertiary);
+}

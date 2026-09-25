@@ -1,8 +1,9 @@
+// @vitest-environment node
 import { existsSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Context, Service } from '@deepseek-ai/cordis'
 import * as plugin from '../src/index.ts'
 import { messageEvent } from './helpers.ts'
@@ -85,7 +86,13 @@ describe('dsh 0.1.7 host compatibility', () => {
     // No deferred settings-attach wait: apply starts the data directory on
     // the resolved entry config the moment it runs.
     await app.plugin(plugin, {})
-    expect(existsSync(join(tempHome, 'token-usage'))).toBe(true)
+    // The data directory creation settles asynchronously behind the plugin
+    // promise; under a loaded worker (parallel client suites hogging the
+    // pool) it can land a beat after `apply` resolves, so poll instead of
+    // asserting synchronously.
+    await vi.waitFor(() => {
+      expect(existsSync(join(tempHome, 'token-usage'))).toBe(true)
+    }, { timeout: 2_000 })
 
     // A live session event is accepted (the recorder is attached).
     const session = { id: 'test-session-017', snapshotEvents: () => [] } as any

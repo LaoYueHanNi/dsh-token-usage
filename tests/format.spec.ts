@@ -6,22 +6,22 @@ import { zh } from '../src/client/locales.ts'
 const t = ((key: string): string => (zh as Record<string, string>)[key] ?? key) as TranslateNS<'token-usage'>
 
 describe('formatCost', () => {
-  it('formats with the ¥ symbol and two decimals', () => {
-    expect(formatCost(1.25)).toBe('¥1.25')
-    expect(formatCost(0)).toBe('¥0.00')
-    expect(formatCost(123.456)).toBe('¥123.46')
-    expect(formatCost(12345.6)).toBe('¥12345.60')
+  it('formats with two decimals and the suffixed ¥ symbol (number-first idiom)', () => {
+    expect(formatCost(1.25)).toBe('1.25￥')
+    expect(formatCost(0)).toBe('0.00￥')
+    expect(formatCost(123.456)).toBe('123.46￥')
+    expect(formatCost(12345.6)).toBe('12345.60￥')
   })
 
   it('converts through a USD view, dividing by the exchange rate', () => {
     const usd = currencyViewOf({ currency: 'USD', usdExchangeRate: 7 })
-    expect(formatCost(0, usd)).toBe('$0.00')
-    // 1.4 RMB ÷ 7 = $0.20.
-    expect(formatCost(1.4, usd)).toBe('$0.20')
-    // 7 RMB ÷ 7 = $1.00.
-    expect(formatCost(7, usd)).toBe('$1.00')
-    // 123.45 RMB ÷ 7 = 17.6357… → $17.64.
-    expect(formatCost(123.45, usd)).toBe('$17.64')
+    expect(formatCost(0, usd)).toBe('0.00$')
+    // 1.4 RMB ÷ 7 = 0.20$.
+    expect(formatCost(1.4, usd)).toBe('0.20$')
+    // 7 RMB ÷ 7 = 1.00$.
+    expect(formatCost(7, usd)).toBe('1.00$')
+    // 123.45 RMB ÷ 7 = 17.6357… → 17.64$.
+    expect(formatCost(123.45, usd)).toBe('17.64$')
   })
 })
 
@@ -55,8 +55,8 @@ describe('formatRate', () => {
 
 describe('formatRateWithSymbol', () => {
   it('prefixes the view symbol onto the converted rate', () => {
-    expect(formatRateWithSymbol(8)).toBe('¥8')
-    expect(formatRateWithSymbol(0.5)).toBe('¥0.50')
+    expect(formatRateWithSymbol(8)).toBe('￥8')
+    expect(formatRateWithSymbol(0.5)).toBe('￥0.50')
     const usd = currencyViewOf({ currency: 'USD', usdExchangeRate: 7 })
     expect(formatRateWithSymbol(8, usd)).toBe('$1.1429')
     expect(formatRateWithSymbol(14, usd)).toBe('$2')
@@ -65,7 +65,7 @@ describe('formatRateWithSymbol', () => {
 
 describe('currencyViewOf', () => {
   it('returns the RMB pass-through view for CNY summaries', () => {
-    expect(currencyViewOf({ currency: 'CNY', usdExchangeRate: 7 })).toEqual({ symbol: '¥', rate: 1 })
+    expect(currencyViewOf({ currency: 'CNY', usdExchangeRate: 7 })).toEqual({ symbol: '￥', rate: 1 })
   })
 
   it('carries the wire exchange rate for USD summaries', () => {

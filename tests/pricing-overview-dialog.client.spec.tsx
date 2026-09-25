@@ -147,7 +147,7 @@ async function renderReady(payload: PricingOverviewPayload = OVERVIEW) {
     return { ok: true, json: async () => payload }
   })
   const onClose = vi.fn()
-  render(<PricingOverviewDialog usedModels={USED} view={{ symbol: '¥', rate: 1 }} onClose={onClose} t={t} />)
+  render(<PricingOverviewDialog usedModels={USED} view={{ symbol: '￥', rate: 1 }} onClose={onClose} t={t} />)
   const dialog = await screen.findByRole('dialog', { name: '定价表' })
   await within(dialog).findByText('deepseek-chat')
   return { dialog, onClose, urls }
@@ -269,13 +269,13 @@ describe('PricingOverviewDialog', () => {
     // the buckets, not the last click.
     fireEvent.change(within(dialog).getByLabelText('输出'), { target: { value: '1000' } })
     expect(button.getAttribute('aria-pressed')).toBe('false')
-    expect(within(row).getByText('¥110.00')).toBeTruthy()
+    expect(within(row).getByText('110.00￥')).toBeTruthy()
     // The button refills every bucket compact: back to 457K, re-pressed,
     // and the cost returns to ¥105.66.
     fireEvent.click(button)
     expect(button.getAttribute('aria-pressed')).toBe('true')
     expect((within(dialog).getByLabelText('输出') as HTMLInputElement).value).toBe('457')
-    expect(within(row).getByText('¥105.66')).toBeTruthy()
+    expect(within(row).getByText('105.66￥')).toBeTruthy()
   })
 
   it('fills the second case (95% hit, 600K out); the press follows the switch', async () => {
@@ -298,7 +298,7 @@ describe('PricingOverviewDialog', () => {
     expect(bucket('缓存写').value).toBe('0')
     // Full rates (¥2/8/1/4): 5M×2 + 95M×1 + 600K×8 = ¥109.80.
     const row = within(dialog).getByRole('button', { name: '查看 deepseek-chat 定价' })
-    expect(within(row).getByText('¥109.80')).toBeTruthy()
+    expect(within(row).getByText('109.80￥')).toBeTruthy()
   })
 
   it('fills the third case (translation, no cache); the press follows the switch', async () => {
@@ -316,7 +316,7 @@ describe('PricingOverviewDialog', () => {
     expect(bucket('缓存写').value).toBe('0')
     // Full rates (¥2/8/1/4), nothing cached: 100M×2 + 100M×8 = ¥1000.00.
     const row = within(dialog).getByRole('button', { name: '查看 deepseek-chat 定价' })
-    expect(within(row).getByText('¥1000.00')).toBeTruthy()
+    expect(within(row).getByText('1000.00￥')).toBeTruthy()
   })
 
   it('switching a bucket unit converts the amount, keeping the tokens', async () => {
@@ -327,11 +327,11 @@ describe('PricingOverviewDialog', () => {
     expect((within(dialog).getByLabelText('缓存读') as HTMLInputElement).value).toBe('98000')
     expect(within(dialog).getByRole('button', { name: '案例1' }).getAttribute('aria-pressed')).toBe('true')
     const row = within(dialog).getByRole('button', { name: '查看 kimi-k2 定价' })
-    expect(within(row).getByText('¥100.91')).toBeTruthy()
+    expect(within(row).getByText('100.91￥')).toBeTruthy()
     // Further up to B: 98000K reads 0.098B — same tokens again.
     fireEvent.click(within(dialog).getByRole('button', { name: '缓存读（B）' }))
     expect((within(dialog).getByLabelText('缓存读') as HTMLInputElement).value).toBe('0.098')
-    expect(within(row).getByText('¥100.91')).toBeTruthy()
+    expect(within(row).getByText('100.91￥')).toBeTruthy()
   })
 
   it('bills the simulated cost per model, cache rates falling back to input', async () => {
@@ -339,14 +339,14 @@ describe('PricingOverviewDialog', () => {
     // Scenario: 2M in + 98M cacheRead + 457K out.
     // Full rates (¥2/8/1/4): 4 + 3.656 + 98 = ¥105.66.
     const full = within(dialog).getByRole('button', { name: '查看 deepseek-chat 定价' })
-    expect(within(full).getByText('¥105.66')).toBeTruthy()
+    expect(within(full).getByText('105.66￥')).toBeTruthy()
     // No cache rates (¥1/2): cacheRead bills at the input rate —
     // 2 + 0.914 + 98 = ¥100.91, not the no-fallback ¥2.91.
     const fallback = within(dialog).getByRole('button', { name: '查看 kimi-k2 定价' })
-    expect(within(fallback).getByText('¥100.91')).toBeTruthy()
+    expect(within(fallback).getByText('100.91￥')).toBeTruthy()
     // Cheap rates (¥0.5/1, fallback): 1 + 0.457 + 49 = ¥50.46.
     const cheap = within(dialog).getByRole('button', { name: '查看 glm-4.6 定价' })
-    expect(within(cheap).getByText('¥50.46')).toBeTruthy()
+    expect(within(cheap).getByText('50.46￥')).toBeTruthy()
   })
 
   it('cycles the simulated-cost sort family → desc → asc → family, search keeps the order', async () => {
@@ -391,7 +391,7 @@ describe('PricingOverviewDialog', () => {
     // (2M×1 + 457K×2 + 98M×0.1 = ¥12.71), the root's ¥105.66 never shows,
     // and with no slots/tiers on the rule there is no arrow at all.
     const row = within(dialog).getByRole('button', { name: '查看 gemini-3.7-flash 定价' })
-    expect(within(row).getByText('¥12.71')).toBeTruthy()
+    expect(within(row).getByText('12.71￥')).toBeTruthy()
     expect(within(row).queryByRole('button', { name: '展开定价条件' })).toBeNull()
   })
 
@@ -401,16 +401,16 @@ describe('PricingOverviewDialog', () => {
     // + 98M×0.15 = ¥29.87) and the root peak-slot row, shown regardless of
     // the current minute.
     const row = within(dialog).getByRole('button', { name: '查看 deepseek-v4-pro 定价' })
-    expect(within(row).getByText('¥29.87')).toBeTruthy()
+    expect(within(row).getByText('29.87￥')).toBeTruthy()
     const arrow = within(row).getByRole('button', { name: '展开定价条件' })
     fireEvent.click(arrow)
     // The click stays on the arrow: no detail dialog opens.
     expect(screen.queryByRole('dialog', { name: '模型定价' })).toBeNull()
     expect(within(dialog).getByText('高峰时段 09:00-12:00、14:00-18:00')).toBeTruthy()
-    expect(within(dialog).getByText('¥59.74')).toBeTruthy()
+    expect(within(dialog).getByText('59.74￥')).toBeTruthy()
     // Collapse hides the special row again.
     fireEvent.click(arrow)
-    expect(within(dialog).queryByText('¥59.74')).toBeNull()
+    expect(within(dialog).queryByText('59.74￥')).toBeNull()
     // The row itself still opens the detail dialog.
     fireEvent.click(row)
     expect(await screen.findByRole('dialog', { name: '模型定价' })).toBeTruthy()
@@ -421,10 +421,10 @@ describe('PricingOverviewDialog', () => {
     // Input side = 2M + 98M = 100M ≥ 512K → the tier row; the main row
     // stays at the root base (2M×2.1 + 457K×8.4 + 98M×0.42 = ¥49.20).
     const row = within(dialog).getByRole('button', { name: '查看 MiniMax-M3 定价' })
-    expect(within(row).getByText('¥49.20')).toBeTruthy()
+    expect(within(row).getByText('49.20￥')).toBeTruthy()
     fireEvent.click(within(row).getByRole('button', { name: '展开定价条件' }))
     expect(within(dialog).getByText('上下文 ≥512K')).toBeTruthy()
-    expect(within(dialog).getByText('¥98.40')).toBeTruthy()
+    expect(within(dialog).getByText('98.40￥')).toBeTruthy()
   })
 
   it('renders the four base-rate columns (USD view converts and notes the rate)', async () => {
@@ -436,8 +436,8 @@ describe('PricingOverviewDialog', () => {
     for (const cell of ['$0.2857', '$1.1429', '$0.1429', '$0.5714']) {
       expect(within(row).getByText(cell)).toBeTruthy()
     }
-    // The simulated cost converts too: ¥105.656 ÷ 7 = $15.09.
-    expect(within(row).getByText('$15.09')).toBeTruthy()
+    // The simulated cost converts too: 105.656￥ ÷ 7 = 15.09$.
+    expect(within(row).getByText('15.09$')).toBeTruthy()
     expect(within(dialog).getByText('按 1 USD = 7 CNY 换算')).toBeTruthy()
   })
 
@@ -462,7 +462,7 @@ describe('PricingOverviewDialog', () => {
 
   it('shows the failure copy for a rejected fetch and recovers through retry', async () => {
     const fetch = stubFetch(async () => { throw new Error('network down') })
-    render(<PricingOverviewDialog usedModels={USED} view={{ symbol: '¥', rate: 1 }} onClose={() => {}} t={t} />)
+    render(<PricingOverviewDialog usedModels={USED} view={{ symbol: '￥', rate: 1 }} onClose={() => {}} t={t} />)
     expect(await screen.findByText('模型定价获取失败')).toBeTruthy()
     expect(screen.queryByRole('table')).toBeNull()
 
@@ -473,7 +473,7 @@ describe('PricingOverviewDialog', () => {
 
   it('treats an empty mirror as the same failure state', async () => {
     stubFetch(async () => ({ ok: true, json: async () => ({ ...OVERVIEW, models: [] }) }))
-    render(<PricingOverviewDialog usedModels={USED} view={{ symbol: '¥', rate: 1 }} onClose={() => {}} t={t} />)
+    render(<PricingOverviewDialog usedModels={USED} view={{ symbol: '￥', rate: 1 }} onClose={() => {}} t={t} />)
     expect(await screen.findByText('模型定价获取失败')).toBeTruthy()
   })
 

@@ -1,7 +1,7 @@
 /**
- * Request-driven cost-cell inflate animation for SessionStatsChip: detects
- * new usage from summary deltas and drives WAAPI motion on the cost figure
- * and ephemeral +Δ fly labels.
+ * Request-driven cost-figure inflate animation for the composer-dock usage
+ * pill: detects new usage from summary deltas and drives WAAPI motion on
+ * the cost figure and ephemeral +Δ fly labels.
  *
  * @module token-usage/client/use-cost-inflate
  */
@@ -51,7 +51,7 @@ function hasUsageChurn(prev: PrevChipSnapshot, summary: UsageSummary): boolean {
 }
 
 /**
- * Hook the chip uses to play costPop + deltaRise on each new request.
+ * Hook the pill uses to play costPop + deltaFall on each new request.
  * @param scopeKey - changes reset the diff baseline.
  * @param costRef - the live cost figure span (WAAPI target).
  */
@@ -129,7 +129,7 @@ export function useCostInflate(
     const wireDeltaCost = summary.totalCost - prev.totalCost
     if (wireDeltaCost > MIN_WIRE_DELTA_COST) {
       const view = currencyViewOf(summary)
-      const text = `+${view.symbol}${(wireDeltaCost / view.rate).toFixed(2)}`
+      const text = `+${(wireDeltaCost / view.rate).toFixed(2)}${view.symbol}`
       const id = ++flyIdRef.current
       flyCountRef.current += 1
       setFlies(current => [...current, { id, text, vars: v }])

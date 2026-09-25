@@ -65,8 +65,8 @@ interface WorkspacesLike {
   }
 }
 import { CardForm, createFallbackTarget, type CardFormTarget, type SectionValue } from './card-form.ts'
+import { CostPill } from './CostPill.tsx'
 import { QuotaButton, type ModelSelectionSource } from './QuotaButton.tsx'
-import { SessionStatsChip } from './SessionStatsChip.tsx'
 import { TokenUsageCard } from './TokenUsageCard.tsx'
 import { TokenUsageSection } from './TokenUsageSection.tsx'
 import { UsageView } from './UsageView.tsx'
@@ -192,28 +192,23 @@ export function apply(ctx: ClientContext): void {
     locale: NS,
   }, UsageView))
 
-  // The session-header stats chip: one entry of the
-  // `conversation.session.header.utilities` slot list (right-aligned
-  // utilities kept outside the title-adjacent action group). The chip
-  // reads the active session id and the session-list mirror from the
-  // standard kit, walks the subagent subtree, and fetches the folded
-  // summary from the host's `/token-usage/stats` route — the same
-  // "with subagents" range the Usage view tab offers. The component
-  // self-gates: a session with zero recorded requests renders nothing
-  // (the spec's empty rule); a transient fetch miss keeps the previous
-  // render so the chip never blanks to "—" mid-conversation.
-  //
-  // Position: the chip sits IMMEDIATELY LEFT of the Session log button
-  // (`session-log-download` registers with no explicit `order`, defaulting
-  // to 0). A negative order puts the chip ahead of every positive-order
-  // utility, mirroring the convention `ui-agent-preset` uses for static
-  // session context in `conversation.session.header.actions`.
-  ctx.slots.inject('conversation.session.header.utilities', () => ctx.slots.register({
-    name: 'conversation.session.header.utilities',
-    id: 'session-stats',
-    order: -10,
+  // The composer-dock usage pill: one entry of the
+  // `conversation.composer.dock` slot list (`order: 10`, after the
+  // official stats pills' `order: 0`), wearing the official pill skin so
+  // the row reads as one family. The figure is the WITH-SUBAGENTS fold —
+  // the one number no official surface carries; a solo session renders it
+  // bare, and a subtree scope adds a quiet "with subagents" badge. The
+  // click-open detail panel carries the folded token figure and cache-hit
+  // rate (official pills show only the single-session token count), the
+  // session / subagents split, and the per-model breakdown. The component
+  // self-gates: a session with zero recorded requests renders nothing; a
+  // transient fetch miss keeps the previous render.
+  ctx.slots.inject('conversation.composer.dock', () => ctx.slots.register({
+    name: 'conversation.composer.dock',
+    id: 'token-usage-cost',
+    order: 10,
     locale: NS,
-  }, SessionStatsChip))
+  }, CostPill))
 
   // The input-bar quota button: one entry of the `conversation.input.right`
   // slot list (the tool row's right end, before the send button — the host

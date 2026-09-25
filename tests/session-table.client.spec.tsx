@@ -42,7 +42,7 @@ const t = ((key: string, params?: Record<string, unknown>): string => {
   return text.replace(/\{(\w+)\}/g, (_, name: string) => String(params?.[name] ?? ''))
 }) as TranslateNS<'token-usage'>
 
-const VIEW = { symbol: '¥' as const, rate: 1 }
+const VIEW = { symbol: '￥' as const, rate: 1 }
 
 function row(overrides: Partial<SessionUsageRow> & { sessionId: string }): SessionUsageRow {
   return {
