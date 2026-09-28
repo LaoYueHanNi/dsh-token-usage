@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Token 用量",
+    "description": "记录每次请求的 token 用量、费用，按模型、会话统计"
+  }
+}
