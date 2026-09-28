@@ -40,4 +40,4 @@ Status: implemented
 - 换来：requestId 规则不变，与既有 JSONL、失败 / 压缩决策兼容。
 - 代价：对账要等全部可读会话走完才删，进度条上 `removed` 在走读期间保持 0，最后一跳才跳出。
 - 代价：`removed` 进入三处形状与两组文案；旧宿主 + 新卡片读 0。升级后不会自动清理——已有 `initializedAt` 的安装跳过启动扫描，必须用户点一次「开始扫描」。
-- 代价：测试侧 `pollGone` 超时 2s→10s。迁移等 append 队列，完整套件并行 + Windows 文件锁下 2s 会超时（该文件 / 该用例单独跑 2s 内通过）；放宽后 `vitest run` 653 项全绿。未再放大超时，也未改迁移去等待启动标记写入。
+- 代价：测试侧 `pollGone` 轮询期限 2s→10s。迁移等 append 队列，完整套件并行 + Windows 文件锁下 2s 会超时（该文件 / 该用例单独跑 2s 内通过）；未改迁移去等待启动标记写入。**同源的 `live data-directory relocation` 套件另需 `describe(..., { timeout: 15_000 })`**：只放宽 `pollGone` 的内部期限而不动 vitest 的用例级 5s 默认值，期限在超过 5s 时形同虚设——全量并行负载下迁移偶尔跑到 5.0s 出头，0.4.5 发版门禁 `prepublishOnly` 即以 `Test timed out in 5000ms` 失败。套件级 15s 与 10s 的轮询期限对齐，留出余量；已用 6s 人工延迟探针验证该套件确实突破了 5s 默认值。

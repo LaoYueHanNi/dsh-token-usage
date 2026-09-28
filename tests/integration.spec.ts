@@ -374,7 +374,7 @@ describe('plugin integration', () => {
   })
 })
 
-describe('live data-directory relocation', () => {
+describe('live data-directory relocation', { timeout: 15_000 }, () => {
   let host: Context | undefined
   let sessionsService: MockSessions | undefined
   let home: string
