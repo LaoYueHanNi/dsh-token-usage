@@ -3,6 +3,8 @@ node_modules/
 lib/
 *.tsbuildinfo
 .npm-cache/
+# Local `pnpm pack` artifacts for offline install testing
+*.tgz
 
 # IDE / editor config
 .idea/
