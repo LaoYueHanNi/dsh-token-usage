@@ -38,6 +38,7 @@ import { encodeStatsQuery, STATS_PATH } from '../wire.ts'
 import { useAsyncResource, useDebouncedValue } from './async-resource.ts'
 import { totalTokens } from './day.ts'
 import { currencyViewOf, formatCost, formatSpeed, formatTokens, formatTtft } from './format.ts'
+import { PricingStatus, costsAvailable } from './PricingStatus.tsx'
 import { HitRateText } from './HitRateText.tsx'
 import { aggregateProjections, buildChildIndex, directSubagentIds, subagentParentOf, subtreeIds, buildStatsFreshnessKey } from './session-stats.ts'
 import { RequestsCell, RequestsSplitHead, RequestsStatCard, StatCard } from './StatCard.tsx'
@@ -228,7 +229,7 @@ export function UsageView({ useSessions, useProjection, sessionId, t }: UsageVie
                 failuresByCode={total.failuresByCode}
                 t={t}
               />
-              <StatCard label={t('stat.cost')} value={formatCost(summary.totalCost, view)} />
+              <StatCard label={t('stat.cost')} value={costsAvailable(summary.costState) ? formatCost(summary.totalCost, view) : '—'} />
               <StatCard label={t('stat.totalTokens')} value={formatTokens(totalTokens(total))} />
               <StatCard label={t('stat.hitRate')} value={<HitRateText totals={total} />} />
               <StatCard label={t('view.ttft')} value={ttftText} />
@@ -240,7 +241,8 @@ export function UsageView({ useSessions, useProjection, sessionId, t }: UsageVie
               <span>{t('stat.cacheRead')} <b>{formatTokens(total.cacheReadTokens)}</b></span>
               <span>{t('stat.cacheWrite')} <b>{formatTokens(total.cacheWriteTokens)}</b></span>
             </div>
-            {summary.unpricedModels.length > 0
+            <PricingStatus costState={summary.costState} resolutions={summary.modelResolutions} pricingUnavailableReason={summary.pricingUnavailableReason} t={t} />
+            {costsAvailable(summary.costState) && summary.unpricedModels.length > 0
               ? (
                 <p className={styles['warning']} role="status">
                   {t('unpriced.warning', {
@@ -320,7 +322,7 @@ export function UsageView({ useSessions, useProjection, sessionId, t }: UsageVie
                               <td className={row.totals.cacheReadTokens === 0 ? styles['zeroDim'] : undefined}>{formatTokens(row.totals.cacheReadTokens)}</td>
                               <td className={row.totals.cacheWriteTokens === 0 ? styles['zeroDim'] : undefined}>{formatTokens(row.totals.cacheWriteTokens)}</td>
                               <td><HitRateText totals={row.totals} /></td>
-                              <td className={styles['costCol']}>{formatCost(row.cost, view)}</td>
+                              <td className={styles['costCol']}>{costsAvailable(summary.costState) && !summary.unpricedModels.includes(row.model) ? formatCost(row.cost, view) : '—'}</td>
                             </tr>
                           ))}
                         </tbody>
@@ -406,7 +408,7 @@ export function UsageView({ useSessions, useProjection, sessionId, t }: UsageVie
                         <td>{row?.total.requests.toLocaleString() ?? '—'}</td>
                         <td>{row !== undefined ? formatTokens(totalTokens(row.total)) : '—'}</td>
                         <td className={styles['costCol']}>
-                          {row !== undefined ? formatCost(row.totalCost, view) : '—'}
+                          {row !== undefined && costsAvailable(summary.costState) && costsAvailable(row.costState) ? formatCost(row.totalCost, view) : '—'}
                         </td>
                         <td>{row !== undefined ? <HitRateText totals={row.total} /> : '—'}</td>
                         <td>{childStats !== undefined && childStats.ttftSteps > 0 ? formatTtft(childStats.ttftMs / childStats.ttftSteps) : '—'}</td>

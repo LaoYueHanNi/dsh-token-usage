@@ -316,6 +316,7 @@ describe('readPricingOverview', () => {
     expect(rows[0]).toEqual({
       modelId: 'deepseek-v4-flash',
       aliases: ['deepseek-flash', 'dsv4-flash'],
+      aliasPatterns: [],
       family: 'deepseek',
       rules: {
         base: { inputPerMillion: 1.5, outputPerMillion: 4.5 },
@@ -485,12 +486,12 @@ describe('canonicalMapOf', () => {
     expect(map.get('alias-holder')).toBe('alias-holder')
   })
 
-  it('lets the first alias writer win a shared alias', () => {
+  it('leaves a cross-model shared alias unresolved', () => {
     const map = canonicalMapOf([
       { modelId: 'a', aliases: ['shared'] },
       { modelId: 'b', aliases: ['shared'] },
     ])
-    expect(map.get('shared')).toBe('a')
+    expect(map.get('shared')).toBeUndefined()
     expect(map.get('a')).toBe('a')
     expect(map.get('b')).toBe('b')
   })

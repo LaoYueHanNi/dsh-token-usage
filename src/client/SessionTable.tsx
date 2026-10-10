@@ -17,7 +17,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
-import type { SessionUsageRow } from '../wire.ts'
+import type { CostState, SessionUsageRow } from '../wire.ts'
+import { costsAvailable } from './PricingStatus.tsx'
 import { dayKeyOf, totalTokens } from './day.ts'
 import type { CurrencyView } from './format.ts'
 import { formatCost, formatTokens } from './format.ts'
@@ -93,7 +94,8 @@ function nextSort(current: SortState, key: SortKey): SortState {
  * @param props - the served rows, the currency view, the session jump
  * seats (absent on tests / hosts without the controller), locale.
  */
-export function SessionTable({ rows, view, t, sessionListed, openSession }: {
+export function SessionTable({ rows, view, t, sessionListed, openSession, costState }: {
+  costState?: CostState
   rows: readonly SessionUsageRow[]
   view: CurrencyView
   t: TranslateNS<'token-usage'>
@@ -278,7 +280,7 @@ export function SessionTable({ rows, view, t, sessionListed, openSession }: {
           />
         </td>
         <td>{formatTokens(totalTokens(row.totals))}</td>
-        <td className={styles['costCol']}>{formatCost(row.cost, view)}</td>
+        <td className={styles['costCol']}>{costsAvailable(costState) ? formatCost(row.cost, view) : '—'}</td>
         <td>{dayKeyOf(new Date(row.lastTime))}</td>
       </tr>
     )

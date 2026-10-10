@@ -477,6 +477,15 @@ describe('PricingOverviewDialog', () => {
     expect(await screen.findByText('模型定价获取失败')).toBeTruthy()
   })
 
+  it('shows the unavailable mirror reason and offers retry without displaying price rows', async () => {
+    stubFetch(async () => ({ ok: true, json: async () => ({ ...OVERVIEW, models: [], costState: 'pricing-unavailable', pricingUnavailableReason: 'invalid-feed' }) }))
+    render(<PricingOverviewDialog usedModels={USED} view={{ symbol: '￥', rate: 1 }} onClose={() => {}} t={t} />)
+    const status = await screen.findByRole('status')
+    expect(status.textContent).toContain(t('pricing.reason.invalid-feed'))
+    expect(screen.queryByRole('table')).toBeNull()
+    expect(screen.getByRole('button', { name: '重试' })).toBeTruthy()
+  })
+
   it('closes on a true backdrop click but not on a selection drag released outside', async () => {
     const { dialog, onClose } = await renderReady()
     // A selection drag: press inside the input, release outside the

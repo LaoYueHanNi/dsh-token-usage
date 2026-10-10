@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from 'node:fs/promises'
+import { mkdtemp, unlink, writeFile } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -99,6 +99,60 @@ async function sessionDataDir(): Promise<string> {
 }
 
 describe('createStatsRoute', () => {
+  it('shares identification across whole/session/chip/filter/children and overview, including genuine zero rates', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'resolution-route-'))
+    const records = ['M', 'provider/m', 'ns/M-HIGH', 'free', 'other/missing'].map((model, i) => ({
+      ...dayRecord(1, model), requestId: String(i), sessionId: i === 2 ? 'child' : 'root',
+      usage: { inputTokens: 1_000_000, outputTokens: 0 },
+    }))
+    await writeFile(join(dir, 'usage-2026-01-11.jsonl'), records.map(r => JSON.stringify(r)).join('\n') + '\n')
+    await writeFile(join(dir, 'pricing.ccsa.json'), JSON.stringify({ currency: 'RMB', usdExchangeRate: 8, models: [
+      { modelId: 'm', aliasPatterns: ['^m-high$'], inputCostPerMillion: 2, outputCostPerMillion: 0 },
+      { modelId: 'free', inputCostPerMillion: 0, outputCostPerMillion: 0 },
+    ] }))
+    const route = createStatsRoute(() => dir)
+    const query = async (search = '') => {
+      const { res, captured } = fakeResponse(); await route.handler(fakeRequest({ url: STATS_PATH + search }), res)
+      expect(captured.status).toBe(200); return JSON.parse(captured.body)
+    }
+    const whole = await query()
+    expect(whole).toMatchObject({ costState: 'ready', totalCost: 6, usdExchangeRate: 8, total: { requests: 5 }, unpricedModels: ['other/missing'] })
+    expect(whole.byModel.find((row: { model: string }) => row.model === 'm').totals.requests).toBe(3)
+    expect(whole.pricing['ns/M-HIGH']).toEqual(whole.pricing.m)
+    expect(whole.modelResolutions.find((row: { rawName: string }) => row.rawName === 'ns/M-HIGH')).toMatchObject({ modelId: 'm', method: 'pattern' })
+    const search = '?sessionId=root&sessionId=child&childId=child'
+    for (const fields of ['full', 'session', 'chip']) {
+      const scoped = await query(search + '&fields=' + fields)
+      expect(scoped).toMatchObject({ totalCost: 6, costState: 'ready', total: { requests: 5 } })
+      expect(scoped.children.child).toMatchObject({ costState: 'ready', totalCost: 2, total: { requests: 1 } })
+    }
+    const selected = await query('?sessionId=root&sessionId=child&fields=session&model=NS%2FM-HIGH')
+    expect(selected).toMatchObject({ totalCost: 6, total: { requests: 3 }, byModel: [{ model: 'm' }] })
+    expect(selected.requestSeries.reduce((n: number, point: { count: number }) => n + point.count, 0)).toBe(3)
+    const { res, captured } = fakeResponse()
+    await createPricingRoute(() => dir).handler(fakeRequest(), res)
+    expect(JSON.parse(captured.body)).toMatchObject({ costState: 'ready', usdExchangeRate: 8, models: [{ modelId: 'm', aliasPatterns: ['^m-high$'] }, { modelId: 'free', aliasPatterns: [] }] })
+  })
+
+  it('propagates unavailable history to every response shape while retaining whole-scope cached usage', async () => {
+    const dir = await sessionDataDir()
+    const path = join(dir, 'pricing.ccsa.json')
+    await writeFile(path, JSON.stringify({ currency: 'RMB', models: [{ modelId: 'deepseek-chat', inputCostPerMillion: 2, outputCostPerMillion: 3 }] }))
+    const route = createStatsRoute(() => dir)
+    const query = async (url = STATS_PATH) => {
+      const { res, captured } = fakeResponse(); await route.handler(fakeRequest({ url }), res); return JSON.parse(captured.body)
+    }
+    const before = await query()
+    await unlink(join(dir, 'usage-2026-01-11.jsonl'))
+    await writeFile(path, JSON.stringify({ currency: 'RMB', models: [{ modelId: 'deepseek-chat', inputCostPerMillion: 4, outputCostPerMillion: 3 }] }))
+    const after = await query()
+    expect(after.total).toEqual(before.total)
+    expect(after).toMatchObject({ costState: 'history-incomplete', totalCost: 0 })
+    for (const fields of ['chip', 'session', 'full']) {
+      expect(await query(`${STATS_PATH}?sessionId=alpha&sessionId=child&childId=child&fields=${fields}`)).toMatchObject({ costState: 'history-incomplete', totalCost: 0, total: before.total,
+        children: { child: { costState: 'history-incomplete', totalCost: 0, total: { requests: 1 } } } })
+    }
+  })
   it('serves the JSON summary on GET', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'token-usage-route-'))
     await writeFile(join(dir, 'usage-2026-01-15.jsonl'), `${JSON.stringify(fixtureRecord(100))}\n`)
@@ -737,7 +791,7 @@ describe('createPricingRoute', () => {
     expect(captured.status).toBe(200)
     // Without a currency thunk the display defaults to CNY and the rate to
     // the built-in 7 — the overview stays servable, just empty.
-    expect(JSON.parse(captured.body)).toEqual({ models: [], currency: 'CNY', usdExchangeRate: 7 })
+    expect(JSON.parse(captured.body)).toEqual({ models: [], costState: 'pricing-unavailable', pricingUnavailableReason: 'missing', currency: 'CNY', usdExchangeRate: 7 })
   })
 
   it('maps a read failure to a 500 error JSON', async () => {

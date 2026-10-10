@@ -13,6 +13,15 @@ export const NS = 'token-usage'
 
 /** Simplified Chinese dictionary (the key-set source of truth). */
 export const zh = {
+  'pricing.unavailable': '定价表不可用，费用暂不可计算；用量统计仍可查看。',
+  'pricing.reason.missing': '本机尚无定价镜像，请重试定价同步。',
+  'pricing.reason.unreadable': '本机定价镜像无法读取。',
+  'pricing.reason.invalid-json': '本机定价镜像不是有效 JSON。',
+  'pricing.reason.invalid-feed': '本机定价镜像未通过格式、模型 ID 或别名正则校验。',
+  'pricing.historyIncomplete': '历史源记录不完整，无法可靠重算费用；已保留可用用量统计。',
+  'pricing.identificationDetails': '查看模型识别详情',
+  'pricing.ambiguous': '模型识别存在歧义：{models}',
+  'pricing.unmatched': '未找到对应定价模型',
   'nav.label': 'Token 用量',
   'filter.quickRange': '快捷区间',
   'filter.custom': '自定义',
@@ -197,6 +206,15 @@ export const zh = {
 
 /** English dictionary (same key set). */
 export const en: Record<TokenUsageKey, string> = {
+  'pricing.unavailable': 'Pricing is unavailable. Costs cannot be calculated; usage remains available.',
+  'pricing.reason.missing': 'No local pricing mirror exists yet. Retry pricing sync.',
+  'pricing.reason.unreadable': 'The local pricing mirror cannot be read.',
+  'pricing.reason.invalid-json': 'The local pricing mirror is not valid JSON.',
+  'pricing.reason.invalid-feed': 'The local mirror failed schema, model ID, or alias pattern validation.',
+  'pricing.historyIncomplete': 'Historical source records are incomplete. Reliable costs cannot be recalculated; available usage is retained.',
+  'pricing.identificationDetails': 'Model identification details',
+  'pricing.ambiguous': 'Ambiguous model identification: {models}',
+  'pricing.unmatched': 'No matching pricing model',
   'nav.label': 'Token Usage',
   'filter.quickRange': 'Quick range',
   'filter.custom': 'Custom',

@@ -8,12 +8,15 @@ Status: implemented
 
 ## Decision
 
+> [!NOTE]
+> 本决策中的 更新规则时沿用旧 RateKey 即可正确重算的假设 已于 2026-10-10 由 [DR: 统一模型自动识别与带定价指纹的历史重算](2026-10-10-model-pricing-resolution.md) 取代。
+
 解析维持既有两层结构，只在第二层加星期判定（`src/pricing.ts`、`src/wire.ts`）：
 
 - 第一层不动：仍先按 `timeRules` 的日期区间（`startTime`/`endTime`）选定定价时代（节点），历史期与新时代天然由不同节点承载。
 - 第二层：`matchingSlot` 在节点内部逐槽匹配时，先用与 `localMinuteOfDay` 同一 tz 偏移算出请求的本地 ISO 星期（`localWeekday`），槽位 `daysOfWeek` 缺省/空/包含该星期才参与窗口匹配，否则跳过继续找——周末落入工作日槽的窗口区间时落到该节点谷价，而不是被不匹配的槽挡住。星期与分钟用同一本地时钟，保证跨时区（如 UTC+14 使本地周一对应 UTC 周日）语义一致。
 - 准入：`coerceSlot` 过滤出 1–7 整数（去重），过滤后为空视为缺省（每天）；`coerceRates` 改为保留清洗后的槽位而非原始对象，非法值降级不炸整槽。连带修复一个自首个定价提交起就存在的历史 bug：`toSlots` 展平时从不透传槽位 `label`，导致定价弹窗里真实镜像的槽位只能显示兜底文案"峰时"（计费不受影响，故此前未暴露），现随 `daysOfWeek` 一并透传。
-- 费率身份 `RateKey` 不变：身份是结构性的（规则窗口+档位阈值+槽位下标），星期属于匹配条件而非身份；周末行 key 为 `slot=-1`，聚合历史在表更新后经 `ratesForKey` 重算自动正确，无数据迁移。
+- 费率身份 `RateKey` 不变：身份是结构性的（规则窗口+档位阈值+槽位下标），星期属于匹配条件而非身份；周末行 key 为 `slot=-1`，RateKey 结构不变；表的匹配条件或规则变化时按上下文指纹重读原始记录并重选身份，再通过 `ratesForKey` 计费。
 
 ## Alternatives considered
 
@@ -23,5 +26,5 @@ Status: implemented
 
 ## Consequences
 
-- 换来：v72 及后续带 `daysOfWeek` 的表计费与 DeepSeek 官方一致（周末谷价）；旧镜像与手写 `pricing.json` 不带该字段时行为逐位不变；聚合历史无需迁移。
+- 换来：v72 及后续带 `daysOfWeek` 的表计费与 DeepSeek 官方一致（周末谷价）；有效旧镜像不带该字段时行为逐位不变；旧手写 `pricing.json` 已被忽略。聚合身份结构不变，规则变化需重建冻结聚合。
 - 代价：`coerceRates` 从"门禁保留原对象"改为"保留清洗后槽位"，槽位上未来新增的未知上游字段会与 windows/label 一样被丢弃，需要随上游显式接入（与既有各字段策略一致）；上游"daysOfWeek 不相交的槽位窗口可重叠"的通用形态虽可被"跳过继续找"语义自然处理，但本插件不为它做专门保证。

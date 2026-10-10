@@ -12,15 +12,21 @@
  */
 
 import { canonicalName, costOf, ratesForKey } from './pricing.ts'
-import { fileDay, listDayFiles, readDayFile } from './record-cache.ts'
+import type { PricingContext } from './pricing.ts'
+import { modelKey } from './model-resolution.ts'
+import { unlink } from 'node:fs/promises'
+import { join } from 'node:path'
+import { fileDay, listDayFiles, readDayFile, readDayFileChecked } from './record-cache.ts'
 import { consoleLogger, type LoggerLike } from './log.ts'
 import type { UsageRecord } from './usage-record.ts'
-import { readRollup, writeRollup } from './rollup.ts'
+import { readRollup, writeRollup, ROLLUP_FILE_NAME, ROLLUP_TMP_FILE_NAME } from './rollup.ts'
 import type { RollupFile } from './rollup.ts'
 import type {
   CostedModelRow,
   CostedSessionCell,
   CostedSummary,
+  CostState,
+  ModelRates,
   PricingTable,
   RateKey,
   RequestPoint,
@@ -315,7 +321,7 @@ function matchesModel(
   selected: string | undefined,
   canonical?: ReadonlyMap<string, string>,
 ): boolean {
-  return selected === undefined || canonicalName(name, canonical) === canonicalName(selected, canonical)
+  return selected === undefined || modelKey(canonicalName(name, canonical)) === modelKey(canonicalName(selected, canonical))
 }
 
 /**
@@ -479,7 +485,7 @@ function dayStart(day: string): number {
  * The recent window filters on its record timestamps
  * ([from 00:00, to 23:59:59.999] local). No filters returns the input as-is.
  * With a canonical map, `model` matches the priced family (the modelId and
- * every alias of the same feed row); unpriced names still match exactly.
+ * every identified name of the same feed row); unpriced full names ignore case.
  * byModel rows stay keyed by the raw name — {@link attachCosts} folds them.
  * @param summary - the unfiltered summary.
  * @param from - first day key (`YYYY-MM-DD`), inclusive.
@@ -530,17 +536,42 @@ export function filterSummary(
   return { dataDir: summary.dataDir, total, byDay: dayRows(days), byHour, byModel: modelRows(models), rateRows: rateRowsSorted(rows), bySession, recent }
 }
 
+/** Available cached session cells retain usage even if raw history is lost.
+ * Hourly/request timestamps cannot be recovered from these cells. */
+export function summaryForSessions(summary: TokenSummary, sessionIds: readonly string[]): TokenSummary {
+  const wanted = new Set(sessionIds)
+  const bySession = summary.bySession.filter(row => wanted.has(row.sessionId))
+  const total = emptyTotals()
+  const days = new Map<string, UsageTotals>()
+  const models = new Map<string, UsageTotals>()
+  const rated = new Map<string, UsageRateRow>()
+  for (const row of bySession) {
+    addTotals(total, row.totals)
+    const day = days.get(row.day) ?? emptyTotals()
+    addTotals(day, row.totals); days.set(row.day, day)
+    if (row.model !== '') {
+      const model = models.get(row.model) ?? emptyTotals()
+      addTotals(model, row.totals); models.set(row.model, model)
+    }
+    const key = rateRowKey(row.day, row.model, row.rate)
+    const cell = rated.get(key) ?? { day: row.day, model: row.model, rate: row.rate, totals: emptyTotals() }
+    addTotals(cell.totals, row.totals); rated.set(key, cell)
+  }
+  return { total, byDay: dayRows(days), byHour: [], byModel: modelRows(models), rateRows: rateRowsSorted(rated.values()), bySession,
+    recent: summary.recent.filter(row => wanted.has(row.sessionId)) }
+}
+
 /**
  * Attach the cost layer to a token-only summary: each rate row is priced at
  * the prices its rate identity resolves to under the current table, folded
  * into per-model costs, the total, the unpriced model list, and the table
  * itself. Purely additive — totals, day rows, and the recent window are
  * returned untouched, so the token aggregation (and the rollup format)
- * never carries currency, and an updated table re-prices history for free.
+ * never carries currency. Stored identities must match the current context.
  *
  * With a canonical map, byModel rows that hit the same feed model (the
  * modelId or any of its aliases) fold onto that modelId; unpriced names
- * stay as their raw string and never merge. rateRows / byHour / bySession
+ * group by their complete case-insensitive name, retaining display spelling. rateRows / byHour / bySession
  * keep the raw name so a later pricing update can regroup without rebuild.
  * @param summary - the aggregated summary (build or filtered).
  * @param pricing - the active pricing table.
@@ -548,14 +579,19 @@ export function filterSummary(
  * @returns the same summary plus the cost fields.
  */
 export function attachCosts(
-  summary: TokenSummary & { dataDir: string },
+  summary: TokenSummary & { dataDir: string; costState?: CostState },
   pricing: PricingTable,
   canonical: ReadonlyMap<string, string> = new Map(),
+  context?: PricingContext,
 ): CostedSummary {
+  const costState = summary.costState
+    ?? (context?.available === false ? 'pricing-unavailable' : 'ready')
+  const rulesOf = (name: string): ModelRates | undefined => costState !== 'ready' ? undefined
+    : context !== undefined ? context.ratesForModel(name) : pricing[name]
   const costs = new Map<string, number>()
   let totalCost = 0
   for (const row of summary.rateRows) {
-    const rules = pricing[row.model]
+    const rules = rulesOf(row.model)
     if (rules === undefined) continue
     const cost = costOf(row.totals, ratesForKey(rules, row.rate))
     costs.set(row.model, (costs.get(row.model) ?? 0) + cost)
@@ -566,36 +602,39 @@ export function attachCosts(
   // summary card reconcile without any extra plumbing. An unpriced model's
   // cells stay 0 and surface through unpricedModels as before.
   const bySession: CostedSessionCell[] = summary.bySession.map(row => {
-    const rules = pricing[row.model]
+    const rules = rulesOf(row.model)
     return {
       ...row,
       cost: rules === undefined ? 0 : costOf(row.totals, ratesForKey(rules, row.rate)),
     }
   })
-  const folded = new Map<string, { totals: UsageTotals, cost: number }>()
+  const folded = new Map<string, { model: string, totals: UsageTotals, cost: number }>()
   for (const row of summary.byModel) {
     const name = canonicalName(row.model, canonical)
-    const existing = folded.get(name)
+    const key = modelKey(name)
+    const existing = folded.get(key)
     if (existing === undefined) {
       const totals = emptyTotals()
       addTotals(totals, row.totals)
-      folded.set(name, { totals, cost: costs.get(row.model) ?? 0 })
+      folded.set(key, { model: name, totals, cost: costs.get(row.model) ?? 0 })
     } else {
       addTotals(existing.totals, row.totals)
       existing.cost += costs.get(row.model) ?? 0
     }
   }
-  const byModel: CostedModelRow[] = [...folded.entries()]
-    .map(([model, { totals, cost }]) => ({ model, totals, cost }))
+  const byModel: CostedModelRow[] = [...folded.values()]
     .sort((left, right) =>
       right.totals.requests - left.totals.requests || left.model.localeCompare(right.model))
   const unpricedModels = byModel
-    .filter(row => pricing[row.model] === undefined)
+    .filter(row => context !== undefined ? context.resolveModel(row.model).status !== 'matched' : pricing[row.model] === undefined)
     .map(row => row.model)
   return {
     dataDir: summary.dataDir,
     total: summary.total,
     totalCost,
+    costState,
+    ...(context?.unavailableReason !== undefined ? { pricingUnavailableReason: context.unavailableReason } : {}),
+    modelResolutions: context === undefined ? [] : summary.byModel.map(row => context.resolveModel(row.model)),
     unpricedModels,
     pricing,
     byDay: summary.byDay,
@@ -757,43 +796,112 @@ export function buildSessionRows(
  * skipped, so a clock stepping back cannot count an absorbed file twice.
  * A failed rollup write logs and does not block the response — the next read
  * retries the absorption. The resolver prices each record as it is absorbed,
- * so the rollup carries rate identities (never prices) and a table update
- * re-prices history without rebuilding anything.
+ * so the rollup carries rate identities (never prices). Changed pricing
+ * fingerprints rebuild those identities from the original records.
  * @param dir - the plugin's data directory.
  * @param now - clock source for the frozen/today boundary (test seam).
  * @param resolve - the rate resolver (see {@link RateResolver}).
  * @returns the summary served to the web settings page.
  */
+interface PricingBuildOptions {
+  fingerprint: string
+  /** Checked immediately before publishing derived state. */
+  isCurrent: () => Promise<boolean>
+}
+
+const summaryQueues = new Map<string, Promise<unknown>>()
+
+/** History sync invalidations share the rebuild queue, including temp files. */
+export async function invalidateSummary(dir: string): Promise<void> {
+  const previous = summaryQueues.get(dir) ?? Promise.resolve()
+  const task = previous.catch(() => undefined).then(async () => {
+    for (const name of [ROLLUP_FILE_NAME, ROLLUP_TMP_FILE_NAME]) {
+      await unlink(join(dir, name)).catch((error: unknown) => {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      })
+    }
+  })
+  summaryQueues.set(dir, task)
+  try { await task } finally { if (summaryQueues.get(dir) === task) summaryQueues.delete(dir) }
+}
+
 export async function buildSummary(
   dir: string,
   now: () => Date = () => new Date(),
   resolve: RateResolver = () => UNPRICED_KEY,
   logger: LoggerLike = consoleLogger,
-): Promise<TokenSummary & { dataDir: string }> {
+  pricing?: PricingBuildOptions,
+): Promise<TokenSummary & { dataDir: string; costState?: CostState }> {
+  const previous = summaryQueues.get(dir) ?? Promise.resolve()
+  const task = previous.catch(() => undefined).then(() => buildSummaryLocked(dir, now, resolve, logger, pricing))
+  summaryQueues.set(dir, task)
+  try { return await task } finally { if (summaryQueues.get(dir) === task) summaryQueues.delete(dir) }
+}
+
+async function buildSummaryLocked(
+  dir: string, now: () => Date, resolve: RateResolver, logger: LoggerLike,
+  pricing: PricingBuildOptions | undefined,
+): Promise<TokenSummary & { dataDir: string; costState?: CostState }> {
   const today = dayKey(now().getTime())
-  const rollup = (await readRollup(dir, logger)) ?? emptyRollup()
+  const stored = (await readRollup(dir, logger)) ?? emptyRollup()
+  const rebuild = stored.requiresRebuild === true || (pricing !== undefined && stored.pricingFingerprint !== pricing.fingerprint)
+  const rollup = rebuild ? emptyRollup() : stored
+  const names = await listDayFiles(dir)
   const cold: string[] = []
   const hot: string[] = []
-  for (const name of await listDayFiles(dir)) {
+  for (const name of names) {
     const day = fileDay(name)!
     if (day <= rollup.upto) continue
-    if (day < today) cold.push(name)
+    if (day < today || (rebuild && day <= stored.upto)) cold.push(name)
     else hot.push(name)
   }
   let absorbed = rollup
+  const incomplete = async (): Promise<TokenSummary & { dataDir: string; costState: CostState }> => {
+    logger.warn('[token-usage] historical source records are incomplete; retaining usage and hiding costs')
+    const newer: UsageRecord[] = []
+    for (const name of names) if (fileDay(name)! > stored.upto) newer.push(...await readDayFile(dir, name, logger))
+    return { dataDir: dir, ...mergeSummaries(stored, summarizeRecords(newer, resolve)), costState: 'history-incomplete' }
+  }
+  if (rebuild && stored.sourceFiles?.some(name => !names.includes(name))) return incomplete()
   if (cold.length > 0) {
     // names are date-ascending, so the last cold file carries the new upto
     const records: UsageRecord[] = []
-    for (const name of cold) records.push(...await readDayFile(dir, name, logger))
+    const oldRecords: UsageRecord[] = []
+    for (const name of cold) {
+      const parsed = await readDayFileChecked(dir, name, logger)
+      if (pricing !== undefined && !parsed.complete) return incomplete()
+      const rows = parsed.records
+      records.push(...rows)
+      if (fileDay(name)! <= stored.upto) oldRecords.push(...rows)
+    }
+    if (rebuild && stored.upto !== '') {
+      const recovered = summarizeRecords(oldRecords).total
+      const fields = ['requests', 'inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'failures', 'compactions'] as const
+      if (fields.some(field => (recovered[field] ?? 0) < (stored.total[field] ?? 0))) {
+        return incomplete()
+      }
+    }
     absorbed = {
       upto: fileDay(cold[cold.length - 1]!)!,
       ...mergeSummaries(rollup, summarizeRecords(records, resolve)),
+      ...(pricing !== undefined ? { pricingFingerprint: pricing.fingerprint } : {}),
+      sourceFiles: [...new Set([...rollup.sourceFiles ?? [], ...cold])].sort(),
     }
-    await writeRollup(dir, absorbed).catch((error: unknown) => {
-      logger.error('[token-usage] cannot write rollup:', error)
-    })
+    if (pricing === undefined || await pricing.isCurrent()) {
+      await writeRollup(dir, absorbed).catch((error: unknown) => {
+        logger.error('[token-usage] cannot write rollup:', error)
+      })
+    }
+  } else if (rebuild && (stored.total.requests > 0 || (stored.total.failures ?? 0) > 0)) {
+    return incomplete()
   }
   const fresh: UsageRecord[] = []
-  for (const name of hot) fresh.push(...await readDayFile(dir, name, logger))
-  return { dataDir: dir, ...mergeSummaries(absorbed, summarizeRecords(fresh, resolve)) }
+  let complete = true
+  for (const name of hot) {
+    const parsed = await readDayFileChecked(dir, name, logger)
+    fresh.push(...parsed.records)
+    complete &&= parsed.complete
+  }
+  return { dataDir: dir, ...mergeSummaries(absorbed, summarizeRecords(fresh, resolve)),
+    ...(pricing !== undefined && !complete ? { costState: 'history-incomplete' as const } : {}) }
 }

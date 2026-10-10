@@ -31,6 +31,7 @@ import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ContextTier, DailySlot, ModelPricing, ModelRates, PricingOverviewModel, PricingOverviewPayload } from '../wire.ts'
 import { PRICING_PATH } from '../wire.ts'
 import { useAsyncResource } from './async-resource.ts'
+import { PricingStatus, costsAvailable } from './PricingStatus.tsx'
 import type { CurrencyView } from './format.ts'
 import { formatCost, formatRate, formatTokens } from './format.ts'
 import { billedRates, PricingDialog, windowText } from './PricingDialog.tsx'
@@ -261,6 +262,7 @@ function fetchPricingOverview(signal: AbortSignal): Promise<PricingOverviewPaylo
       if (typeof value !== 'object' || value === null || !Array.isArray(value.models)) {
         throw new Error('unexpected pricing response')
       }
+      if (value.costState === 'pricing-unavailable') return value
       if (value.models.length === 0) throw new Error('pricing mirror is empty')
       return value
     })
@@ -400,7 +402,12 @@ export function PricingOverviewDialog({ usedModels, view, onClose, t }: {
           </div>
         )
         : null}
-      {state.status === 'ready'
+      {state.status === 'ready' && !costsAvailable(state.value.costState)
+        ? <div className={styles['failRow']}>
+          <PricingStatus costState={state.value.costState} {...state.value.pricingUnavailableReason !== undefined ? { pricingUnavailableReason: state.value.pricingUnavailableReason } : {}} t={t} />
+          <button type="button" className={styles['retryButton']} onClick={retry}>{t('retry')}</button>
+        </div> : null}
+      {state.status === 'ready' && costsAvailable(state.value.costState)
         ? (
           <>
             <input

@@ -19,7 +19,6 @@
  */
 
 import { homedir } from 'node:os'
-import { unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { Context, Volatile } from '@deepseek-ai/cordis'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
@@ -48,7 +47,7 @@ import { extractFirstTokenTimeFromStream, modelOfEvent, recordOfEvent, type Requ
 import { markTimingSynced, readSyncState } from './sync-state.ts'
 import { autoSyncIfNeeded, syncHistory, titleOfEvent } from './sync.ts'
 import { clearRecordCache, warmRecordCache } from './record-cache.ts'
-import { ROLLUP_FILE_NAME, ROLLUP_TMP_FILE_NAME } from './rollup.ts'
+import { invalidateSummary } from './stats.ts'
 import { createDirectoryGuardRoute, createFullSyncRoute, createMigrationRoute, createPricingRoute, createStatsRoute, type FullSyncTrigger } from './stats-route.ts'
 import { currencyOfRegion, type DirectoryGuardView, type FullSyncView, type QuotaPayload } from './wire.ts'
 import { createQuotaRoute } from './quota/quota-route.ts'
@@ -646,8 +645,7 @@ export function apply(ctx: Context, config: Config = {}) {
    */
   const invalidateDerivedState = (dir: string): void => {
     clearRecordCache(dir)
-    void unlink(join(dir, ROLLUP_FILE_NAME)).catch(() => undefined)
-    void unlink(join(dir, ROLLUP_TMP_FILE_NAME)).catch(() => undefined)
+    void invalidateSummary(dir).catch(error => logger.error('[token-usage] cannot invalidate rollup:', error))
   }
   const quotaService = new QuotaService({
     resolveProvider: sessionId => resolveCurrentProvider({

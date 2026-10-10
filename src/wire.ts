@@ -226,6 +226,7 @@ export interface RequestPoint {
 
 /** Per-child row the usage tab's subagent table reads (no chart / pricing). */
 export interface ChildUsageSummary {
+  costState?: CostState
   total: UsageTotals
   totalCost: number
   unpricedModels: string[]
@@ -344,6 +345,18 @@ export function isUnpricedKey(key: RateKey): boolean {
  */
 export type PricingTable = Record<string, ModelRates>
 
+export type CostState = 'ready' | 'pricing-unavailable' | 'history-incomplete'
+export type PricingUnavailableReason = 'missing' | 'unreadable' | 'invalid-json' | 'invalid-feed'
+
+export interface ModelResolution {
+  rawName: string
+  status: 'matched' | 'unmatched' | 'ambiguous'
+  modelId?: string
+  method?: 'id' | 'alias' | 'normalized-id' | 'normalized-alias' | 'pattern'
+  strippedPrefix: boolean
+  candidates: string[]
+}
+
 /**
  * One model row of the pricing overview: the shape the cloud feed carries
  * (modelId + its aliases + its upstream family) plus the full rule set —
@@ -355,6 +368,7 @@ export interface PricingOverviewModel {
   modelId: string
   /** The feed's alias list for this model (empty when it carries none). */
   aliases: readonly string[]
+  aliasPatterns?: readonly string[]
   /** The feed's upstream family grouping; absent rows group under `other`. */
   family?: string
   rules: ModelRates
@@ -364,6 +378,8 @@ export interface PricingOverviewModel {
  * plus the display-currency stamps the settings page converts with (same
  * region source as the stats payload). */
 export interface PricingOverviewPayload {
+  pricingUnavailableReason?: PricingUnavailableReason
+  costState?: CostState
   models: readonly PricingOverviewModel[]
   /** The display currency the page converts rate figures into. Amounts on
    * the wire (rules rates) remain RMB. */
@@ -489,13 +505,16 @@ export function currencyOfRegion(region: 'domestic' | 'overseas' | undefined): D
  * produces before the route stamps the display-currency metadata.
  */
 export interface CostedSummary extends TokenSummary {
+  pricingUnavailableReason?: PricingUnavailableReason
+  costState: CostState
+  modelResolutions: ModelResolution[]
   /** Absolute data directory the summary was computed from. */
   dataDir: string
-  /** Billed cost over every recorded request (¥); unpriced models count 0. */
+  /** Billed cost (¥); unpriced models count 0. Trust only when costState is ready. */
   totalCost: number
   /** Models with usage but no entry in the pricing table, byModel order. */
   unpricedModels: string[]
-  /** The active pricing table (user-maintained; empty when none is configured). */
+  /** The snapshot pricing dictionary, including resolved names for details. */
   pricing: PricingTable
   /** Per-model rows with their billed cost attached. */
   byModel: CostedModelRow[]

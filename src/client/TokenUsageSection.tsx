@@ -31,6 +31,7 @@ import { PricingDialog } from './PricingDialog.tsx'
 import { PricingOverviewDialog } from './PricingOverviewDialog.tsx'
 import { RequestsCell, RequestsSplitHead, RequestsStatCard, StatCard } from './StatCard.tsx'
 import { SessionTable } from './SessionTable.tsx'
+import { PricingStatus, costsAvailable } from './PricingStatus.tsx'
 import { TrendChart } from './TrendChart.tsx'
 import { useColorSchemeMirror } from './use-color-scheme.ts'
 import styles from './TokenUsageSection.module.css'
@@ -319,7 +320,7 @@ export function TokenUsageSection({ t, close, sessionListed, openSession }: Sett
                 failuresByCode={total.failuresByCode}
                 t={t}
               />
-              <StatCard label={t('stat.cost')} value={formatCost(state.value.totalCost, view)} />
+              <StatCard label={t('stat.cost')} value={costsAvailable(state.value.costState) ? formatCost(state.value.totalCost, view) : '—'} />
               <StatCard label={t('stat.totalTokens')} value={formatTokens(totalTokens(total))} />
               <StatCard label={t('stat.hitRate')} value={<HitRateText totals={total} />} />
             </div>
@@ -329,7 +330,8 @@ export function TokenUsageSection({ t, close, sessionListed, openSession }: Sett
               <StatCard label={t('stat.cacheRead')} value={formatTokens(total.cacheReadTokens)} />
               <StatCard label={t('stat.cacheWrite')} value={formatTokens(total.cacheWriteTokens)} />
             </div>
-            {state.value.unpricedModels.length > 0
+            <PricingStatus costState={state.value.costState} resolutions={state.value.modelResolutions} pricingUnavailableReason={state.value.pricingUnavailableReason} t={t} />
+            {costsAvailable(state.value.costState) && state.value.unpricedModels.length > 0
               ? (
                 <p className={styles['warning']} role="status">
                   {t('unpriced.warning', {
@@ -432,7 +434,7 @@ export function TokenUsageSection({ t, close, sessionListed, openSession }: Sett
                                     />
                                   </td>
                                   <td className={styles['costCol']}>
-                                    {rules !== undefined ? formatCost(row.cost, view) : '—'}
+                                    {costsAvailable(state.value.costState) && rules !== undefined ? formatCost(row.cost, view) : '—'}
                                   </td>
                                   <td>{formatTokens(totalTokens(row.totals))}</td>
                                   <td className={row.totals.inputTokens === 0 ? styles['zeroDim'] : undefined}>{formatTokens(row.totals.inputTokens)}</td>
@@ -452,6 +454,7 @@ export function TokenUsageSection({ t, close, sessionListed, openSession }: Sett
                         ? (
                           <SessionTable
                             rows={state.value.sessionRows ?? []}
+                            costState={state.value.costState}
                             view={view}
                             t={t}
                             {...sessionListed !== undefined && openSession !== undefined

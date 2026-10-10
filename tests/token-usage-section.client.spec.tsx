@@ -62,6 +62,8 @@ const t = ((key: string, params?: Record<string, unknown>): string => {
 
 /** A fully populated summary fixture (reasoner priced at ¥4/¥16/¥1 per million). */
 const SUMMARY: UsageSummary = {
+  costState: 'ready',
+  modelResolutions: [],
   dataDir: 'C:/data/token-usage',
   currency: 'CNY',
   usdExchangeRate: 7,
@@ -193,6 +195,25 @@ describe('totalTokens / formatHitRate', () => {
 })
 
 describe('TokenUsageSection', () => {
+  it.each(['pricing-unavailable', 'history-incomplete'] as const)('hides every cost but retains model usage when %s', async costState => {
+    stubFetch(async () => ({ ok: true, json: async () => ({ ...SUMMARY, costState, totalCost: 9876.54, byModel: SUMMARY.byModel.map(row => ({ ...row, cost: 9876.54 })) }) }))
+    render(<TokenUsageSection close={() => {}} t={t} />)
+    await screen.findByRole('status')
+    expect(screen.getByRole('status').textContent).toBe(t(costState === 'history-incomplete' ? 'pricing.historyIncomplete' : 'pricing.unavailable'))
+    expect(document.body.textContent).not.toContain('9876.54')
+    expect(screen.getByRole('table', { name: t('byModel.title') })).toBeTruthy()
+  })
+  it('shows unmatched names and ambiguity candidates without an association button', async () => {
+    stubFetch(async () => ({ ok: true, json: async () => ({ ...SUMMARY, modelResolutions: [
+      { rawName: 'p/unknown', status: 'unmatched', strippedPrefix: false, candidates: [] },
+      { rawName: 'collision', status: 'ambiguous', strippedPrefix: true, candidates: ['one', 'two'] },
+    ] }) }))
+    render(<TokenUsageSection close={() => {}} t={t} />)
+    await screen.findByText(t('pricing.identificationDetails'))
+    expect(screen.getByText(/p\/unknown:/)).toBeTruthy()
+    expect(screen.getByText(/collision:/).textContent).toContain('one, two')
+    expect(screen.queryByRole('button', { name: /关联/ })).toBeNull()
+  })
   it('shows loading then the two metric rows and the per-model table', async () => {
     stubFetch(async () => ({ ok: true, json: async () => SUMMARY }))
     render(<TokenUsageSection close={() => {}} t={t} />)

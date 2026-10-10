@@ -3,8 +3,8 @@
  * price rules (¥ per million tokens) backing the cost figures of the stats
  * page. The single source is the cloud feed mirrored on every dsh startup
  * into `<data dir>/pricing.ccsa.json` (the same model-price-table source
- * cc-switch-analyzer pulls); an absent or malformed mirror logs once and
- * reads as empty, so a broken table never blocks the stats route. Pricing
+ * cc-switch-analyzer pulls); an absent or malformed mirror reports costs
+ * unavailable while usage remains readable. Pricing
  * data used to layer a hand-edited `pricing.json` on top, but that path was
  * removed (see docs/decisions/implemented/2026-09-05-abolish-manual-pricing-json.md):
  * no UI entry point, wholesale-replace semantics silently drop time rules
@@ -14,8 +14,8 @@
  * time-rule container first, then context tier, then peak slot (a slot may be
  * restricted to ISO weekdays via `daysOfWeek`, matched on the request's local
  * day) — and the aggregation keeps rows per (day, model, rate identity), so
- * re-pricing under an updated table needs no rollup rebuild. The context size
- * for tier matching is approximated by the request's input-side tokens (input +
+ * a pricing-context change rebuilds stored identities from raw history.
+ * Context size is approximated by the request's input-side tokens (input +
  * cacheRead + cacheWrite): the log does not carry the raw context size.
  *
  * @module token-usage/pricing
@@ -23,14 +23,18 @@
 
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
+import { createHash } from 'node:crypto'
+import { createModelResolver, modelKey, validateModelIdentities } from './model-resolution.ts'
 import { consoleLogger, type LoggerLike } from './log.ts'
 import type {
   ContextTier,
   DailySlot,
   ModelPricing,
   ModelRates,
+  ModelResolution,
   PricingOverviewModel,
   PricingTable,
+  PricingUnavailableReason,
   RateKey,
   TimeRule,
   UsageTotals,
@@ -146,6 +150,7 @@ export interface CloudPricingModel extends CloudRates {
   contextTiers?: CloudTier[]
   timeRules?: CloudTimeRule[]
   aliases?: string[]
+  aliasPatterns?: string[]
 }
 
 /** The cloud feed envelope. */
@@ -247,9 +252,15 @@ export function coerceCloudPricing(value: unknown): CloudPricingData | null {
   if (!Array.isArray(feed.models)) return null
   if (typeof feed.currency !== 'string' || feed.currency !== 'RMB') return null
   const models: CloudPricingModel[] = []
+  const identities: CanonicalModelRef[] = []
   for (const raw of feed.models as unknown[]) {
     if (typeof raw !== 'object' || raw === null) continue
     const row = raw as Record<string, unknown>
+    if (row.aliasPatterns !== undefined && (!Array.isArray(row.aliasPatterns)
+      || !row.aliasPatterns.every(pattern => typeof pattern === 'string' && pattern !== ''))) return null
+    if (typeof row.modelId === 'string' && row.modelId !== '') {
+      identities.push({ modelId: row.modelId, ...(Array.isArray(row.aliasPatterns) ? { aliasPatterns: row.aliasPatterns as string[] } : {}) })
+    } else if (row.aliasPatterns !== undefined) return null
     const rates = coerceRates(raw)
     if (rates === null || typeof row.modelId !== 'string' || row.modelId === '') continue
     models.push({
@@ -271,8 +282,10 @@ export function coerceCloudPricing(value: unknown): CloudPricingData | null {
       ...(Array.isArray(row.aliases) && row.aliases.every(alias => typeof alias === 'string')
         ? { aliases: row.aliases as string[] }
         : {}),
+      ...(Array.isArray(row.aliasPatterns) ? { aliasPatterns: row.aliasPatterns as string[] } : {}),
     })
   }
+  try { validateModelIdentities(identities) } catch { return null }
   return {
     version: typeof feed.version === 'number' ? feed.version : 0,
     updatedAt: typeof feed.updatedAt === 'number' ? feed.updatedAt : 0,
@@ -343,10 +356,12 @@ function cloudModelRates(model: CloudPricingModel): ModelRates {
  * @returns the flat table keyed by model ids and aliases.
  */
 export function cloudToTable(feed: CloudPricingData): PricingTable {
-  const table: PricingTable = {}
+  const table: PricingTable = Object.create(null)
+  const identify = createModelResolver(feed.models)
   for (const model of feed.models) {
     for (const alias of model.aliases ?? []) {
-      if (alias !== '' && !(alias in table)) table[alias] = cloudModelRates(model)
+      const resolution = identify(alias)
+      if (alias !== '' && resolution.modelId === model.modelId) table[alias] = cloudModelRates(model)
     }
   }
   for (const model of feed.models) table[model.modelId] = cloudModelRates(model)
@@ -357,12 +372,13 @@ export function cloudToTable(feed: CloudPricingData): PricingTable {
 export interface CanonicalModelRef {
   modelId: string
   aliases?: readonly string[]
+  aliasPatterns?: readonly string[]
 }
 
 /**
  * Map every priced name (modelId and each alias) onto its canonical
  * modelId, using the same collision order as {@link cloudToTable}:
- * aliases first (first writer wins), model ids last (always overwrite).
+ * case-insensitive model IDs win over aliases; shared aliases stay absent.
  * Names that do not appear in the feed are absent; callers fall back
  * to the raw name.
  * @param models - the feed's model rows (or the overview projection).
@@ -370,12 +386,16 @@ export interface CanonicalModelRef {
  */
 export function canonicalMapOf(models: readonly CanonicalModelRef[]): Map<string, string> {
   const map = new Map<string, string>()
+  const identify = createModelResolver(models)
   for (const model of models) {
-    for (const alias of model.aliases ?? []) {
-      if (alias !== '' && !map.has(alias)) map.set(alias, model.modelId)
+    for (const name of [model.modelId, ...model.aliases ?? []]) {
+      const result = identify(name)
+      if (name !== '' && result.modelId !== undefined) {
+        map.set(name, result.modelId)
+        map.set(modelKey(name), result.modelId)
+      }
     }
   }
-  for (const model of models) map.set(model.modelId, model.modelId)
   return map
 }
 
@@ -388,7 +408,7 @@ export function canonicalMapOf(models: readonly CanonicalModelRef[]): Map<string
  * @returns the name the byModel table should fold onto.
  */
 export function canonicalName(name: string, map?: ReadonlyMap<string, string>): string {
-  return map?.get(name) ?? name
+  return map?.get(name) ?? map?.get(modelKey(name)) ?? name
 }
 
 // ---------------------------------------------------------------------------
@@ -550,23 +570,105 @@ async function readJsonFile(dir: string, name: string, logger: LoggerLike = cons
 
 /**
  * The synced cloud table of one data directory plus the alias → modelId
- * map, from a single feed parse so the stats route does not read the
- * mirror twice for the two shapes.
+ * lookup, compiled identity resolver, exchange rate and history fingerprint
+ * from one validated feed snapshot.
  * @param dir - the plugin's data directory.
  * @param logger - diagnostic sink (defaults to console).
  * @returns the flat table and the canonical map (both empty when absent).
  */
-export async function readPricingContext(dir: string, logger: LoggerLike = consoleLogger): Promise<{
+export interface PricingContext {
+  unavailableReason?: PricingUnavailableReason
   table: PricingTable
   canonical: Map<string, string>
-}> {
-  const feed = coerceCloudPricing(await readJsonFile(dir, PRICING_CCSA_FILE, logger))
-  if (feed === null) return { table: {}, canonical: new Map() }
-  return { table: cloudToTable(feed), canonical: canonicalMapOf(feed.models) }
+  available: boolean
+  fingerprint: string
+  usdExchangeRate: number
+  models: PricingOverviewModel[]
+  resolveModel(name: string): ModelResolution
+  ratesForModel(name: string): ModelRates | undefined
+}
+
+/** One immutable feed snapshot; its indexes are private and resolutions lazy. */
+export function pricingContextOf(feed: CloudPricingData | null, unavailableReason: PricingUnavailableReason = 'invalid-feed'): PricingContext {
+  const identify = createModelResolver(feed?.models ?? [])
+  const table: PricingTable = Object.create(null)
+  const rates = new Map<string, ModelRates>()
+  const models = (feed?.models ?? []).map(model => {
+    const rules = cloudModelRates(model)
+    rates.set(model.modelId, rules)
+    table[model.modelId] = rules
+    return {
+      modelId: model.modelId,
+      aliases: [...model.aliases ?? []],
+      aliasPatterns: [...model.aliasPatterns ?? []],
+      ...(model.family !== undefined ? { family: model.family } : {}),
+      rules,
+    }
+  })
+  const resolveModel = (name: string): ModelResolution => {
+    const result = identify(name)
+    if (result.modelId !== undefined) table[name] = rates.get(result.modelId)!
+    return result
+  }
+  class CanonicalIndex extends Map<string, string> {
+    override get(name: string): string | undefined {
+      const id = resolveModel(name).modelId
+      if (id !== undefined) this.set(name, id)
+      return id
+    }
+    override has(name: string): boolean { return this.get(name) !== undefined }
+  }
+  const canonical = new CanonicalIndex()
+  // Preserve the existing dictionary/index entries for model details while
+  // newly observed provider and regex names are resolved through the same index.
+  for (const model of models) {
+    for (const name of [model.modelId, ...model.aliases]) if (name !== '') canonical.get(name)
+  }
+  // Display labels, family, feed version/timestamp and exchange rate cannot
+  // change RateKey. Slot order is retained because RateKey uses slot indexes.
+  const semantic = models.map(model => ({
+    modelId: modelKey(model.modelId),
+    aliases: [...new Set(model.aliases.map(modelKey))].sort(),
+    aliasPatterns: [...model.aliasPatterns ?? []].sort(),
+    rules: model.rules,
+  })).sort((a, b) => a.modelId.localeCompare(b.modelId))
+  const fingerprint = createHash('sha256').update(JSON.stringify({ algorithm: 1, available: feed !== null, models: semantic },
+    (key, value: unknown) => key === 'label' ? undefined : value)).digest('hex')
+  return {
+    ...(feed === null ? { unavailableReason } : {}),
+    table, canonical, available: feed !== null, fingerprint,
+    usdExchangeRate: feed?.usdExchangeRate ?? DEFAULT_USD_EXCHANGE_RATE,
+    models, resolveModel,
+    ratesForModel: name => {
+      const id = resolveModel(name).modelId
+      return id === undefined ? undefined : rates.get(id)
+    },
+  }
+}
+
+const contextCache = new Map<string, { source: string | null; reason: PricingUnavailableReason; context: PricingContext }>()
+
+export async function readPricingContext(dir: string, logger: LoggerLike = consoleLogger): Promise<PricingContext> {
+  let reason: PricingUnavailableReason = 'invalid-feed'
+  const source = await readFile(join(dir, PRICING_CCSA_FILE), 'utf8').catch((error: unknown) => {
+    reason = (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'unreadable'
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') logger.error('[token-usage] cannot read pricing mirror:', error)
+    return null
+  })
+  const cached = contextCache.get(dir)
+  if (cached !== undefined && cached.source === source && (source !== null || cached.reason === reason)) return cached.context
+  let value: unknown = null
+  if (source !== null) {
+    try { value = JSON.parse(source) } catch { reason = 'invalid-json'; logger.error('[token-usage] pricing mirror is not valid JSON') }
+  }
+  const context = pricingContextOf(coerceCloudPricing(value), reason)
+  contextCache.set(dir, { source, reason, context })
+  return context
 }
 
 async function readSyncedPricing(dir: string, logger: LoggerLike = consoleLogger): Promise<PricingTable> {
-  return (await readPricingContext(dir, logger)).table
+  const feed = coerceCloudPricing(await readJsonFile(dir, PRICING_CCSA_FILE, logger))
+  return feed === null ? {} : cloudToTable(feed)
 }
 
 /**
@@ -608,14 +710,7 @@ export async function readUsdExchangeRate(dir: string, logger: LoggerLike = cons
  * @returns the model rows (possibly empty).
  */
 export async function readPricingOverview(dir: string, logger: LoggerLike = consoleLogger): Promise<PricingOverviewModel[]> {
-  const feed = coerceCloudPricing(await readJsonFile(dir, PRICING_CCSA_FILE, logger))
-  if (feed === null) return []
-  return feed.models.map(model => ({
-    modelId: model.modelId,
-    aliases: [...model.aliases ?? []],
-    ...(model.family !== undefined ? { family: model.family } : {}),
-    rules: cloudModelRates(model),
-  }))
+  return (await readPricingContext(dir, logger)).models
 }
 
 /** The outcome of one successful cloud sync, for the command's reply. */

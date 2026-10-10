@@ -141,12 +141,12 @@ describe('readRollup / writeRollup', () => {
     expect(loaded!.total.requests).toBe(1)
   })
 
-  it('reads null for a pre-bySession rollup so it rebuilds from the day files', async () => {
+  it('retains pre-bySession usage but requires a rebuild before trusting its derived identities', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'token-usage-rollup-'))
     const legacy = rollupWith('2026-01-15', [record(1_700_000_000_000, 'deepseek-chat')])
     delete (legacy as Partial<typeof legacy>).bySession
     await writeFile(join(dir, 'rollup.json'), JSON.stringify(legacy))
-    await expect(readRollup(dir)).resolves.toBeNull()
+    await expect(readRollup(dir)).resolves.toMatchObject({ total: legacy.total, bySession: [], requiresRebuild: true })
   })
 
   it('round-trips the session dimension alongside the rate rows', async () => {

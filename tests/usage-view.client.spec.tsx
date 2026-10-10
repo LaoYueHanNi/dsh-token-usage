@@ -238,6 +238,14 @@ afterEach(() => {
 })
 
 describe('UsageView', () => {
+  it.each(['pricing-unavailable', 'history-incomplete'] as const)('retains tokens but hides costs for %s', async costState => {
+    stubFetch({ root: { ...ROOT_SUMMARY, costState, totalCost: 9876.54, byModel: ROOT_SUMMARY.byModel.map(row => ({ ...row, cost: 9876.54 })) } })
+    renderView()
+    await screen.findByRole('status')
+    expect(screen.getByRole('status').textContent).toBe(t(costState === 'history-incomplete' ? 'pricing.historyIncomplete' : 'pricing.unavailable'))
+    expect(document.body.textContent).not.toContain('9876.54')
+    expect(screen.getByRole('table', { name: t('byModel.title') })).toBeTruthy()
+  })
   it('opts into the host composer overlay so conversation width handles hide', () => {
     stubFetch()
     renderView()

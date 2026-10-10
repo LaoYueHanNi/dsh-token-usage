@@ -34,6 +34,8 @@ const t = ((key: string, params?: Record<string, unknown>): string => {
 
 /** The subtree-scoped totals: cost ¥12.34, 1.5M tokens, 80% hit rate. */
 const TREE_SUMMARY: UsageSummary = {
+  costState: 'ready',
+  modelResolutions: [],
   dataDir: 'C:/data/token-usage',
   currency: 'CNY',
   usdExchangeRate: 7,
@@ -194,6 +196,16 @@ afterEach(() => {
 })
 
 describe('CostPill', () => {
+  it.each(['pricing-unavailable', 'history-incomplete'] as const)('hides chip and panel costs for %s', async costState => {
+    stubFetch({ ...TREE_DETAIL, costState, totalCost: 9876.54 })
+    render(<CostPill {...propsOf('session-a', SOLO_BY_ID)} />)
+    const button = await screen.findByRole('button')
+    expect(button.textContent).toContain('—')
+    fireEvent.click(button)
+    await screen.findByRole('status')
+    expect(document.body.textContent).not.toContain('9876.54')
+    expect(screen.getByRole('status').textContent).toBe(t(costState === 'history-incomplete' ? 'pricing.historyIncomplete' : 'pricing.unavailable'))
+  })
   it('renders nothing before the first fetch lands (empty rule)', () => {
     stubFetch(TREE_SUMMARY)
     const { container } = render(<CostPill {...propsOf('s1')} />)
