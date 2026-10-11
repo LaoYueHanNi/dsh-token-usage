@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
 import type { UsageSummary } from '../wire.ts'
 import { currencyViewOf } from './format.ts'
+import { costsAvailable } from './PricingStatus.tsx'
 import { totalTokens } from './day.ts'
 import { motionAllowed, runCostPop } from './cost-inflate-motion.ts'
 import {
@@ -107,6 +108,7 @@ export function useCostInflate(
   }, [costRef])
 
   const onSummary = useCallback((summary: UsageSummary) => {
+    if (!costsAvailable(summary.costState)) { reset(); return }
     const nextSnapshot: PrevChipSnapshot = {
       totals: summary.total,
       totalCost: summary.totalCost,
@@ -141,7 +143,7 @@ export function useCostInflate(
     } else {
       schedule(maybeClearOverflow, v.inflateMs + 40)
     }
-  }, [maybeClearOverflow, playCostPop, schedule])
+  }, [maybeClearOverflow, playCostPop, schedule, reset])
 
   return { flies, flyOverflow, onSummary, reset }
 }

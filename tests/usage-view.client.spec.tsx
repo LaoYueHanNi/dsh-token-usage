@@ -6,13 +6,14 @@
  * subagent drill-in, and the empty-session em-dash degradation.
  */
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SessionListState } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { SessionStatsProjection } from '@deepseek-ai/dsh-session-stats/client'
 import { UsageView } from '../src/client/UsageView.tsx'
 import { zh } from '../src/client/locales.ts'
-import type { UsageSummary } from '../src/wire.ts'
+import { ASSOCIATIONS_PATH, PRICING_PATH } from '../src/wire.ts'
+import type { ModelResolution, PricingAssociationsPayload, UsageSummary } from '../src/wire.ts'
 import {
   makeSessionStateHook, makeUseProjection,
 } from './test-kit.ts'
@@ -237,7 +238,73 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
+beforeAll(() => {
+  HTMLDialogElement.prototype.showModal = function () { this.open = true }
+  HTMLDialogElement.prototype.close = function () { this.open = false; this.dispatchEvent(new Event('close')) }
+})
+
 describe('UsageView', () => {
+  it('associates a missing session model without changing tree scope or child groups', async () => {
+    const sourceModel = 'p/internal', targetModelId = 'deepseek-chat'
+    let saved = false
+    const automatic: ModelResolution = { rawName: sourceModel, status: 'unmatched', candidates: [], strippedPrefix: false }
+    const association = { sourceModel, targetModelId, resolvedTargetModelId: targetModelId, state: 'active' as const }
+    const associations = (): PricingAssociationsPayload => ({ storageState: 'ready', pricingAvailable: true, writesPaused: false,
+      directoryToken: 'directory', revision: saved ? 1 : 0, associations: saved ? [association] : [], resolution: saved
+        ? { ...automatic, status: 'matched', modelId: targetModelId, method: 'manual', association, automatic } : automatic })
+    const fetch = vi.fn(async (input: RequestInfo | URL, options?: RequestInit) => {
+      const url = new URL(String(input), 'http://localhost')
+      if (url.pathname === ASSOCIATIONS_PATH) {
+        if (options?.method === 'POST') saved = true
+        return Response.json(associations())
+      }
+      if (url.pathname === PRICING_PATH) return Response.json({ currency: 'CNY', usdExchangeRate: 7, costState: 'ready', models: [{ modelId: targetModelId, aliasPatterns: [], rules: {
+        base: { inputPerMillion: 1, outputPerMillion: 2 }, timeRules: [], contextTiers: [], dailySlots: [],
+      } }] })
+      const original = url.searchParams.getAll('sessionId').length > 1 ? TREE_SUMMARY : ROOT_SUMMARY
+      return Response.json({ ...original, costState: 'ready', modelResolutions: [associations().resolution], unpricedModels: saved ? [] : [sourceModel],
+        byModel: [{ ...original.byModel[0]!, model: saved ? targetModelId : sourceModel }] })
+    })
+    vi.stubGlobal('fetch', fetch)
+    renderView()
+    fireEvent.click(await screen.findByRole('button', { name: '含子会话' }))
+    await waitFor(() => expect(sawCall(fetch, ['root', 'child'], [['child']])).toBe(true))
+    const statsCalls = () => fetch.mock.calls.filter(call => String(call[0]).startsWith('/token-usage/stats'))
+    const scopedUrl = String(statsCalls().at(-1)![0])
+    const table = screen.getByRole('table', { name: '按模型' })
+    fireEvent.click(within(table).getByRole('button', { name: t('pricing.unpriced') }))
+    fireEvent.click(screen.getByRole('button', { name: t('association.choose') }))
+    const dialog = await screen.findByRole('dialog', { name: t('association.title') })
+    const search = await within(dialog).findByRole('searchbox')
+    fireEvent.change(search, { target: { value: targetModelId } })
+    fireEvent.click(within(dialog).getByRole('radio'))
+    fireEvent.click(within(dialog).getByRole('button', { name: t('association.save') }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: t('association.title') })).toBeNull())
+    const associationTip = t('association.tooltip', { models: sourceModel })
+    await screen.findByRole('img', { name: associationTip })
+    expect(String(statsCalls().at(-1)![0])).toBe(scopedUrl)
+    expect(screen.getByRole('button', { name: '含子会话' }).getAttribute('aria-pressed')).toBe('true')
+    const associationIcon = screen.getByRole('img', { name: associationTip })
+    expect(associationIcon.hasAttribute('title')).toBe(false)
+    fireEvent.mouseEnter(associationIcon)
+    expect(screen.getByRole('tooltip').textContent).toBe(associationTip)
+    fireEvent.mouseLeave(associationIcon)
+  })
+  it('shows association storage failure with retained usage', async () => {
+    stubFetch({ root: { ...ROOT_SUMMARY, associationStorageError: 'unreadable' } })
+    renderView()
+    await screen.findByRole('status')
+    expect(screen.getByRole('status').textContent).toBe(t('pricing.associationStorageUnavailable'))
+    expect(screen.getByRole('table', { name: t('byModel.title') })).toBeTruthy()
+  })
+  it.each(['pricing-unavailable', 'history-incomplete'] as const)('retains tokens but hides costs for %s', async costState => {
+    stubFetch({ root: { ...ROOT_SUMMARY, costState, totalCost: 9876.54, byModel: ROOT_SUMMARY.byModel.map(row => ({ ...row, cost: 9876.54 })) } })
+    renderView()
+    await screen.findByRole('status')
+    expect(screen.getByRole('status').textContent).toBe(t(costState === 'history-incomplete' ? 'pricing.historyIncomplete' : 'pricing.unavailable'))
+    expect(document.body.textContent).not.toContain('9876.54')
+    expect(screen.getByRole('table', { name: t('byModel.title') })).toBeTruthy()
+  })
   it('opts into the host composer overlay so conversation width handles hide', () => {
     stubFetch()
     renderView()

@@ -19,7 +19,6 @@
  */
 
 import { homedir } from 'node:os'
-import { unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { Context, Volatile } from '@deepseek-ai/cordis'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
@@ -43,13 +42,16 @@ import type {} from '@deepseek-ai/dsh-llm'
 import { UsageLog } from './usage-log.ts'
 import { SessionMetaStore } from './session-meta.ts'
 import { cleanSource, copyData, type MigrationProgress } from './migrate.ts'
-import { resolvePricingUrl, syncCloudPricing, type PricingSourceInput } from './pricing.ts'
+import { resolvePricingUrl, syncCloudPricing, type CloudSyncResult, type PricingSourceInput } from './pricing.ts'
+import { PricingAssociationService } from './pricing-association-service.ts'
+import { createPricingAssociationsRoute } from './pricing-associations-route.ts'
+import { withPricingDirectoryMigration } from './pricing-associations.ts'
 import { extractFirstTokenTimeFromStream, modelOfEvent, recordOfEvent, type RequestTiming } from './usage-record.ts'
 import { markTimingSynced, readSyncState } from './sync-state.ts'
 import { autoSyncIfNeeded, syncHistory, titleOfEvent } from './sync.ts'
 import { clearRecordCache, warmRecordCache } from './record-cache.ts'
-import { ROLLUP_FILE_NAME, ROLLUP_TMP_FILE_NAME } from './rollup.ts'
-import { createDirectoryGuardRoute, createFullSyncRoute, createMigrationRoute, createPricingRoute, createStatsRoute, type FullSyncTrigger } from './stats-route.ts'
+import { invalidateSummary } from './stats.ts'
+import { createDirectoryGuardRoute, createFullSyncRoute, createMigrationRoute, createPricingRoute, createPricingSyncRoute, createStatsRoute, type FullSyncTrigger } from './stats-route.ts'
 import { currencyOfRegion, type DirectoryGuardView, type FullSyncView, type QuotaPayload } from './wire.ts'
 import { createQuotaRoute } from './quota/quota-route.ts'
 import { QuotaService } from './quota/quota-service.ts'
@@ -342,6 +344,7 @@ export function apply(ctx: Context, config: Config = {}) {
    * open (and the one the startup pricing sync targets).
    */
   const currentDir = (): string => current?.dir ?? resolveDataDir(sectionSource().path)
+  const associations = new PricingAssociationService(currentDir, logger)
 
   /**
    * Move the running data directory as a two-phase commit: refuse while any
@@ -365,38 +368,45 @@ export function apply(ctx: Context, config: Config = {}) {
       throw new Error(`cannot move the data directory while ${String(interacting)} session(s) are mid-conversation; let them finish and save again`)
     }
 
-    // Quiesce the source: drain queued appends so the files on disk are final.
-    await previous.log.flush()
-    // The metadata index writes on its own queue; drain it too, so the
-    // sessions.json that migrates is final.
-    await previous.meta.flush()
+    await withPricingDirectoryMigration(previous.dir, nextDir, async () => {
+      // Quiesce the source: drain queued appends so the files on disk are final.
+      await previous.log.flush()
+      // The metadata index writes on its own queue; drain it too, so the
+      // sessions.json that migrates is final.
+      await previous.meta.flush()
 
-    migration = { phase: 'copying', done: 0, total: 0 }
-    const report = (progress: MigrationProgress): void => {
-      migration = { ...progress }
-      logger.info(`[token-usage] moving ${String(progress.done)}/${String(progress.total)} (${progress.phase})`)
-    }
-    // Phase 1: copy everything, verbatim. An existing same-named target file
-    // wins (live data or a user placement); a failure aborts before the flip.
-    await copyData(previous.dir, nextDir, report)
+      migration = { phase: 'copying', done: 0, total: 0 }
+      const report = (progress: MigrationProgress): void => {
+        migration = { ...progress }
+        logger.info(`[token-usage] moving ${String(progress.done)}/${String(progress.total)} (${progress.phase})`)
+      }
+      // Phase 1: copy everything, verbatim. An existing same-named target file
+      // wins (live data or a user placement); a failure aborts before the flip.
+      await copyData(previous.dir, nextDir, report)
 
-    // Phase 2: flip the running configuration. A fresh log knows the rows the
-    // target already holds, so post-flip events dedupe against them; a fresh
-    // metadata index points at the copied sessions.json (mtime-stamped).
-    const log = new UsageLog(nextDir, logger)
-    await log.scan()
-    const moved = await log.refileByEventDay()
-    current = { dir: nextDir, log, meta: new SessionMetaStore(nextDir, logger) }
-    clearRecordCache(previous.dir)
-    if (moved > 0) invalidateDerivedState(nextDir)
-    void warmRecordCache(nextDir, undefined, logger)
+      // Phase 2: flip the running configuration. A fresh log knows the rows the
+      // target already holds, so post-flip events dedupe against them; a fresh
+      // metadata index points at the copied sessions.json (mtime-stamped).
+      const log = new UsageLog(nextDir, logger)
+      await log.scan()
+      const moved = await log.refileByEventDay()
+      current = { dir: nextDir, log, meta: new SessionMetaStore(nextDir, logger) }
+      associations.directoryChanged()
+      clearRecordCache(previous.dir)
+      if (moved > 0) invalidateDerivedState(nextDir)
+      void warmRecordCache(nextDir, undefined, logger)
 
-    // Phase 3: remove the source files that verifiably landed, then the
-    // emptied directory. Nothing unknown is touched.
-    migration = { phase: 'cleaning', done: 0, total: 0 }
-    const result = await cleanSource(previous.dir, nextDir, report, logger)
-    migration = undefined
-    logger.info(`[token-usage] data directory moved to ${nextDir} (${String(result.cleaned)} files relocated)`)
+      // Phase 3: remove the source files that verifiably landed, then the
+      // emptied directory. Nothing unknown is touched.
+      migration = { phase: 'cleaning', done: 0, total: 0 }
+      const result = await cleanSource(previous.dir, nextDir, report, logger)
+      migration = undefined
+      logger.info(`[token-usage] data directory moved to ${nextDir} (${String(result.cleaned)} files relocated)`)
+    })
+    // A download bound to the old directory is now stale. Refresh after the
+    // pause ends, so a first mirror or simultaneous region edit reaches the
+    // directory that is actually in force.
+    syncPricing()
   }
 
   // The feed URL the latest dispatch targeted; the startup gate reads only
@@ -437,22 +447,33 @@ export function apply(ctx: Context, config: Config = {}) {
    * in force, so a completed relocation re-seeds the new location even
    * though the pricing files traveled with the migration.
    */
-  const syncPricing = (): void => {
+  const pricingSyncs = new Map<string, Promise<CloudSyncResult>>()
+  const runPricingSync = (): Promise<CloudSyncResult> => {
     // Resolve once and capture: the .then below runs when its fetch settles,
     // by which time a newer dispatch may have repointed `lastSyncedUrl`, so
     // the log line must read the URL this fetch actually used.
     const url = resolvePricingUrl(effectiveInput())
+    const dir = currentDir()
+    const key = JSON.stringify([dir, url])
+    const running = pricingSyncs.get(key)
+    if (running !== undefined) return running
     lastSyncedUrl = url
-    void syncCloudPricing(currentDir(), url)
+    const task = syncCloudPricing(dir, url, () => currentDir() === dir && resolvePricingUrl(effectiveInput()) === url)
       .then((result) => {
-        logger.info(`[token-usage] pricing sync (${url}): version ${result.version} (${result.models} models, ${result.aliases} aliases, USD rate ${result.usdExchangeRate})`)
+        logger.info(`[token-usage] pricing sync (${url}): version ${result.version} (${result.models} models, ${result.aliasPatterns} alias patterns, USD rate ${result.usdExchangeRate})`)
+        return result
       })
       .catch((error: unknown) => {
         // Offline or a slow network must never break the plugin: the previous
         // mirror (if any) stays active until a later sync retries the fetch.
         logger.warn('[token-usage] pricing sync failed:', error instanceof Error ? error.message : String(error))
+        throw error
       })
+      .finally(() => { pricingSyncs.delete(key) })
+    pricingSyncs.set(key, task)
+    return task
   }
+  const syncPricing = (): void => { void runPricingSync().catch(() => {}) }
 
   /**
    * Request a refresh of the mirror at the currently effective URL. Two
@@ -646,8 +667,7 @@ export function apply(ctx: Context, config: Config = {}) {
    */
   const invalidateDerivedState = (dir: string): void => {
     clearRecordCache(dir)
-    void unlink(join(dir, ROLLUP_FILE_NAME)).catch(() => undefined)
-    void unlink(join(dir, ROLLUP_TMP_FILE_NAME)).catch(() => undefined)
+    void invalidateSummary(dir).catch(error => logger.error('[token-usage] cannot invalidate rollup:', error))
   }
   const quotaService = new QuotaService({
     resolveProvider: sessionId => resolveCurrentProvider({
@@ -688,6 +708,7 @@ export function apply(ctx: Context, config: Config = {}) {
     const log = new UsageLog(dir, logger)
     const meta = new SessionMetaStore(dir, logger)
     current = { dir, log, meta }
+    associations.directoryChanged()
     void warmRecordCache(dir, undefined, logger)
 
     // Last-known route model per session: failure rows need a model to
@@ -847,6 +868,12 @@ export function apply(ctx: Context, config: Config = {}) {
       webCtx.effect(() => webCtx.webServer.register(
         createPricingRoute(currentDir, { currency: () => currencyOfRegion(effectiveInput().pricingRegion), logger }),
       ), 'token-usage: pricing route')
+      webCtx.effect(() => webCtx.webServer.register(
+        createPricingSyncRoute(runPricingSync),
+      ), 'token-usage: pricing sync route')
+      webCtx.effect(() => webCtx.webServer.register(
+        createPricingAssociationsRoute(associations, logger),
+      ), 'token-usage: pricing associations route')
       // The input-bar quota button's data channel: the current provider's
       // quota snapshot (rate-limit windows / balance), served by the quota
       // service. A disabled feature still answers — with the `disabled`

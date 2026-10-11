@@ -69,8 +69,15 @@ export function clearRecordCache(dir?: string): void {
  * @param name - the day-file name.
  */
 export async function readDayFile(dir: string, name: string, logger: LoggerLike = consoleLogger): Promise<UsageRecord[]> {
+  return (await readDayFileChecked(dir, name, logger)).records
+}
+
+/** Repricing must distinguish an empty log from a partial or unreadable log. */
+export async function readDayFileChecked(dir: string, name: string, logger: LoggerLike = consoleLogger): Promise<{ records: UsageRecord[]; complete: boolean }> {
+  let complete = true
   const text = await readFile(join(dir, name), 'utf8').catch((error: unknown) => {
     logger.error(`[token-usage] cannot read ${name}:`, error)
+    complete = false
     return ''
   })
   const records: UsageRecord[] = []
@@ -78,8 +85,9 @@ export async function readDayFile(dir: string, name: string, logger: LoggerLike 
     if (line === '') continue
     const record = parseRecord(line)
     if (record !== null) records.push(record)
+    else complete = false
   }
-  return records
+  return { records, complete }
 }
 
 /** List the data directory's day-file names in ascending date order ([] when absent). */

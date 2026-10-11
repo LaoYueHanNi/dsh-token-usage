@@ -47,6 +47,10 @@ import { STATS_PATH, encodeStatsQuery } from '../wire.ts'
 import { useAsyncResource, useDebouncedValue } from './async-resource.ts'
 import { totalTokens } from './day.ts'
 import { currencyViewOf, formatCost, formatTokens, hitRateDisplay } from './format.ts'
+import { PricingStatus, costsAvailable } from './PricingStatus.tsx'
+import { ModelAssociationBadge, PricingAssociationProvider, UnpricedModelTag } from './PricingAssociations.tsx'
+import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
+import { usePricingAssociationRefresh } from './pricing-associations.ts'
 import { buildChildIndex, buildStatsFreshnessKey, subtreeIds } from './session-stats.ts'
 import { useColorSchemeMirror } from './use-color-scheme.ts'
 import { CostDeltaFlyLabel } from './CostDeltaFlyLabel.tsx'
@@ -112,10 +116,12 @@ export function splitUsage(tree: UsageSummary, self: UsageSummary): UsageSplit {
  * @returns the pill (plus its open detail panel), or null when empty/unavailable.
  */
 export function CostPill({ sessionId, useSessions, useProjection, t }: CostPillProps): ReactNode | null {
-  const rootRef = useRef<HTMLSpanElement>(null)
+  const rootRef = useRef<HTMLDivElement>(null)
   const costRef = useRef<HTMLSpanElement>(null)
   useColorSchemeMirror(rootRef)
   const [open, setOpen] = useState(false)
+  const [associationTick, setAssociationTick] = useState(0)
+  usePricingAssociationRefresh(() => setAssociationTick(tick => tick + 1))
 
   // Same membership as the Usage tab's "with subagents" scope: the active
   // session plus every origin=subagent descendant. An ordinary fork is not
@@ -146,7 +152,7 @@ export function CostPill({ sessionId, useSessions, useProjection, t }: CostPillP
       const ids = (idsPart ?? '').split('\n').filter(id => id !== '')
       return fetchSummary(ids, 'chip', signal)
     },
-    [debouncedKey],
+    [debouncedKey, associationTick],
     { silentAfterFirst: true, retryToken: 0 },
   )
   const summary = treeRes.status === 'ready' ? treeRes.value : null
@@ -173,7 +179,7 @@ export function CostPill({ sessionId, useSessions, useProjection, t }: CostPillP
       const ids = (idsPart ?? '').split('\n').filter(id => id !== '')
       return fetchSummary(ids, 'session', signal)
     },
-    [open, debouncedKey],
+    [open, debouncedKey, associationTick],
     { silentAfterFirst: true, retryToken: 0 },
   )
   const [selfRes] = useAsyncResource<UsageSummary | null>(
@@ -181,7 +187,7 @@ export function CostPill({ sessionId, useSessions, useProjection, t }: CostPillP
       if (!open || sessionId === '') return Promise.resolve(null)
       return fetchSummary([sessionId], 'chip', signal)
     },
-    [open, sessionId, debouncedKey],
+    [open, sessionId, debouncedKey, associationTick],
     { silentAfterFirst: true, retryToken: 0 },
   )
 
@@ -233,7 +239,7 @@ export function CostPill({ sessionId, useSessions, useProjection, t }: CostPillP
   if (summary === null || summary.total.requests === 0) return null
 
   const view = currencyViewOf(summary)
-  const costText = formatCost(summary.totalCost, view)
+  const costText = costsAvailable(summary.costState) ? formatCost(summary.totalCost, view) : '—'
   const tokensValue = formatTokens(totalTokens(summary.total))
   const hit = hitRateDisplay(summary.total)
   const ariaLabel = hasSubs
@@ -248,7 +254,8 @@ export function CostPill({ sessionId, useSessions, useProjection, t }: CostPillP
   const subCount = scopeIds.length - 1
 
   return (
-    <span ref={rootRef} className={styles.root}>
+    <div ref={rootRef} className={styles.root}>
+    <PricingAssociationProvider resolutions={detail?.modelResolutions} feedVersion={summary.feedVersion} view={view} t={t}>
       <button
         type="button"
         className={styles.pill}
@@ -274,7 +281,7 @@ export function CostPill({ sessionId, useSessions, useProjection, t }: CostPillP
         </span>
       </button>
       {open && (
-        <span className={styles.panel} role="dialog" aria-label={t('panel.title')} style={{ left: panelLeft }}>
+        <div className={styles.panel} role="dialog" aria-label={t('panel.title')} style={{ left: panelLeft }}>
           <span className={styles.panelHead}>
             <span className={styles.panelTitle}>
               {t('panel.title')}
@@ -287,13 +294,14 @@ export function CostPill({ sessionId, useSessions, useProjection, t }: CostPillP
             <span className={styles.dot}>·</span>
             <span>{t('panel.hitRate', { value: hit.text })}</span>
           </span>
-          <span className={styles.rows}>
+          <div className={styles.rows}>
+            <PricingStatus costState={summary.costState} pricingUnavailableReason={summary.pricingUnavailableReason} associationStorageError={summary.associationStorageError} t={t} />
             <span className={styles.row}>
               <span className={styles.rowLabel}>{t('panel.self')}</span>
               <span className={styles.rowValue}>
                 {split === null
                   ? <span className={styles.pending}>…</span>
-                  : <>{formatCost(split.selfCost, view)}<span className={styles.tok}>{t('panel.tokens', { value: formatTokens(split.selfTokens) })}</span></>}
+                  : <>{costsAvailable(summary.costState) && costsAvailable(selfSummary?.costState) ? formatCost(split.selfCost, view) : '—'}<span className={styles.tok}>{t('panel.tokens', { value: formatTokens(split.selfTokens) })}</span></>}
               </span>
             </span>
             {hasSubs && (
@@ -302,11 +310,11 @@ export function CostPill({ sessionId, useSessions, useProjection, t }: CostPillP
                 <span className={styles.rowValue}>
                   {split === null
                     ? <span className={styles.pending}>…</span>
-                    : <>{formatCost(split.subsCost, view)}<span className={styles.tok}>{t('panel.tokens', { value: formatTokens(split.subsTokens) })}</span></>}
+                    : <>{costsAvailable(summary.costState) && costsAvailable(selfSummary?.costState) ? formatCost(split.subsCost, view) : '—'}<span className={styles.tok}>{t('panel.tokens', { value: formatTokens(split.subsTokens) })}</span></>}
                 </span>
               </span>
             )}
-          </span>
+          </div>
           <span className={styles.groupLabel}>{t('panel.byModel')}</span>
           <span className={styles.rows}>
             {detail === null
@@ -318,9 +326,9 @@ export function CostPill({ sessionId, useSessions, useProjection, t }: CostPillP
               : (
                   <>
                     {detail.byModel.map(row => (
-                      <ModelRow key={row.model} row={row} view={view} />
+                      <ModelRow key={row.model} row={row} view={view} t={t} unpriced={detail.unpricedModels.includes(row.model)} available={costsAvailable(detail.costState) && !detail.unpricedModels.includes(row.model)} />
                     ))}
-                    {detail.unpricedModels.length > 0 && (
+                    {costsAvailable(detail.costState) && detail.unpricedModels.length > 0 && (
                       <span className={`${styles.row} ${styles.unpriced}`}>
                         <span className={styles.rowLabel}>{t('panel.unpriced', { count: detail.unpricedModels.length })}</span>
                         <span className={styles.rowValue}>{t('panel.unpricedNote')}</span>
@@ -329,22 +337,25 @@ export function CostPill({ sessionId, useSessions, useProjection, t }: CostPillP
                   </>
                 )}
           </span>
-        </span>
+        </div>
       )}
-    </span>
+    </PricingAssociationProvider>
+    </div>
   )
 }
 
 /** One per-model breakdown row: model id + request count, billed cost, tokens. */
-function ModelRow({ row, view }: { row: CostedModelRow; view: ReturnType<typeof currencyViewOf> }): ReactNode {
+function ModelRow({ row, view, available, unpriced, t }: { row: CostedModelRow; view: ReturnType<typeof currencyViewOf>; available: boolean; unpriced: boolean; t: TranslateNS<'token-usage'> }): ReactNode {
   return (
     <span className={styles.row}>
       <span className={styles.rowLabel}>
         {row.model}
+        {unpriced && <UnpricedModelTag model={row.model} t={t} />}
+        <ModelAssociationBadge model={row.model} t={t} />
         <span className={styles.requests}>× {row.totals.requests}</span>
       </span>
       <span className={styles.rowValue}>
-        {formatCost(row.cost, view)}
+        {available ? formatCost(row.cost, view) : '—'}
         <span className={styles.tok}>{formatTokens(totalTokens(row.totals))}</span>
       </span>
     </span>

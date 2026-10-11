@@ -10,11 +10,17 @@ Status: implemented
 
 ## Decision
 
-**rollup / 原始记录仍按原始模型名存储。** 别名随云端 feed 变，写进聚合文件会在下次定价更新后分组错位。折叠只发生在读路径的费用层（`attachCosts`），用当前 feed 的 alias → modelId 映射。
+> [!NOTE]
+> 本决策中的旧 aliases 识别阶段已于 2026-10-11 由 [DR: 模型别名统一使用 aliasPatterns 正则](2026-10-11-regex-only-model-aliases.md) 取代；当前仅识别 ID 与正则。
 
-碰撞规则与 `cloudToTable` 一致：别名先写入（已占用的跳过），`modelId` 后写必赢（某名既是 A 的别名又是 B 的 modelId 时归 B）。表中没有的名字保持原样，未定价行互不合并。命中后行的 `model` 展示为该定价条目的 **modelId**，行上不列出别名。
+> [!NOTE]
+> 本决策中的 别名碰撞、未定价名称分组及历史无需重建的约定 已于 2026-10-10 由 [DR: 统一模型自动识别与带定价指纹的历史重算](2026-10-10-model-pricing-resolution.md) 取代。
 
-模型筛选下拉来自折叠后的 `byModel`，选项已是 modelId。`filterSummary`（及 recent / requestSeries）按规范名匹配：选 `deepseek-v4-flash` 含其全部别名用量；残留的别名 query 也覆盖整族；未定价名规范名等于自身，仍精确匹配。会话页 `UsageView` 走同一条 `attachCosts`，按模型表一并聚合。
+**rollup / 原始记录仍按原始模型名存储。** 别名随云端 feed 变，写进聚合文件会在下次定价更新后分组错位。折叠只发生在读路径的费用层（`attachCosts`），用当前 feed 的统一识别结果。定价上下文指纹变化时仍须从原始记录重新选择 RateKey；原始模型名不变。
+
+识别按原名 ID → 有效 provider 末段 ID → 原名与末段的完整正则分阶段执行，全部忽略大小写；跨模型正则命中报歧义，不能先写者赢。未定价完整名称按忽略大小写分组，保留原始拼写，不同 provider 保持独立。命中后行的 `model` 展示为该定价条目的 **modelId**，行上不列出别名。
+
+模型筛选下拉来自折叠后的 `byModel`，选项已是 modelId。`filterSummary`（及 recent / requestSeries）按规范名匹配：选 `deepseek-v4-flash` 含其全部别名用量；残留的别名 query 也覆盖整族；未定价名规范名等于自身，按完整名称忽略大小写匹配。会话页 `UsageView` 走同一条 `attachCosts`，按模型表一并聚合。
 
 `rateRows` / `byHour` / `bySession` 不改键：趋势图按小时把所有模型加总，会话表按会话再折，都不依赖 byModel 行名。
 
@@ -26,5 +32,5 @@ Status: implemented
 
 ## Consequences
 
-- 换来：按模型表一行一个定价 modelId；筛选选 modelId 覆盖整族；定价总览「已用」按 modelId 命中（此前只用了别名时徽标会漏）；定价 feed 更新后下次读取即按新别名重折，无需重建数据。
+- 换来：按模型表一行一个定价 modelId；筛选选 modelId 覆盖整族；定价总览「已用」按 modelId 命中（此前只用了别名时徽标会漏）；识别或价格规则变化时下次读取按新上下文重选历史 RateKey 并重折；源记录不完整则保留用量、隐藏费用。
 - 代价：筛选不再能只看某一个别名——这是刻意的。`byModel` 行名不再等于记录上的原始名，调试 raw rateRows 时两者会对不上（rateRows 仍是原始名，属有意保留）。canonical map 与 pricing table 必须来自同一次 feed 解析，stats 路由已用 `readPricingContext` 钉住这一点。

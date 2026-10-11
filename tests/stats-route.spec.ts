@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, unlink, writeFile } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -7,7 +7,11 @@ import { Context, Service } from '@deepseek-ai/cordis'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import * as plugin from '../src/index.ts'
 import { createDirectoryGuardRoute, createFullSyncRoute, createMigrationRoute, createPricingRoute, createStatsRoute, DIR_GUARD_PATH, FULL_SYNC_PATH, isSameOriginFetch, MIGRATION_PATH, PRICING_PATH, STATS_PATH } from '../src/stats-route.ts'
-import { currencyOfRegion } from '../src/wire.ts'
+import { ASSOCIATIONS_PATH, currencyOfRegion } from '../src/wire.ts'
+import { PRICING_SYNC_PATH } from '../src/wire.ts'
+import { createPricingSyncRoute } from '../src/stats-route.ts'
+import { AssociationError } from '../src/pricing-associations.ts'
+import { DEFAULT_PRICING_URL_OVERSEAS } from '../src/pricing.ts'
 import type { UsageRecord } from '../src/usage-record.ts'
 import { messageEvent } from './helpers.ts'
 
@@ -99,6 +103,60 @@ async function sessionDataDir(): Promise<string> {
 }
 
 describe('createStatsRoute', () => {
+  it('shares identification across whole/session/chip/filter/children and overview, including genuine zero rates', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'resolution-route-'))
+    const records = ['M', 'provider/m', 'ns/M-HIGH', 'free', 'other/missing'].map((model, i) => ({
+      ...dayRecord(1, model), requestId: String(i), sessionId: i === 2 ? 'child' : 'root',
+      usage: { inputTokens: 1_000_000, outputTokens: 0 },
+    }))
+    await writeFile(join(dir, 'usage-2026-01-11.jsonl'), records.map(r => JSON.stringify(r)).join('\n') + '\n')
+    await writeFile(join(dir, 'pricing.ccsa.json'), JSON.stringify({ currency: 'RMB', usdExchangeRate: 8, models: [
+      { modelId: 'm', aliasPatterns: ['^m-high$'], inputCostPerMillion: 2, outputCostPerMillion: 0 },
+      { modelId: 'free', inputCostPerMillion: 0, outputCostPerMillion: 0 },
+    ] }))
+    const route = createStatsRoute(() => dir)
+    const query = async (search = '') => {
+      const { res, captured } = fakeResponse(); await route.handler(fakeRequest({ url: STATS_PATH + search }), res)
+      expect(captured.status).toBe(200); return JSON.parse(captured.body)
+    }
+    const whole = await query()
+    expect(whole).toMatchObject({ costState: 'ready', totalCost: 6, usdExchangeRate: 8, total: { requests: 5 }, unpricedModels: ['other/missing'] })
+    expect(whole.byModel.find((row: { model: string }) => row.model === 'm').totals.requests).toBe(3)
+    expect(whole.pricing['ns/M-HIGH']).toEqual(whole.pricing.m)
+    expect(whole.modelResolutions.find((row: { rawName: string }) => row.rawName === 'ns/M-HIGH')).toMatchObject({ modelId: 'm', method: 'pattern' })
+    const search = '?sessionId=root&sessionId=child&childId=child'
+    for (const fields of ['full', 'session', 'chip']) {
+      const scoped = await query(search + '&fields=' + fields)
+      expect(scoped).toMatchObject({ totalCost: 6, costState: 'ready', total: { requests: 5 } })
+      expect(scoped.children.child).toMatchObject({ costState: 'ready', totalCost: 2, total: { requests: 1 } })
+    }
+    const selected = await query('?sessionId=root&sessionId=child&fields=session&model=NS%2FM-HIGH')
+    expect(selected).toMatchObject({ totalCost: 6, total: { requests: 3 }, byModel: [{ model: 'm' }] })
+    expect(selected.requestSeries.reduce((n: number, point: { count: number }) => n + point.count, 0)).toBe(3)
+    const { res, captured } = fakeResponse()
+    await createPricingRoute(() => dir).handler(fakeRequest(), res)
+    expect(JSON.parse(captured.body)).toMatchObject({ costState: 'ready', usdExchangeRate: 8, models: [{ modelId: 'm', aliasPatterns: ['^m-high$'] }, { modelId: 'free', aliasPatterns: [] }] })
+  })
+
+  it('propagates unavailable history to every response shape while retaining whole-scope cached usage', async () => {
+    const dir = await sessionDataDir()
+    const path = join(dir, 'pricing.ccsa.json')
+    await writeFile(path, JSON.stringify({ currency: 'RMB', models: [{ modelId: 'deepseek-chat', inputCostPerMillion: 2, outputCostPerMillion: 3 }] }))
+    const route = createStatsRoute(() => dir)
+    const query = async (url = STATS_PATH) => {
+      const { res, captured } = fakeResponse(); await route.handler(fakeRequest({ url }), res); return JSON.parse(captured.body)
+    }
+    const before = await query()
+    await unlink(join(dir, 'usage-2026-01-11.jsonl'))
+    await writeFile(path, JSON.stringify({ currency: 'RMB', models: [{ modelId: 'deepseek-chat', inputCostPerMillion: 4, outputCostPerMillion: 3 }] }))
+    const after = await query()
+    expect(after.total).toEqual(before.total)
+    expect(after).toMatchObject({ costState: 'history-incomplete', totalCost: 0 })
+    for (const fields of ['chip', 'session', 'full']) {
+      expect(await query(`${STATS_PATH}?sessionId=alpha&sessionId=child&childId=child&fields=${fields}`)).toMatchObject({ costState: 'history-incomplete', totalCost: 0, total: before.total,
+        children: { child: { costState: 'history-incomplete', totalCost: 0, total: { requests: 1 } } } })
+    }
+  })
   it('serves the JSON summary on GET', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'token-usage-route-'))
     await writeFile(join(dir, 'usage-2026-01-15.jsonl'), `${JSON.stringify(fixtureRecord(100))}\n`)
@@ -272,7 +330,7 @@ describe('createStatsRoute', () => {
       models: [{
         modelId: 'deepseek-v4-flash',
         inputCostPerMillion: 1, outputCostPerMillion: 2, cacheReadCostPerMillion: 0.5,
-        aliases: ['deepseek-v4-flash-0731'],
+        aliasPatterns: ['^deepseek-v4-flash-0731$'],
       }],
     }))
     const route = createStatsRoute(() => dir)
@@ -689,7 +747,7 @@ describe('createPricingRoute', () => {
       models: [{
         modelId: 'deepseek-chat',
         family: 'deepseek',
-        aliases: ['deepseek-v3'],
+        aliasPatterns: ['^deepseek-v3$'],
         inputCostPerMillion: 2,
         outputCostPerMillion: 8,
         cacheReadCostPerMillion: 1,
@@ -705,13 +763,13 @@ describe('createPricingRoute', () => {
     const body = JSON.parse(captured.body) as {
       currency: string
       usdExchangeRate: number
-      models: Array<{ modelId: string; family: string; aliases: string[]; rules: { base: Record<string, number> } }>
+      models: Array<{ modelId: string; family: string; aliasPatterns: string[]; rules: { base: Record<string, number> } }>
     }
     // The display stamps follow the region thunk; the wire rates stay RMB.
     expect(body.currency).toBe('USD')
     expect(body.usdExchangeRate).toBe(7.25)
     expect(body.models).toHaveLength(1)
-    expect(body.models[0]).toMatchObject({ modelId: 'deepseek-chat', family: 'deepseek', aliases: ['deepseek-v3'] })
+    expect(body.models[0]).toMatchObject({ modelId: 'deepseek-chat', family: 'deepseek', aliasPatterns: ['^deepseek-v3$'] })
     expect(body.models[0]!.rules.base).toEqual({ inputPerMillion: 2, outputPerMillion: 8, cacheReadPerMillion: 1, cacheWritePerMillion: 4 })
   })
 
@@ -737,7 +795,7 @@ describe('createPricingRoute', () => {
     expect(captured.status).toBe(200)
     // Without a currency thunk the display defaults to CNY and the rate to
     // the built-in 7 — the overview stays servable, just empty.
-    expect(JSON.parse(captured.body)).toEqual({ models: [], currency: 'CNY', usdExchangeRate: 7 })
+    expect(JSON.parse(captured.body)).toEqual({ models: [], costState: 'pricing-unavailable', pricingUnavailableReason: 'missing', currency: 'CNY', usdExchangeRate: 7 })
   })
 
   it('maps a read failure to a 500 error JSON', async () => {
@@ -746,6 +804,46 @@ describe('createPricingRoute', () => {
     await route.handler(fakeRequest(), res)
     expect(captured.status).toBe(500)
     expect(JSON.parse(captured.body)).toEqual({ error: 'boom' })
+  })
+})
+
+describe('createPricingSyncRoute', () => {
+  it('waits for the mirror write before reporting success', async () => {
+    let finish!: (result: any) => void
+    const sync = vi.fn(() => new Promise<any>(resolve => { finish = resolve }))
+    const route = createPricingSyncRoute(sync)
+    expect(route.path).toBe(PRICING_SYNC_PATH)
+    const { res, captured } = fakeResponse()
+    const request = route.handler(fakeRequest({ method: 'POST' }), res)
+    expect(res.end).not.toHaveBeenCalled()
+    const result = { version: 12, updatedAt: 1, models: 3, aliasPatterns: 1, usdExchangeRate: 7 }
+    finish(result)
+    await request
+    expect(captured.status).toBe(200)
+    expect(captured.headers['cache-control']).toBe('no-store')
+    expect(JSON.parse(captured.body)).toEqual(result)
+  })
+
+  it.each([
+    { method: 'GET', site: 'same-origin', status: 405 },
+    { method: 'POST', site: 'cross-site', status: 403 },
+  ])('rejects $method from $site without triggering a sync', async ({ method, site, status }) => {
+    const sync = vi.fn()
+    const { res, captured } = fakeResponse()
+    await createPricingSyncRoute(sync).handler(fakeRequest({ method, headers: { 'sec-fetch-site': site } }), res)
+    expect(captured.status).toBe(status)
+    expect(sync).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    { error: new Error('upstream failed'), status: 502, code: 'sync-failed' },
+    { error: new AssociationError('migration-in-progress'), status: 409, code: 'migration-in-progress' },
+    { error: new AssociationError('pricing-source-changed'), status: 409, code: 'pricing-source-changed' },
+  ])('reports $code without returning a success result', async ({ error, status, code }) => {
+    const { res, captured } = fakeResponse()
+    await createPricingSyncRoute(async () => { throw error }).handler(fakeRequest({ method: 'POST' }), res)
+    expect(captured.status).toBe(status)
+    expect(JSON.parse(captured.body)).toEqual({ error: code })
   })
 })
 
@@ -774,6 +872,52 @@ describe('plugin webServer wiring', () => {
       ctx = undefined
     }
     vi.unstubAllEnvs()
+    vi.unstubAllGlobals()
+  })
+
+  it('manually refreshes the saved source during startup grace, coalesces clicks and preserves the old mirror on failure', async () => {
+    const feed = (version: number) => JSON.stringify({ version, currency: 'RMB', models: [
+      { modelId: 'm', inputCostPerMillion: version, outputCostPerMillion: 2 },
+    ] })
+    const fetch = vi.fn(async () => new Response(feed(1)))
+    vi.stubGlobal('fetch', fetch)
+    const next = new Context()
+    await next.plugin(MockWebServer)
+    await next.plugin(class extends Service {
+      constructor(context: Context) { super(context, 'sessions') }
+      list() { return [] }
+    })
+    await next.plugin(class extends Service {
+      constructor(context: Context) { super(context, 'sessionPersistence') }
+      async list() { return [] }
+    })
+    await next.plugin(class extends Service {
+      constructor(context: Context) { super(context, 'commands') }
+      register() { return () => {} }
+    })
+    await next.plugin(plugin, { pricingRegion: 'overseas' })
+    ctx = next
+    const mirror = join(home, 'token-usage', 'pricing.ccsa.json')
+    await vi.waitFor(async () => { expect(JSON.parse(await readFile(mirror, 'utf8')).version).toBe(1) })
+    const route = (next.webServer as unknown as MockWebServer).routes.find(row => row.path === PRICING_SYNC_PATH)!
+    expect(route).toBeDefined()
+    let finish!: (response: Response) => void
+    fetch.mockImplementationOnce(() => new Promise<Response>(resolve => { finish = resolve }))
+    const before = fetch.mock.calls.length
+    const first = fakeResponse(), second = fakeResponse()
+    const requests = [route.handler(fakeRequest({ method: 'POST' }), first.res), route.handler(fakeRequest({ method: 'POST' }), second.res)]
+    expect(fetch).toHaveBeenCalledTimes(before + 1)
+    expect(fetch).toHaveBeenLastCalledWith(DEFAULT_PRICING_URL_OVERSEAS, expect.anything())
+    finish(new Response(feed(2)))
+    await Promise.all(requests)
+    expect(first.captured.status).toBe(200)
+    expect(second.captured.body).toBe(first.captured.body)
+    expect(JSON.parse(await readFile(mirror, 'utf8')).version).toBe(2)
+    fetch.mockImplementationOnce(async () => new Response('offline', { status: 503 }))
+    const failed = fakeResponse()
+    await route.handler(fakeRequest({ method: 'POST' }), failed.res)
+    expect(failed.captured.status).toBe(502)
+    expect(JSON.parse(await readFile(mirror, 'utf8')).version).toBe(2)
   })
 
   it('registers the stats route when a webServer exists and serves live rows', async () => {
@@ -816,6 +960,8 @@ describe('plugin webServer wiring', () => {
     expect(routes.some(candidate => candidate.path === MIGRATION_PATH && candidate.kind === 'exact')).toBe(true)
     // The pricing-overview route registers alongside too.
     expect(routes.some(candidate => candidate.path === PRICING_PATH && candidate.kind === 'exact')).toBe(true)
+    expect(routes.some(candidate => candidate.path === ASSOCIATIONS_PATH && candidate.kind === 'exact')).toBe(true)
+    expect(routes.some(candidate => candidate.path === PRICING_SYNC_PATH && candidate.kind === 'exact')).toBe(true)
 
     // The directory-guard route registers too and answers the live verdict:
     // no session is mid-conversation here, so a proposed move is not blocked.

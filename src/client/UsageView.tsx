@@ -38,6 +38,9 @@ import { encodeStatsQuery, STATS_PATH } from '../wire.ts'
 import { useAsyncResource, useDebouncedValue } from './async-resource.ts'
 import { totalTokens } from './day.ts'
 import { currencyViewOf, formatCost, formatSpeed, formatTokens, formatTtft } from './format.ts'
+import { PricingStatus, costsAvailable } from './PricingStatus.tsx'
+import { ModelAssociationBadge, PricingAssociationProvider, UnpricedModelTag } from './PricingAssociations.tsx'
+import { usePricingAssociationRefresh } from './pricing-associations.ts'
 import { HitRateText } from './HitRateText.tsx'
 import { aggregateProjections, buildChildIndex, directSubagentIds, subagentParentOf, subtreeIds, buildStatsFreshnessKey } from './session-stats.ts'
 import { RequestsCell, RequestsSplitHead, RequestsStatCard, StatCard } from './StatCard.tsx'
@@ -111,6 +114,7 @@ export function UsageView({ useSessions, useProjection, sessionId, t }: UsageVie
   useEffect(() => { setFocusId(sessionId) }, [sessionId])
   const [retryToken, setRetryToken] = useState(0)
   const retry = (): void => { setRetryToken(token => token + 1) }
+  usePricingAssociationRefresh(retry)
 
   const byId = useSessions(state => state.byId)
   // Build the child index once per mirror churn and share it across the
@@ -192,17 +196,21 @@ export function UsageView({ useSessions, useProjection, sessionId, t }: UsageVie
   if (summaryState.status === 'loading') {
     return (
       <div ref={rootRef} className={styles['root']} {...COMPOSER_OVERLAY}>
+        <PricingAssociationProvider view={{ symbol: '￥', rate: 1 }} t={t}>
         {header}
         <p className={styles['muted']}>{t('loading')}</p>
+        </PricingAssociationProvider>
       </div>
     )
   }
   if (summaryState.status === 'error') {
     return (
       <div ref={rootRef} className={styles['root']} {...COMPOSER_OVERLAY}>
+        <PricingAssociationProvider view={{ symbol: '￥', rate: 1 }} t={t}>
         {header}
         <p className={styles['error']}>{t('loadFailed', { message: summaryState.message })}</p>
         <button type="button" className={styles['button']} onClick={retry}>{t('retry')}</button>
+        </PricingAssociationProvider>
       </div>
     )
   }
@@ -212,6 +220,7 @@ export function UsageView({ useSessions, useProjection, sessionId, t }: UsageVie
   const { total } = summary
   return (
     <div ref={rootRef} className={styles['root']} {...COMPOSER_OVERLAY}>
+    <PricingAssociationProvider resolutions={summary.modelResolutions} feedVersion={summary.feedVersion} view={view} t={t}>
       {header}
       {total.requests === 0 && (total.failures ?? 0) === 0
         // The session has no recorded requests (successful or failed); the
@@ -228,7 +237,7 @@ export function UsageView({ useSessions, useProjection, sessionId, t }: UsageVie
                 failuresByCode={total.failuresByCode}
                 t={t}
               />
-              <StatCard label={t('stat.cost')} value={formatCost(summary.totalCost, view)} />
+              <StatCard label={t('stat.cost')} value={costsAvailable(summary.costState) ? formatCost(summary.totalCost, view) : '—'} />
               <StatCard label={t('stat.totalTokens')} value={formatTokens(totalTokens(total))} />
               <StatCard label={t('stat.hitRate')} value={<HitRateText totals={total} />} />
               <StatCard label={t('view.ttft')} value={ttftText} />
@@ -240,7 +249,8 @@ export function UsageView({ useSessions, useProjection, sessionId, t }: UsageVie
               <span>{t('stat.cacheRead')} <b>{formatTokens(total.cacheReadTokens)}</b></span>
               <span>{t('stat.cacheWrite')} <b>{formatTokens(total.cacheWriteTokens)}</b></span>
             </div>
-            {summary.unpricedModels.length > 0
+            <PricingStatus costState={summary.costState} pricingUnavailableReason={summary.pricingUnavailableReason} associationStorageError={summary.associationStorageError} t={t} />
+            {costsAvailable(summary.costState) && summary.unpricedModels.length > 0
               ? (
                 <p className={styles['warning']} role="status">
                   {t('unpriced.warning', {
@@ -306,7 +316,12 @@ export function UsageView({ useSessions, useProjection, sessionId, t }: UsageVie
                         <tbody>
                           {summary.byModel.map(row => (
                             <tr key={row.model}>
-                              <td className={styles['modelCell']}>{row.model}</td>
+                              <td className={styles['modelCell']}>
+                                <span className={styles.modelIdentity}><span className={styles.modelName}>{row.model}</span>
+                                  {summary.unpricedModels.includes(row.model) && <UnpricedModelTag model={row.model} t={t} />}
+                                  <ModelAssociationBadge model={row.model} t={t} />
+                                </span>
+                              </td>
                               <td>
                                 <RequestsCell
                                   requests={row.totals.requests}
@@ -320,7 +335,7 @@ export function UsageView({ useSessions, useProjection, sessionId, t }: UsageVie
                               <td className={row.totals.cacheReadTokens === 0 ? styles['zeroDim'] : undefined}>{formatTokens(row.totals.cacheReadTokens)}</td>
                               <td className={row.totals.cacheWriteTokens === 0 ? styles['zeroDim'] : undefined}>{formatTokens(row.totals.cacheWriteTokens)}</td>
                               <td><HitRateText totals={row.totals} /></td>
-                              <td className={styles['costCol']}>{formatCost(row.cost, view)}</td>
+                              <td className={styles['costCol']}>{costsAvailable(summary.costState) && !summary.unpricedModels.includes(row.model) ? formatCost(row.cost, view) : '—'}</td>
                             </tr>
                           ))}
                         </tbody>
@@ -406,7 +421,7 @@ export function UsageView({ useSessions, useProjection, sessionId, t }: UsageVie
                         <td>{row?.total.requests.toLocaleString() ?? '—'}</td>
                         <td>{row !== undefined ? formatTokens(totalTokens(row.total)) : '—'}</td>
                         <td className={styles['costCol']}>
-                          {row !== undefined ? formatCost(row.totalCost, view) : '—'}
+                          {row !== undefined && costsAvailable(summary.costState) && costsAvailable(row.costState) ? formatCost(row.totalCost, view) : '—'}
                         </td>
                         <td>{row !== undefined ? <HitRateText totals={row.total} /> : '—'}</td>
                         <td>{childStats !== undefined && childStats.ttftSteps > 0 ? formatTtft(childStats.ttftMs / childStats.ttftSteps) : '—'}</td>
@@ -420,6 +435,7 @@ export function UsageView({ useSessions, useProjection, sessionId, t }: UsageVie
           )}
       </section>
       {(total.requests > 0 || (total.failures ?? 0) > 0) && <p className={styles['note']}>{t('view.note')}</p>}
+    </PricingAssociationProvider>
     </div>
   )
 }

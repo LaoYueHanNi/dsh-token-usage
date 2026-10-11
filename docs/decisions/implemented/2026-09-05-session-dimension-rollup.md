@@ -8,11 +8,14 @@ Status: implemented
 
 ## Decision
 
+> [!NOTE]
+> 本决策中的 价格表更新后无需重建费率身份的假设及缺会话维度直接丢弃缓存的兼容策略 已于 2026-10-10 由 [DR: 统一模型自动识别与带定价指纹的历史重算](2026-10-10-model-pricing-resolution.md) 取代。
+
 **数据层**：`RollupFile` 与 `TokenSummary` 新增 `bySession: UsageSessionRow[]` 维度（`src/wire.ts`），行粒度为 **(sessionId, day, model, rate identity)** 单元，另带 `lastTime`（该单元内最新记录时间，折叠取 max）。四个粒度成分各有必要：
 
 - `day`——会话常跨天，日期筛选下会话行的数字必须只含窗口内部分；
 - `model`——模型筛选同理，且与 `filterSummary` 从 rateRows 重聚合的既有模式一致；
-- `rate identity`——费用聚合必须从带规则身份的单元出发（`attachCosts` 现状），价格表更新后历史免费重定价；
+- `rate identity`——费用聚合必须从带规则身份的单元出发（`attachCosts` 现状），定价上下文指纹变化后重选历史身份再计价；
 - `lastTime`——会话表按"最近活跃"排序展示。
 
 失效记录（`model === ''` 的 failure 行）拥有自己的 (sessionId, day, model='', rate=UNPRICED) 会话单元——与 rateRows 同一粒度语义（不在行粒度上排除 model=''），不并入有模型的单元，保证请求数对账一致。派生路径逐一定点扩展：`summarizeRecords` 折出 bySession；`mergeSummaries` 按 (sessionId, day, model, rate) 键折叠它（lastTime 取 max，对缺失维度的内存形状宽容 `?? []`）；`filterSummary` 从它按窗口/模型过滤重聚合（与 rateRows 同模式）；`attachCosts` 从同一单元计费出 `CostedSessionCell`（`CostedSummary.bySession`）——费用对账因此免费成立。
@@ -25,7 +28,7 @@ Status: implemented
 
 **服务端行集**：whole 载荷新增 `sessionRows`——服务端折叠、按费用降序（并列按 lastTime 降序、sessionId 升序）、截断 top-N 后的最终行，行内自带 title/cwd/徽标/firstTime/lastTime；细粒度 `bySession` 单元不跨越 wire（payload 中剥离），避免把同一份折叠在传输上重复一遍。
 
-**兼容**：旧 rollup 缺 `bySession` 字段 → `isRollupFile` 校验失败（硬性要求，非可选字段）→ 视为缺失、从日文件一次性重建（现有鲁棒路径，record-cache 缓解 IO）。不做可选字段惰性迁移——已吸收的冻结日文件不会重读，无法补出会话维度，硬性失效重建是唯一诚实路径。
+**兼容**：旧 rollup 缺 `bySession` 字段时保留可用累计用量，返回内存态 `requiresRebuild` 标记并从原始日文件补全；完整重算之前不信任其费用身份。源记录缺失时保留可恢复的聚合并显示 history-incomplete；没有会话维度的旧聚合无法推断会话归属。其他结构损坏仍视为缓存缺失。
 
 **会话元数据索引**：sessionId 对用户几乎不可读，会话表以标题为主标识、所属项目目录为辅标识。索引为数据目录下的 `sessions.json`（`src/session-meta.ts`）：sessionId → `{ title?, cwd?, origin?, parentSession? }`（非默认字段缺失即省略）：
 
@@ -58,6 +61,6 @@ Status: implemented
 
 ## Consequences
 
-**所得**：设置页能按会话回答"哪个会话花钱最多"并做模型×会话交叉分析（模型筛选不豁免会话行，语义自然变为"该模型被哪些会话消耗"）；日期/模型筛选下会话表各列之和与汇总卡对账一致（同一 summary 派生保证，测试钉住求和不变性：孤儿按顶层、嵌套到根、环防御截断、筛选先于折叠），且行集只有折叠一种形态，对账心智模型简单；三列点击排序让"最近活跃/烧钱/token"三种读法零请求切换；费用从同一 rate 单元计费，价格表更新免费重定价历史；聚合层（`buildSessionRows`）可复用，会话级聚合不再随历史记录数线性增长；live 改名即时反映、历史会话经 `metaSyncedAt` 一次性回填补齐。
+**所得**：设置页能按会话回答"哪个会话花钱最多"并做模型×会话交叉分析（模型筛选不豁免会话行，语义自然变为"该模型被哪些会话消耗"）；日期/模型筛选下会话表各列之和与汇总卡对账一致（同一 summary 派生保证，测试钉住求和不变性：孤儿按顶层、嵌套到根、环防御截断、筛选先于折叠），且行集只有折叠一种形态，对账心智模型简单；三列点击排序让"最近活跃/烧钱/token"三种读法零请求切换；费用从同一 rate 单元计费，价格表实际规则变化后重建冻结身份再重定价历史；聚合层（`buildSessionRows`）可复用，会话级聚合不再随历史记录数线性增长；live 改名即时反映、历史会话经 `metaSyncedAt` 一次性回填补齐。
 
-**代价**：rollup 文件与内存聚合随会话数增长（行数 ≈ 每天 会话×模型×rate 组合数，常规年累计万级行 JSON 可控；重度子代理用户会放大——必要时后续对传输加截断或对超旧会话归档）；升级后首次统计读取触发一次 rollup 全量重建（record-cache 已把冻结文件常驻内存，属一次性成本，重建失败不阻塞读取）；老安装的元数据回填要一次全量遍历（`initialized` 标记保证不会自动重跑，那次遍历的用量行被去重全部跳过）；rollup 与 wire 均为跨版本契约，`bySession` 的硬性校验使所有旧 rollup 在升级后首次读取时失效重建——这是刻意的，不是兼容事故；`sessions.json` 是又一个需要测试覆盖的持久化文件（原子写、损坏重建、幂等 upsert、单写队列），但它损坏的代价只是标识回退，不会丢任何用量数据。
+**代价**：rollup 文件与内存聚合随会话数增长（行数 ≈ 每天 会话×模型×rate 组合数，常规年累计万级行 JSON 可控；重度子代理用户会放大——必要时后续对传输加截断或对超旧会话归档）；升级后首次统计读取触发一次 rollup 全量重建（record-cache 已把冻结文件常驻内存，属一次性成本，重建失败不阻塞读取）；老安装的元数据回填要一次全量遍历（`initialized` 标记保证不会自动重跑，那次遍历的用量行被去重全部跳过）；rollup 与 wire 均为跨版本契约，缺 `bySession` 的旧 rollup 在首次读取时需重建，但可用旧累计用量被保留，避免原始历史缺失时一起丢弃；`sessions.json` 是又一个需要测试覆盖的持久化文件（原子写、损坏重建、幂等 upsert、单写队列），但它损坏的代价只是标识回退，不会丢任何用量数据。

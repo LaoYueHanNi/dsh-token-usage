@@ -11,15 +11,18 @@ import type { IncomingMessage } from 'node:http'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type { MigrationProgress } from './migrate.ts'
 import { consoleLogger, type LoggerLike } from './log.ts'
-import { readPricingContext, readPricingOverview, readUsdExchangeRate, resolveRate } from './pricing.ts'
-import { attachCosts, buildSessionRows, buildSummary, filterRecordsBySessions, filterSummary, requestSeriesOf, SESSION_ROW_LIMIT, summarizeRecords } from './stats.ts'
+import { readPricingContext, resolveRate } from './pricing.ts'
+import type { PricingContext } from './pricing.ts'
+import { attachCosts, buildSessionRows, buildSummary, filterRecordsBySessions, filterSummary, requestSeriesOf, SESSION_ROW_LIMIT, summarizeRecords, summaryForSessions } from './stats.ts'
 import type { RateResolver, SessionMetaEntry } from './stats.ts'
 import { readCachedRecords } from './record-cache.ts'
 import { SessionMetaStore } from './session-meta.ts'
 import { bucketSeries, pointsOfBuckets } from './trend-bucket.ts'
 import { decodeChildGroups, decodeSessionScope, DIR_GUARD_PATH, FULL_SYNC_PATH, MIGRATION_PATH, PRICING_PATH, STATS_PATH, UNPRICED_KEY } from './wire.ts'
-import type { ChildGroup, ChildUsageSummary, CostedSummary, DirectoryGuardView, DisplayCurrency, FullSyncView, PricingOverviewPayload, PricingTable, RequestPoint, SessionUsageRow, StatsFields, StatsPayload } from './wire.ts'
+import type { ChildGroup, ChildUsageSummary, CostedSummary, DirectoryGuardView, DisplayCurrency, FullSyncView, PricingOverviewPayload, PricingTable, RequestPoint, SessionUsageRow, StatsFields, StatsPayload, TokenSummary } from './wire.ts'
 import type { UsageRecord } from './usage-record.ts'
+import { AssociationError } from './pricing-associations.ts'
+import { PRICING_SYNC_PATH, type PricingSyncResult } from './wire.ts'
 
 /** The stats endpoint path, exported for tests and the client half. */
 export { STATS_PATH } from './wire.ts'
@@ -179,9 +182,38 @@ export interface PricingRouteOptions {
   logger?: LoggerLike
 }
 
+/** Manual refresh uses the host's saved source, never a client-supplied URL. */
+export function createPricingSyncRoute(sync: () => Promise<PricingSyncResult>): WebRoute {
+  return {
+    kind: 'exact',
+    path: PRICING_SYNC_PATH,
+    handler: async (req, res) => {
+      const headers = { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }
+      if (req.method !== 'POST') {
+        res.writeHead(405, { ...headers, allow: 'POST' })
+        res.end(JSON.stringify({ error: 'method-not-allowed' }))
+        return
+      }
+      if (!isSameOriginFetch(req)) {
+        res.writeHead(403, headers)
+        res.end(JSON.stringify({ error: 'forbidden' }))
+        return
+      }
+      try {
+        const result = await sync()
+        res.writeHead(200, headers)
+        res.end(JSON.stringify(result))
+      } catch (error: unknown) {
+        res.writeHead(error instanceof AssociationError ? error.statusCode : 502, headers)
+        res.end(JSON.stringify({ error: error instanceof AssociationError ? error.code : 'sync-failed' }))
+      }
+    },
+  }
+}
+
 /**
  * Build the pricing-overview route the settings page's overview dialog reads:
- * the full cloud-mirror model list in its model-row shape (modelId + aliases
+ * the full cloud-mirror model list in its model-row shape (modelId + aliasPatterns
  * + family + rules, never flattened into the alias-keyed table). The overview
  * is deliberately filter-free — it serves every model the mirror carries, so
  * it takes no query parameters and stays independent of the stats filters.
@@ -208,13 +240,14 @@ export function createPricingRoute(dir: () => string, options: PricingRouteOptio
       }
       try {
         const dataDir = dir()
-        const [models, usdExchangeRate] = await Promise.all([
-          readPricingOverview(dataDir, logger),
-          readUsdExchangeRate(dataDir, logger),
-        ])
+        const context = await readPricingContext(dataDir, logger)
+        const { models, usdExchangeRate } = context
         res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
         res.end(JSON.stringify({
           models,
+          ...(context.feedVersion !== undefined ? { feedVersion: context.feedVersion } : {}),
+          costState: context.available ? 'ready' : 'pricing-unavailable',
+          ...(context.unavailableReason !== undefined ? { pricingUnavailableReason: context.unavailableReason } : {}),
           currency: options.currency?.() ?? 'CNY',
           usdExchangeRate,
         } satisfies PricingOverviewPayload))
@@ -290,19 +323,24 @@ function childBreakdown(
   resolve: RateResolver,
   pricing: PricingTable,
   canonical: ReadonlyMap<string, string>,
+  context: PricingContext,
+  costState: CostedSummary['costState'],
+  fallback: TokenSummary,
 ): Record<string, ChildUsageSummary> {
   const rows: Record<string, ChildUsageSummary> = {}
   for (const group of filter.childGroups) {
     const scoped = filterRecordsBySessions(records, group.sessionIds)
     const summary = attachCosts(
-      filterSummary({ dataDir, ...summarizeRecords(scoped, resolve) }, filter.from, filter.to, filter.model, canonical),
+      { ...filterSummary({ dataDir, ...(costState === 'history-incomplete' ? summaryForSessions(fallback, group.sessionIds) : summarizeRecords(scoped, resolve)) }, filter.from, filter.to, filter.model, canonical), costState },
       pricing,
       canonical,
+      context,
     )
     rows[group.id] = {
       total: summary.total,
       totalCost: summary.totalCost,
       unpricedModels: summary.unpricedModels,
+      costState: summary.costState,
     }
   }
   return rows
@@ -342,6 +380,10 @@ function slimSessionPayload(input: {
     total: summary.total,
     totalCost: summary.totalCost,
     unpricedModels: summary.unpricedModels,
+    costState: summary.costState,
+    ...(summary.feedVersion !== undefined ? { feedVersion: summary.feedVersion } : {}),
+    ...(summary.associationStorageError !== undefined ? { associationStorageError: summary.associationStorageError } : {}),
+    ...(summary.pricingUnavailableReason !== undefined ? { pricingUnavailableReason: summary.pricingUnavailableReason } : {}),
     currency,
     usdExchangeRate,
     ...children !== undefined ? { children } : {},
@@ -350,6 +392,7 @@ function slimSessionPayload(input: {
   return {
     ...chip,
     byModel: summary.byModel,
+    modelResolutions: summary.modelResolutions,
     byDay: summary.byDay,
     requestSeries,
   }
@@ -399,22 +442,24 @@ export function createStatsRoute(dir: () => string, options: StatsRouteOptions =
         const logger = options.logger ?? consoleLogger
         // The pricing table is user-maintained and may change between
         // requests; reading it per request keeps the page honest without
-        // any caching (the file is small and the route is not hot).
+        // mixing snapshots; unchanged source content reuses its index.
         // Table and canonical map come from one feed parse so alias
         // folding cannot drift from the rates used to bill.
-        const { table: pricing, canonical } = await readPricingContext(dataDir, logger)
+        const context = await readPricingContext(dataDir, logger)
+        const { table: pricing, canonical, usdExchangeRate } = context
         // Per-record pricing: each record resolves through the rule chain at
         // its own timestamp (tier approximated by its input-side tokens).
         const resolve: RateResolver = record => {
-          const rules = pricing[record.model]
+          const rules = context.ratesForModel(record.model)
           if (rules === undefined) return UNPRICED_KEY
           const tokens = record.usage
-          const context = tokens === undefined ? 0
+          const contextSize = tokens === undefined ? 0
             : tokens.inputTokens + (tokens.cacheReadTokens ?? 0) + (tokens.cacheWriteTokens ?? 0)
-          return resolveRate(rules, record.time, context).key
+          return resolveRate(rules, record.time, contextSize).key
         }
-        // Session-scoped reads fold filtered raw records: the rollup rows
-        // carry no session dimension. Frozen day files come from the
+        // Session-scoped reads fold raw records for request-time granularity.
+        // Cached session cells retain usage if repricing is incomplete.
+        // Frozen day files come from the
         // process cache so chip polls and the usage tab do not re-parse
         // history; today's file re-reads when its stamp changes.
         const allRecords = filter.sessionIds.length > 0 || filter.childGroups.length > 0
@@ -423,19 +468,22 @@ export function createStatsRoute(dir: () => string, options: StatsRouteOptions =
         const scoped = filter.sessionIds.length > 0 && allRecords !== undefined
           ? filterRecordsBySessions(allRecords, filter.sessionIds)
           : undefined
+        const whole = await buildSummary(dataDir, undefined, resolve, logger, {
+          fingerprint: context.fingerprint,
+          isCurrent: async () => dir() === dataDir && (await readPricingContext(dataDir, logger)).fingerprint === context.fingerprint,
+        })
+        const base = scoped !== undefined ? { dataDir, ...(whole.costState === 'history-incomplete'
+          ? summaryForSessions(whole, filter.sessionIds) : summarizeRecords(scoped, resolve)) } : whole
         const summary = attachCosts(
-          filterSummary(
-            scoped !== undefined
-              ? { dataDir, ...summarizeRecords(scoped, resolve) }
-              : await buildSummary(dataDir, undefined, resolve, logger),
-            filter.from, filter.to, filter.model, canonical),
+          { ...filterSummary(base, filter.from, filter.to, filter.model, canonical),
+            ...(whole.costState !== undefined ? { costState: whole.costState } : {}) },
           pricing,
           canonical,
+          context,
         )
         // Display-currency metadata: amounts stay RMB on the wire; the
         // page converts (÷ usdExchangeRate) when the region pick says USD.
         const currency = options.currency?.() ?? 'CNY'
-        const usdExchangeRate = await readUsdExchangeRate(dataDir, logger)
         // The session table's final rows: the costed bySession cells fold
         // per top-level session (the whole subtree merges in), sorted by
         // cost and truncated top-N server-side, with the metadata index's
@@ -449,7 +497,7 @@ export function createStatsRoute(dir: () => string, options: StatsRouteOptions =
         // every aggregate once more on the wire.
         const { bySession: _cells, ...summaryRest } = summary
         const children = allRecords !== undefined && filter.childGroups.length > 0
-          ? childBreakdown(allRecords, filter, dataDir, resolve, pricing, canonical)
+          ? childBreakdown(allRecords, filter, dataDir, resolve, pricing, canonical, context, summary.costState, whole)
           : undefined
         const payload = scoped !== undefined
           ? slimSessionPayload({

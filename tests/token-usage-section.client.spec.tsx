@@ -12,7 +12,8 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import { formatHitRate, formatTokens, TokenUsageSection, totalTokens } from '../src/client/TokenUsageSection.tsx'
 import { zh } from '../src/client/locales.ts'
-import type { PricingOverviewPayload, UsageSummary } from '../src/wire.ts'
+import { ASSOCIATIONS_PATH, PRICING_PATH } from '../src/wire.ts'
+import type { PricingOverviewPayload, PricingAssociationsPayload, ModelResolution, UsageSummary } from '../src/wire.ts'
 
 // The shell Tooltip ships inside the primitives package whose CSS imports the
 // Node test runtime cannot load (quota-button.client.spec mocks it for the
@@ -62,6 +63,8 @@ const t = ((key: string, params?: Record<string, unknown>): string => {
 
 /** A fully populated summary fixture (reasoner priced at ¥4/¥16/¥1 per million). */
 const SUMMARY: UsageSummary = {
+  costState: 'ready',
+  modelResolutions: [],
   dataDir: 'C:/data/token-usage',
   currency: 'CNY',
   usdExchangeRate: 7,
@@ -120,8 +123,8 @@ function stubFetch(impl: () => Promise<unknown>): ReturnType<typeof vi.fn> {
  * model in the first one. */
 const OVERVIEW: PricingOverviewPayload = {
   models: [
-    { modelId: 'deepseek-reasoner', aliases: ['deepseek-think'], family: 'deepseek', rules: SUMMARY.pricing['deepseek-reasoner']! },
-    { modelId: 'glm-4.7', aliases: [], family: 'glm', rules: SUMMARY.pricing['deepseek-reasoner']! },
+    { modelId: 'deepseek-reasoner', aliasPatterns: ['^deepseek-think$'], family: 'deepseek', rules: SUMMARY.pricing['deepseek-reasoner']! },
+    { modelId: 'glm-4.7', aliasPatterns: [], family: 'glm', rules: SUMMARY.pricing['deepseek-reasoner']! },
   ],
   currency: 'CNY',
   usdExchangeRate: 7,
@@ -193,6 +196,141 @@ describe('totalTokens / formatHitRate', () => {
 })
 
 describe('TokenUsageSection', () => {
+  it('saves from an unpriced row, retains filters, marks origins and updates overview usage', async () => {
+    const rawName = 'p/unknown', targetModelId = 'deepseek-reasoner'
+    let saved = false
+    const unresolved: ModelResolution = { rawName, status: 'unmatched', strippedPrefix: false, candidates: [] }
+    const association = { sourceModel: rawName, targetModelId, resolvedTargetModelId: targetModelId, state: 'active' as const }
+    const snapshot = (): PricingAssociationsPayload => ({ directoryToken: 'directory', revision: saved ? 1 : 0,
+      storageState: 'ready', pricingAvailable: true, writesPaused: false, associations: saved ? [association] : [],
+      resolution: saved ? { ...unresolved, status: 'matched', method: 'manual', modelId: targetModelId, association, automatic: unresolved } : unresolved })
+    const fetch = stubFetch(async (input: RequestInfo | URL, options?: RequestInit) => {
+      const url = new URL(String(input), 'http://localhost')
+      if (url.pathname === ASSOCIATIONS_PATH) {
+        if (options?.method === 'POST') { saved = true }
+        return Response.json(snapshot())
+      }
+      if (url.pathname === PRICING_PATH) return Response.json(OVERVIEW)
+      return Response.json({ ...SUMMARY, totalCost: saved ? 7 : 0, unpricedModels: saved ? [] : [rawName], modelResolutions: [snapshot().resolution],
+        byModel: [{ ...SUMMARY.byModel[0]!, model: saved ? targetModelId : rawName, cost: saved ? 7 : 0 }] })
+    })
+    render(<TokenUsageSection close={() => {}} t={t} />)
+    await screen.findByRole('table', { name: t('byModel.title') })
+    fireEvent.click(screen.getByRole('button', { name: '快捷区间' }))
+    fireEvent.click(screen.getByRole('option', { name: '7d' }))
+    await screen.findByRole('table', { name: t('byModel.title') })
+    fireEvent.click(screen.getByRole('button', { name: '模型' }))
+    fireEvent.click(screen.getByRole('option', { name: rawName }))
+    const table = await screen.findByRole('table', { name: t('byModel.title') })
+    const beforeQueries = fetch.mock.calls.filter(call => String(call[0]).startsWith('/token-usage/stats'))
+    const filterUrl = String(beforeQueries.at(-1)![0])
+    expect(within(table).queryByRole('button', { name: t('association.choose') })).toBeNull()
+    fireEvent.click(within(table).getByRole('button', { name: t('pricing.unpriced') }))
+    fireEvent.click(screen.getByRole('button', { name: t('association.choose') }))
+    const dialog = await screen.findByRole('dialog', { name: t('association.title') })
+    const search = await within(dialog).findByRole('searchbox')
+    fireEvent.change(search, { target: { value: targetModelId } })
+    fireEvent.click(within(dialog).getByRole('radio'))
+    fireEvent.click(within(dialog).getByRole('button', { name: t('association.save') }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: t('association.title') })).toBeNull())
+    const associationTip = t('association.tooltip', { models: rawName })
+    await screen.findByRole('img', { name: associationTip })
+    const afterQueries = fetch.mock.calls.filter(call => String(call[0]).startsWith('/token-usage/stats'))
+    expect(String(afterQueries.at(-1)![0])).toBe(filterUrl)
+    expect(screen.getByRole('button', { name: '快捷区间' }).textContent).toBe('7d')
+    expect(screen.getByRole('button', { name: '模型' }).textContent).toBe(rawName)
+    const nextTable = screen.getByRole('table', { name: t('byModel.title') })
+    expect(within(nextTable).getByText('7.00￥')).toBeTruthy()
+    const associationIcon = within(nextTable).getByRole('img', { name: associationTip })
+    expect(associationIcon.hasAttribute('title')).toBe(false)
+    fireEvent.mouseEnter(associationIcon)
+    expect(screen.getByRole('tooltip').textContent).toBe(associationTip)
+    fireEvent.mouseLeave(associationIcon)
+    expect(within(nextTable).queryByText('含手动关联')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '定价表' }))
+    const overview = await screen.findByRole('dialog', { name: '定价表' })
+    await within(overview).findByText(targetModelId)
+    expect(within(overview).getByText('已用').closest('tr')?.textContent).toContain(targetModelId)
+    expect(fetch.mock.calls.filter(call => call[1]?.method === 'POST')).toHaveLength(1)
+  })
+  it('keeps all-association management available for an empty filtered window', async () => {
+    stubFetch(async () => Response.json({ ...SUMMARY, total: { ...SUMMARY.total, requests: 0, failures: 0 }, byModel: [] }))
+    render(<TokenUsageSection close={() => {}} t={t} />)
+    await screen.findByText(t('empty'))
+    expect(screen.queryByRole('button', { name: t('association.manage') })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '定价表' }))
+    const overview = screen.getByRole('dialog', { name: '定价表' })
+    expect(within(overview).getByRole('button', { name: t('association.manage') })).toBeTruthy()
+  })
+  it('places management beside the pricing title and retains both dialogs across revocation refresh', async () => {
+    let saved = true
+    const fetch = stubFetch(async (input: RequestInfo | URL, options?: RequestInit) => {
+      const url = new URL(String(input), 'http://localhost')
+      if (url.pathname === PRICING_PATH) return Response.json(OVERVIEW)
+      if (url.pathname === ASSOCIATIONS_PATH) {
+        if (options?.method === 'DELETE') saved = false
+        return Response.json({ directoryToken: 'directory', revision: saved ? 1 : 2, storageState: 'ready', pricingAvailable: true,
+          writesPaused: false, associations: saved ? [{ sourceModel: 'p/internal', targetModelId: 'deepseek-chat', state: 'active' }] : [] })
+      }
+      return Response.json(SUMMARY)
+    })
+    render(<TokenUsageSection close={() => {}} t={t} />)
+    await screen.findByRole('table', { name: '按模型' })
+    expect(screen.queryByRole('button', { name: '模型别名关联' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '定价表' }))
+    const overview = screen.getByRole('dialog', { name: '定价表' })
+    const managerButton = within(overview).getByRole('button', { name: '模型别名关联' })
+    expect(managerButton.parentElement?.textContent).toBe('定价表模型别名关联')
+    managerButton.focus(); fireEvent.click(managerButton)
+    const manager = screen.getByRole('dialog', { name: '模型别名关联' })
+    expect(overview.contains(manager)).toBe(true)
+    fireEvent.click(await within(manager).findByRole('button', { name: t('association.revoke') }))
+    fireEvent.click(within(manager).getByRole('button', { name: t('association.confirmRevoke') }))
+    await within(manager).findByText(t('association.revoked'))
+    await waitFor(() => expect(fetch.mock.calls.filter(call => String(call[0]).startsWith('/token-usage/stats')).length).toBeGreaterThan(1))
+    await screen.findByRole('table', { name: '按模型' })
+    expect(screen.getByRole('dialog', { name: '定价表' })).toBe(overview)
+    expect(screen.getByRole('dialog', { name: '模型别名关联' })).toBe(manager)
+    fireEvent.click(within(manager).getByRole('button', { name: t('association.close') }))
+    expect(screen.queryByRole('dialog', { name: '模型别名关联' })).toBeNull()
+    expect(screen.getByRole('dialog', { name: '定价表' })).toBe(overview)
+    expect(document.activeElement).toBe(managerButton)
+  })
+  it('reports corrupted association storage while leaving automatic costs visible', async () => {
+    stubFetch(async () => ({ ok: true, json: async () => ({ ...SUMMARY, associationStorageError: 'invalid-json' }) }))
+    render(<TokenUsageSection close={() => {}} t={t} />)
+    await screen.findByRole('status')
+    expect(screen.getByRole('status').textContent).toBe(t('pricing.associationStorageUnavailable'))
+    expect(document.body.textContent).toContain('￥')
+    expect(screen.queryByRole('button', { name: t('association.manage') })).toBeNull()
+  })
+  it.each(['pricing-unavailable', 'history-incomplete'] as const)('hides every cost but retains model usage when %s', async costState => {
+    stubFetch(async () => ({ ok: true, json: async () => ({ ...SUMMARY, costState, totalCost: 9876.54, byModel: SUMMARY.byModel.map(row => ({ ...row, cost: 9876.54 })) }) }))
+    render(<TokenUsageSection close={() => {}} t={t} />)
+    await screen.findByRole('status')
+    expect(screen.getByRole('status').textContent).toBe(t(costState === 'history-incomplete' ? 'pricing.historyIncomplete' : 'pricing.unavailable'))
+    expect(document.body.textContent).not.toContain('9876.54')
+    expect(screen.getByRole('table', { name: t('byModel.title') })).toBeTruthy()
+  })
+  it('hides identification details and row actions until the unpriced tag is clicked', async () => {
+    stubFetch(async () => ({ ok: true, json: async () => ({ ...SUMMARY, modelResolutions: [
+      { rawName: 'p/unknown', status: 'unmatched', strippedPrefix: false, candidates: [] },
+      { rawName: 'collision', status: 'ambiguous', strippedPrefix: true, candidates: ['one', 'two'] },
+    ], pricing: {}, unpricedModels: ['p/unknown', 'collision'], byModel: [
+      { ...SUMMARY.byModel[0]!, model: 'p/unknown' }, { ...SUMMARY.byModel[0]!, model: 'collision' },
+    ] }) }))
+    render(<TokenUsageSection close={() => {}} t={t} />)
+    const table = await screen.findByRole('table', { name: t('byModel.title') })
+    expect(screen.queryByText(t('pricing.identificationDetails'))).toBeNull()
+    expect(screen.queryByRole('button', { name: t('association.choose') })).toBeNull()
+    expect(screen.queryByRole('link', { name: t('association.issue') })).toBeNull()
+    fireEvent.click(within(table).getAllByRole('button', { name: '未定价' })[1]!)
+    const dialog = screen.getByRole('dialog', { name: t('association.unpricedTitle') })
+    expect(within(dialog).getByText('collision')).toBeTruthy()
+    expect(within(dialog).getByText(/one, two/)).toBeTruthy()
+    expect(within(dialog).getByRole('button', { name: t('association.choose') })).toBeTruthy()
+    expect(within(dialog).getByRole('link', { name: t('association.issue') })).toBeTruthy()
+  })
   it('shows loading then the two metric rows and the per-model table', async () => {
     stubFetch(async () => ({ ok: true, json: async () => SUMMARY }))
     render(<TokenUsageSection close={() => {}} t={t} />)
@@ -270,7 +408,7 @@ describe('TokenUsageSection', () => {
     expect(screen.queryByRole('button', { name: '定价' })).toBeNull()
   })
 
-  it('warns about unpriced models and dashes their cost', async () => {
+  it('marks unpriced rows and dashes their cost without a summary warning', async () => {
     stubFetch(async () => ({
       ok: true,
       json: async () => ({
@@ -282,13 +420,13 @@ describe('TokenUsageSection', () => {
       }),
     }))
     render(<TokenUsageSection close={() => {}} t={t} />)
-    expect(await screen.findByText(/1 个模型未定价：deepseek-reasoner/)).toBeTruthy()
-    const table = screen.getByRole('table', { name: '按模型' })
+    const table = await screen.findByRole('table', { name: '按模型' })
+    expect(screen.queryByText(/个模型未定价：/)).toBeNull()
     expect(within(table).getByText('未定价')).toBeTruthy()
     // Unpriced cost cells render an em dash, not a fake ¥0.00, and the
-    // row carries no pricing affordance.
+    // row retains the unpriced action.
     expect(within(table).getByText('—')).toBeTruthy()
-    expect(within(table).queryByRole('button', { name: /定价/ })).toBeNull()
+    expect(within(table).getByRole('button', { name: '未定价' })).toBeTruthy()
   })
 
   it('renders costs and rates in USD under an overseas summary', async () => {
@@ -319,7 +457,7 @@ describe('TokenUsageSection', () => {
     expect(screen.queryByRole('dialog')).toBeNull()
   })
 
-  it('uses the USD symbol in the unpriced warning', async () => {
+  it('keeps USD totals and unpriced row tags without a summary warning', async () => {
     stubFetch(async () => ({
       ok: true,
       json: async () => ({
@@ -333,9 +471,10 @@ describe('TokenUsageSection', () => {
       }),
     }))
     render(<TokenUsageSection close={() => {}} t={t} />)
-    // The unpriced placeholder is a converted zero, not a hard ¥.
-    expect(await screen.findByText(/费用按 0\.00\$ 计/)).toBeTruthy()
-    const table = screen.getByRole('table', { name: '按模型' })
+    const table = await screen.findByRole('table', { name: '按模型' })
+    expect(screen.queryByText(/个模型未定价：/)).toBeNull()
+    expect(screen.getByText('1.00$')).toBeTruthy()
+    expect(within(table).getByRole('button', { name: '未定价' })).toBeTruthy()
     expect(within(table).getByText('—')).toBeTruthy()
   })
 

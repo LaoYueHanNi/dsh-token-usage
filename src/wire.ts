@@ -17,6 +17,17 @@ export const STATS_PATH = '/token-usage/stats'
 /** The pricing-overview endpoint path: the full cloud-mirror model list,
  * filter-free by design — the overview is not a filtered usage view. */
 export const PRICING_PATH = '/token-usage/pricing'
+export const PRICING_SYNC_PATH = '/token-usage/pricing-sync'
+export const ASSOCIATIONS_PATH = '/token-usage/pricing-associations'
+
+/** Returned only after a validated pricing mirror has been saved. */
+export interface PricingSyncResult {
+  version: number
+  updatedAt: number
+  models: number
+  aliasPatterns: number
+  usdExchangeRate: number
+}
 
 /** How much of the stats payload a consumer asked for. `full` is the
  * settings page's whole CostedSummary; `session` is the usage tab; `chip`
@@ -226,6 +237,7 @@ export interface RequestPoint {
 
 /** Per-child row the usage tab's subagent table reads (no chart / pricing). */
 export interface ChildUsageSummary {
+  costState?: CostState
   total: UsageTotals
   totalCost: number
   unpricedModels: string[]
@@ -344,17 +356,67 @@ export function isUnpricedKey(key: RateKey): boolean {
  */
 export type PricingTable = Record<string, ModelRates>
 
+export type CostState = 'ready' | 'pricing-unavailable' | 'history-incomplete'
+export type PricingUnavailableReason = 'missing' | 'unreadable' | 'invalid-json' | 'invalid-feed'
+export type AssociationStorageError = 'unreadable' | 'invalid-json' | 'invalid-file'
+
+export interface PricingAssociation {
+  sourceModel: string
+  targetModelId: string
+}
+
+export interface PricingAssociationStatus extends PricingAssociation {
+  state: 'active' | 'automatic-takeover' | 'target-missing' | 'pricing-unavailable'
+  resolvedTargetModelId?: string
+  automaticModelId?: string
+  targetDiffers?: boolean
+}
+
+export interface PricingAssociationsPayload {
+  feedVersion?: number
+  directoryToken: string
+  revision: number | null
+  storageState: 'ready' | 'unavailable'
+  storageError?: AssociationStorageError
+  pricingAvailable: boolean
+  pricingUnavailableReason?: PricingUnavailableReason
+  writesPaused: boolean
+  associations: PricingAssociationStatus[]
+  resolution?: ModelResolution
+}
+
+export interface SavePricingAssociation extends PricingAssociation {
+  revision: number
+  directoryToken: string
+}
+
+export interface DeletePricingAssociation {
+  sourceModel: string
+  revision: number
+  directoryToken: string
+}
+
+export interface ModelResolution {
+  rawName: string
+  status: 'matched' | 'unmatched' | 'ambiguous'
+  modelId?: string
+  method?: 'id' | 'normalized-id' | 'pattern' | 'manual'
+  strippedPrefix: boolean
+  candidates: string[]
+  association?: PricingAssociationStatus
+  /** Preserves the unmatched/ambiguous reason when a manual choice is active. */
+  automatic?: ModelResolution
+}
+
 /**
  * One model row of the pricing overview: the shape the cloud feed carries
- * (modelId + its aliases + its upstream family) plus the full rule set —
- * deliberately NOT flattened through {@link PricingTable}, so the overview
- * shows one row per model with aliases as a footnote instead of one row per
- * alias-key.
+ * (modelId + alias patterns + upstream family) plus the full rule set.
+ * The overview keeps one row per model rather than enumerating aliases.
  */
 export interface PricingOverviewModel {
   modelId: string
-  /** The feed's alias list for this model (empty when it carries none). */
-  aliases: readonly string[]
+  /** Validated full-name regexes; empty when the feed carries none. */
+  aliasPatterns: readonly string[]
   /** The feed's upstream family grouping; absent rows group under `other`. */
   family?: string
   rules: ModelRates
@@ -364,6 +426,9 @@ export interface PricingOverviewModel {
  * plus the display-currency stamps the settings page converts with (same
  * region source as the stats payload). */
 export interface PricingOverviewPayload {
+  feedVersion?: number
+  pricingUnavailableReason?: PricingUnavailableReason
+  costState?: CostState
   models: readonly PricingOverviewModel[]
   /** The display currency the page converts rate figures into. Amounts on
    * the wire (rules rates) remain RMB. */
@@ -489,13 +554,18 @@ export function currencyOfRegion(region: 'domestic' | 'overseas' | undefined): D
  * produces before the route stamps the display-currency metadata.
  */
 export interface CostedSummary extends TokenSummary {
+  feedVersion?: number
+  associationStorageError?: AssociationStorageError
+  pricingUnavailableReason?: PricingUnavailableReason
+  costState: CostState
+  modelResolutions: ModelResolution[]
   /** Absolute data directory the summary was computed from. */
   dataDir: string
-  /** Billed cost over every recorded request (¥); unpriced models count 0. */
+  /** Billed cost (¥); unpriced models count 0. Trust only when costState is ready. */
   totalCost: number
   /** Models with usage but no entry in the pricing table, byModel order. */
   unpricedModels: string[]
-  /** The active pricing table (user-maintained; empty when none is configured). */
+  /** The snapshot pricing dictionary, including resolved names for details. */
   pricing: PricingTable
   /** Per-model rows with their billed cost attached. */
   byModel: CostedModelRow[]

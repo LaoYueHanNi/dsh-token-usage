@@ -3,8 +3,8 @@
  * price rules (¥ per million tokens) backing the cost figures of the stats
  * page. The single source is the cloud feed mirrored on every dsh startup
  * into `<data dir>/pricing.ccsa.json` (the same model-price-table source
- * cc-switch-analyzer pulls); an absent or malformed mirror logs once and
- * reads as empty, so a broken table never blocks the stats route. Pricing
+ * cc-switch-analyzer pulls); an absent or malformed mirror reports costs
+ * unavailable while usage remains readable. Pricing
  * data used to layer a hand-edited `pricing.json` on top, but that path was
  * removed (see docs/decisions/implemented/2026-09-05-abolish-manual-pricing-json.md):
  * no UI entry point, wholesale-replace semantics silently drop time rules
@@ -14,23 +14,30 @@
  * time-rule container first, then context tier, then peak slot (a slot may be
  * restricted to ISO weekdays via `daysOfWeek`, matched on the request's local
  * day) — and the aggregation keeps rows per (day, model, rate identity), so
- * re-pricing under an updated table needs no rollup rebuild. The context size
- * for tier matching is approximated by the request's input-side tokens (input +
+ * a pricing-context change rebuilds stored identities from raw history.
+ * Context size is approximated by the request's input-side tokens (input +
  * cacheRead + cacheWrite): the log does not carry the raw context size.
  *
  * @module token-usage/pricing
  */
 
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
+import { createHash } from 'node:crypto'
+import { createModelResolver, modelKey, validateModelIdentities } from './model-resolution.ts'
+import { AssociationError, associationWritesPaused, pricingDirectoryEpoch, readAssociations, withPricingDirectoryRead, withPricingDirectoryWrite, type AssociationSnapshot } from './pricing-associations.ts'
 import { consoleLogger, type LoggerLike } from './log.ts'
 import type {
   ContextTier,
   DailySlot,
   ModelPricing,
   ModelRates,
+  ModelResolution,
   PricingOverviewModel,
   PricingTable,
+  PricingUnavailableReason,
+  PricingAssociationStatus,
+  PricingSyncResult,
   RateKey,
   TimeRule,
   UsageTotals,
@@ -145,7 +152,7 @@ export interface CloudPricingModel extends CloudRates {
   family?: string
   contextTiers?: CloudTier[]
   timeRules?: CloudTimeRule[]
-  aliases?: string[]
+  aliasPatterns?: string[]
 }
 
 /** The cloud feed envelope. */
@@ -247,9 +254,16 @@ export function coerceCloudPricing(value: unknown): CloudPricingData | null {
   if (!Array.isArray(feed.models)) return null
   if (typeof feed.currency !== 'string' || feed.currency !== 'RMB') return null
   const models: CloudPricingModel[] = []
+  const identities: CanonicalModelRef[] = []
   for (const raw of feed.models as unknown[]) {
     if (typeof raw !== 'object' || raw === null) continue
     const row = raw as Record<string, unknown>
+    // Upstream retains deprecated aliases; only aliasPatterns owns alias identity here.
+    if (row.aliasPatterns !== undefined && (!Array.isArray(row.aliasPatterns)
+      || !row.aliasPatterns.every(pattern => typeof pattern === 'string' && pattern !== ''))) return null
+    if (typeof row.modelId === 'string' && row.modelId !== '') {
+      identities.push({ modelId: row.modelId, ...(Array.isArray(row.aliasPatterns) ? { aliasPatterns: row.aliasPatterns as string[] } : {}) })
+    } else if (row.aliasPatterns !== undefined) return null
     const rates = coerceRates(raw)
     if (rates === null || typeof row.modelId !== 'string' || row.modelId === '') continue
     models.push({
@@ -268,11 +282,10 @@ export function coerceCloudPricing(value: unknown): CloudPricingData | null {
             .filter((rule): rule is CloudTimeRule => rule !== null),
         }
         : {}),
-      ...(Array.isArray(row.aliases) && row.aliases.every(alias => typeof alias === 'string')
-        ? { aliases: row.aliases as string[] }
-        : {}),
+      ...(Array.isArray(row.aliasPatterns) ? { aliasPatterns: row.aliasPatterns as string[] } : {}),
     })
   }
+  try { validateModelIdentities(identities) } catch { return null }
   return {
     version: typeof feed.version === 'number' ? feed.version : 0,
     updatedAt: typeof feed.updatedAt === 'number' ? feed.updatedAt : 0,
@@ -335,47 +348,58 @@ function cloudModelRates(model: CloudPricingModel): ModelRates {
 }
 
 /**
- * Flatten one cloud feed into a pricing table: every `modelId` becomes a key
- * and every alias becomes a key holding the same rule set. Aliases land
- * first, ids last, so a model id always wins a collision with another
- * model's alias.
+ * Seed model IDs and resolve observed regex/provider names on demand.
+ * Patterns cannot be expanded into a finite list of dictionary keys.
  * @param feed - the coerced cloud feed.
- * @returns the flat table keyed by model ids and aliases.
+ * @returns a table keyed by model IDs and successfully looked-up names.
  */
 export function cloudToTable(feed: CloudPricingData): PricingTable {
-  const table: PricingTable = {}
-  for (const model of feed.models) {
-    for (const alias of model.aliases ?? []) {
-      if (alias !== '' && !(alias in table)) table[alias] = cloudModelRates(model)
-    }
-  }
+  const identify = createModelResolver(feed.models)
+  const table = resolvedTable(name => identify(name).modelId)
   for (const model of feed.models) table[model.modelId] = cloudModelRates(model)
   return table
+}
+
+function resolvedTable(identify: (name: string) => string | undefined): PricingTable {
+  const entries: PricingTable = Object.create(null)
+  return new Proxy(entries, {
+    get(target, key: string | symbol): unknown {
+      if (typeof key !== 'string' || Object.hasOwn(target, key)) return Reflect.get(target, key)
+      const id = identify(key)
+      if (id === undefined) return undefined
+      const rules = target[id]
+      if (rules !== undefined) target[key] = rules
+      return rules
+    },
+  })
 }
 
 /** One model row's identity for alias → modelId folding. */
 export interface CanonicalModelRef {
   modelId: string
-  aliases?: readonly string[]
+  aliasPatterns?: readonly string[]
 }
 
 /**
- * Map every priced name (modelId and each alias) onto its canonical
- * modelId, using the same collision order as {@link cloudToTable}:
- * aliases first (first writer wins), model ids last (always overwrite).
- * Names that do not appear in the feed are absent; callers fall back
- * to the raw name.
+ * Resolve names lazily through the same ID/regex chain as pricing.
+ * Only IDs and observed matches are enumerated; ambiguous names stay absent.
  * @param models - the feed's model rows (or the overview projection).
  * @returns name → modelId; unpriced names are not keys.
  */
 export function canonicalMapOf(models: readonly CanonicalModelRef[]): Map<string, string> {
-  const map = new Map<string, string>()
-  for (const model of models) {
-    for (const alias of model.aliases ?? []) {
-      if (alias !== '' && !map.has(alias)) map.set(alias, model.modelId)
+  const identify = createModelResolver(models)
+  class CanonicalIndex extends Map<string, string> {
+    override get(name: string): string | undefined {
+      const id = identify(name).modelId
+      if (id !== undefined) this.set(name, id)
+      return id
     }
+    override has(name: string): boolean { return this.get(name) !== undefined }
   }
-  for (const model of models) map.set(model.modelId, model.modelId)
+  const map = new CanonicalIndex()
+  for (const model of models) {
+    map.get(model.modelId)
+  }
   return map
 }
 
@@ -388,7 +412,7 @@ export function canonicalMapOf(models: readonly CanonicalModelRef[]): Map<string
  * @returns the name the byModel table should fold onto.
  */
 export function canonicalName(name: string, map?: ReadonlyMap<string, string>): string {
-  return map?.get(name) ?? name
+  return map?.get(name) ?? map?.get(modelKey(name)) ?? name
 }
 
 // ---------------------------------------------------------------------------
@@ -550,23 +574,135 @@ async function readJsonFile(dir: string, name: string, logger: LoggerLike = cons
 
 /**
  * The synced cloud table of one data directory plus the alias → modelId
- * map, from a single feed parse so the stats route does not read the
- * mirror twice for the two shapes.
+ * lookup, compiled identity resolver, exchange rate and history fingerprint
+ * from one validated feed and association snapshot.
  * @param dir - the plugin's data directory.
  * @param logger - diagnostic sink (defaults to console).
  * @returns the flat table and the canonical map (both empty when absent).
  */
-export async function readPricingContext(dir: string, logger: LoggerLike = consoleLogger): Promise<{
+export interface PricingContext {
+  feedVersion?: number
+  associations: AssociationSnapshot
+  associationStatuses: PricingAssociationStatus[]
+  unavailableReason?: PricingUnavailableReason
   table: PricingTable
   canonical: Map<string, string>
-}> {
-  const feed = coerceCloudPricing(await readJsonFile(dir, PRICING_CCSA_FILE, logger))
-  if (feed === null) return { table: {}, canonical: new Map() }
-  return { table: cloudToTable(feed), canonical: canonicalMapOf(feed.models) }
+  available: boolean
+  fingerprint: string
+  usdExchangeRate: number
+  models: PricingOverviewModel[]
+  resolveModel(name: string): ModelResolution
+  resolveAutomatic(name: string): ModelResolution
+  ratesForModel(name: string): ModelRates | undefined
+}
+
+/** One immutable feed snapshot; its indexes are private and resolutions lazy. */
+export function pricingContextOf(feed: CloudPricingData | null, unavailableReason: PricingUnavailableReason = 'invalid-feed',
+  associations: AssociationSnapshot = { state: 'ready', source: null, file: { version: 1, revision: 0, associations: [] } },
+): PricingContext {
+  const identify = createModelResolver(feed?.models ?? [])
+  const table = resolvedTable(name => resolveModel(name).modelId)
+  const rates = new Map<string, ModelRates>()
+  const models = (feed?.models ?? []).map(model => {
+    const rules = cloudModelRates(model)
+    rates.set(model.modelId, rules)
+    table[model.modelId] = rules
+    return {
+      modelId: model.modelId,
+      aliasPatterns: [...model.aliasPatterns ?? []],
+      ...(model.family !== undefined ? { family: model.family } : {}),
+      rules,
+    }
+  })
+  const ids = new Map(models.map(model => [modelKey(model.modelId), model.modelId]))
+  const associationStatuses: PricingAssociationStatus[] = (associations.state === 'ready' ? associations.file.associations : []).map(saved => {
+    const automatic = identify(saved.sourceModel)
+    const target = ids.get(modelKey(saved.targetModelId))
+    const common = { ...saved, ...(target !== undefined ? { resolvedTargetModelId: target } : {}) }
+    if (automatic.modelId !== undefined) return { ...common, state: 'automatic-takeover', automaticModelId: automatic.modelId,
+      targetDiffers: modelKey(automatic.modelId) !== modelKey(saved.targetModelId) }
+    return { ...common, state: feed === null ? 'pricing-unavailable' : target === undefined ? 'target-missing' : 'active' }
+  })
+  const savedByName = new Map(associationStatuses.map(saved => [modelKey(saved.sourceModel), saved]))
+  const resolutions = new Map<string, ModelResolution>()
+  const resolveModel = (name: string): ModelResolution => {
+    const cached = resolutions.get(name)
+    if (cached !== undefined) return cached
+    const automatic = identify(name)
+    const association = savedByName.get(modelKey(name))
+    const result: ModelResolution = association?.state === 'active'
+      ? { rawName: name, status: 'matched', modelId: association.resolvedTargetModelId!, method: 'manual', strippedPrefix: false, candidates: [], association, automatic }
+      : association === undefined ? automatic : { ...automatic, association }
+    if (result.modelId !== undefined) table[name] = rates.get(result.modelId)!
+    resolutions.set(name, result)
+    return result
+  }
+  class CanonicalIndex extends Map<string, string> {
+    override get(name: string): string | undefined {
+      const id = resolveModel(name).modelId
+      if (id !== undefined) this.set(name, id)
+      return id
+    }
+    override has(name: string): boolean { return this.get(name) !== undefined }
+  }
+  const canonical = new CanonicalIndex()
+  // Regex names enter the dictionary/index only when observed.
+  for (const model of models) canonical.get(model.modelId)
+  // Display labels, family, feed version/timestamp and exchange rate cannot
+  // change RateKey. Slot order is retained because RateKey uses slot indexes.
+  const semantic = models.map(model => ({
+    modelId: modelKey(model.modelId),
+    aliasPatterns: [...model.aliasPatterns ?? []].sort(),
+    rules: model.rules,
+  })).sort((a, b) => a.modelId.localeCompare(b.modelId))
+  const associationsKey = associations.state === 'ready'
+    ? associations.file.associations.map(saved => [modelKey(saved.sourceModel), modelKey(saved.targetModelId)]).sort((a, b) => a[0]!.localeCompare(b[0]!))
+    : null
+  const fingerprint = createHash('sha256').update(JSON.stringify({ algorithm: 3, available: feed !== null, models: semantic, associations: associationsKey },
+    (key, value: unknown) => key === 'label' ? undefined : value)).digest('hex')
+  return {
+    ...(feed !== null ? { feedVersion: feed.version } : {}),
+    ...(feed === null ? { unavailableReason } : {}),
+    table, canonical, available: feed !== null, fingerprint,
+    usdExchangeRate: feed?.usdExchangeRate ?? DEFAULT_USD_EXCHANGE_RATE,
+    associations, associationStatuses, models, resolveModel, resolveAutomatic: identify,
+    ratesForModel: name => {
+      const id = resolveModel(name).modelId
+      return id === undefined ? undefined : rates.get(id)
+    },
+  }
+}
+
+const contextCache = new Map<string, { source: string | null; reason: PricingUnavailableReason; associationKey: string; context: PricingContext }>()
+
+export async function readPricingContext(dir: string, logger: LoggerLike = consoleLogger): Promise<PricingContext> {
+  return withPricingDirectoryRead(dir, () => readPricingContextLocked(dir, logger))
+}
+
+/** Internal seam for association mutations that already hold the directory queue. */
+export async function readPricingContextLocked(dir: string, logger: LoggerLike = consoleLogger): Promise<PricingContext> {
+  let reason: PricingUnavailableReason = 'invalid-feed'
+  const [source, associations] = await Promise.all([readFile(join(dir, PRICING_CCSA_FILE), 'utf8').catch((error: unknown) => {
+    reason = (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'unreadable'
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') logger.error('[token-usage] cannot read pricing mirror:', error)
+    return null
+  }), readAssociations(dir)])
+  const associationKey = JSON.stringify([associations.source, associations.state === 'unavailable' ? associations.error : null])
+  const cached = contextCache.get(dir)
+  if (cached !== undefined && cached.source === source && cached.associationKey === associationKey
+    && (source !== null || cached.reason === reason)) return cached.context
+  let value: unknown = null
+  if (source !== null) {
+    try { value = JSON.parse(source) } catch { reason = 'invalid-json'; logger.error('[token-usage] pricing mirror is not valid JSON') }
+  }
+  const context = pricingContextOf(coerceCloudPricing(value), reason, associations)
+  contextCache.set(dir, { source, reason, associationKey, context })
+  return context
 }
 
 async function readSyncedPricing(dir: string, logger: LoggerLike = consoleLogger): Promise<PricingTable> {
-  return (await readPricingContext(dir, logger)).table
+  const feed = coerceCloudPricing(await readJsonFile(dir, PRICING_CCSA_FILE, logger))
+  return feed === null ? {} : cloudToTable(feed)
 }
 
 /**
@@ -599,33 +735,19 @@ export async function readUsdExchangeRate(dir: string, logger: LoggerLike = cons
 /**
  * The cloud feed of one data directory in its model-row shape (not flattened
  * through {@link cloudToTable}): one row per model carrying the modelId, the
- * alias list, the upstream family, and the full rule set — what the pricing
- * overview route serves so the page can show aliases as footnotes instead of
- * one row per alias-key. Absent, malformed, or non-RMB mirrors read as an
+ * alias patterns, upstream family, and full rule set — one row per model.
+ * Absent, malformed, or non-RMB mirrors read as an
  * empty list, matching {@link readPricingTable}'s stay-alive semantics.
  * @param dir - the plugin's data directory.
  * @param logger - diagnostic sink (defaults to console).
  * @returns the model rows (possibly empty).
  */
 export async function readPricingOverview(dir: string, logger: LoggerLike = consoleLogger): Promise<PricingOverviewModel[]> {
-  const feed = coerceCloudPricing(await readJsonFile(dir, PRICING_CCSA_FILE, logger))
-  if (feed === null) return []
-  return feed.models.map(model => ({
-    modelId: model.modelId,
-    aliases: [...model.aliases ?? []],
-    ...(model.family !== undefined ? { family: model.family } : {}),
-    rules: cloudModelRates(model),
-  }))
+  return (await readPricingContext(dir, logger)).models
 }
 
 /** The outcome of one successful cloud sync, for the command's reply. */
-export interface CloudSyncResult {
-  version: number
-  updatedAt: number
-  models: number
-  aliases: number
-  usdExchangeRate: number
-}
+export type CloudSyncResult = PricingSyncResult
 
 /**
  * Fetch the cloud pricing feed and mirror it verbatim into
@@ -635,7 +757,9 @@ export interface CloudSyncResult {
  * @param url - the feed URL (the config override or the default gitee feed).
  * @returns the sync summary.
  */
-export async function syncCloudPricing(dir: string, url: string): Promise<CloudSyncResult> {
+export async function syncCloudPricing(dir: string, url: string, isCurrent: () => boolean = () => true): Promise<CloudSyncResult> {
+  if (associationWritesPaused(dir)) throw new AssociationError('migration-in-progress')
+  const epoch = pricingDirectoryEpoch(dir)
   const response = await fetch(url, { signal: AbortSignal.timeout(5_000) })
   if (!response.ok) throw new Error(`HTTP ${String(response.status)}`)
   const text = await response.text()
@@ -653,14 +777,22 @@ export async function syncCloudPricing(dir: string, url: string): Promise<CloudS
   const tmp = join(dir, `${PRICING_CCSA_FILE}.tmp`)
   // A fresh install may not have recorded any usage yet, so the data dir can
   // legitimately not exist — create it (idempotent) before the mirror lands.
-  await mkdir(dirname(target), { recursive: true })
-  await writeFile(tmp, text.endsWith('\n') ? text : `${text}\n`, 'utf8')
-  await rename(tmp, target)
+  await withPricingDirectoryWrite(dir, async () => {
+    if (pricingDirectoryEpoch(dir) !== epoch) throw new AssociationError('directory-conflict')
+    if (!isCurrent()) throw new AssociationError('pricing-source-changed')
+    await mkdir(dirname(target), { recursive: true })
+    try {
+      await writeFile(tmp, text.endsWith('\n') ? text : `${text}\n`, 'utf8')
+      if (pricingDirectoryEpoch(dir) !== epoch) throw new AssociationError('directory-conflict')
+      if (!isCurrent()) throw new AssociationError('pricing-source-changed')
+      await rename(tmp, target)
+    } finally { await unlink(tmp).catch(() => undefined) }
+  })
   return {
     version: feed.version,
     updatedAt: feed.updatedAt,
     models: feed.models.length,
-    aliases: feed.models.reduce((sum, model) => sum + (model.aliases?.length ?? 0), 0),
+    aliasPatterns: feed.models.reduce((sum, model) => sum + (model.aliasPatterns?.length ?? 0), 0),
     usdExchangeRate: feed.usdExchangeRate ?? DEFAULT_USD_EXCHANGE_RATE,
   }
 }

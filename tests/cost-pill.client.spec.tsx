@@ -17,14 +17,26 @@
  * Debounce waits use `waitFor` with a timeout past the 250 ms window.
  */
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SessionListState } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { SessionStatsProjection } from '@deepseek-ai/dsh-session-stats/client'
 import { CostPill, FETCH_FAILURE_RETRY_MS, type CostPillProps } from '../src/client/CostPill.tsx'
 import { zh } from '../src/client/locales.ts'
-import type { UsageSummary } from '../src/wire.ts'
+import { ASSOCIATIONS_PATH, PRICING_PATH } from '../src/wire.ts'
+import type { ModelResolution, UsageSummary } from '../src/wire.ts'
 import { makeUseProjection, useSessionsFromState } from './test-kit.ts'
+
+vi.mock('@deepseek-ai/dsh-client-ui-primitives', async () => {
+  const { cloneElement, useState } = await import('react')
+  return { Tooltip: ({ label, children }: { label: string; children: React.ReactElement }) => {
+    const [visible, setVisible] = useState(false)
+    return <>{cloneElement(children, {
+      onMouseEnter: () => setVisible(true), onMouseLeave: () => setVisible(false),
+      onFocus: () => setVisible(true), onBlur: () => setVisible(false),
+    })}{visible && <span role="tooltip">{label}</span>}</>
+  } }
+})
 
 /** zh-bound translate stub, template-replace semantics to match the real chain. */
 const t = ((key: string, params?: Record<string, unknown>): string => {
@@ -34,6 +46,8 @@ const t = ((key: string, params?: Record<string, unknown>): string => {
 
 /** The subtree-scoped totals: cost ¥12.34, 1.5M tokens, 80% hit rate. */
 const TREE_SUMMARY: UsageSummary = {
+  costState: 'ready',
+  modelResolutions: [],
   dataDir: 'C:/data/token-usage',
   currency: 'CNY',
   usdExchangeRate: 7,
@@ -193,7 +207,75 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
+beforeAll(() => {
+  HTMLDialogElement.prototype.showModal = function () { this.open = true }
+  HTMLDialogElement.prototype.close = function () { this.open = false; this.dispatchEvent(new Event('close')) }
+})
+
 describe('CostPill', () => {
+  it('refreshes chip and details after association without closing the parent cost popup', async () => {
+    const sourceModel = 'p/internal', targetModelId = 'm'
+    let saved = false
+    const automatic: ModelResolution = { rawName: sourceModel, status: 'unmatched', candidates: [], strippedPrefix: false }
+    const association = { sourceModel, targetModelId, resolvedTargetModelId: targetModelId, state: 'active' as const }
+    const fetch = vi.fn(async (input: RequestInfo | URL, options?: RequestInit) => {
+      const url = new URL(String(input), 'http://localhost')
+      if (url.pathname === ASSOCIATIONS_PATH) {
+        if (options?.method === 'POST') saved = true
+        return Response.json({ directoryToken: 'directory', revision: saved ? 1 : 0, storageState: 'ready', pricingAvailable: true,
+          writesPaused: false, associations: saved ? [association] : [], resolution: saved ? { ...automatic, status: 'matched', method: 'manual', modelId: targetModelId, association, automatic } : automatic })
+      }
+      if (url.pathname === PRICING_PATH) return Response.json({ currency: 'CNY', usdExchangeRate: 7, models: [{ modelId: targetModelId, aliasPatterns: [], rules: {
+        base: { inputPerMillion: 1, outputPerMillion: 2 }, contextTiers: [], dailySlots: [], timeRules: [],
+      } }] })
+      return Response.json({ ...TREE_SUMMARY, totalCost: saved ? 8 : 0, costState: 'ready', unpricedModels: saved ? [] : [sourceModel],
+        modelResolutions: saved ? [{ ...automatic, status: 'matched', modelId: targetModelId, method: 'manual', association, automatic }] : [automatic],
+        byModel: url.searchParams.get('fields') === 'session' ? [{ model: saved ? targetModelId : sourceModel, totals: TREE_SUMMARY.total, cost: saved ? 8 : 0 }] : [] })
+    })
+    vi.stubGlobal('fetch', fetch)
+    render(<CostPill {...propsOf('session-a', SOLO_BY_ID)} />)
+    await openPanel()
+    await screen.findByText(sourceModel)
+    fireEvent.click(screen.getByRole('button', { name: t('pricing.unpriced') }))
+    fireEvent.click(screen.getByRole('button', { name: t('association.choose') }))
+    const dialog = await screen.findByRole('dialog', { name: t('association.title') })
+    const search = await screen.findByRole('searchbox')
+    fireEvent.change(search, { target: { value: targetModelId } })
+    fireEvent.pointerDown(search)
+    fireEvent.click(screen.getByRole('radio'))
+    fireEvent.keyDown(dialog, { key: 'Escape' })
+    expect(screen.getByRole('dialog', { name: t('panel.title') })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: t('association.save') }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: t('association.title') })).toBeNull())
+    const associationTip = t('association.tooltip', { models: sourceModel })
+    const associationIcon = await screen.findByRole('img', { name: associationTip })
+    expect(associationIcon.hasAttribute('title')).toBe(false)
+    fireEvent.mouseEnter(associationIcon)
+    expect(screen.getByRole('tooltip').textContent).toBe(associationTip)
+    fireEvent.mouseLeave(associationIcon)
+    expect(screen.getByRole('dialog', { name: t('panel.title') }).textContent).toContain('8.00￥')
+    expect(screen.getByRole('dialog', { name: t('panel.title') })).toBeTruthy()
+    const statsCalls = fetch.mock.calls.filter(call => String(call[0]).startsWith('/token-usage/stats'))
+    expect(statsCalls.filter(call => String(call[0]).includes('fields=chip')).length).toBeGreaterThanOrEqual(4)
+    expect(statsCalls.filter(call => String(call[0]).includes('fields=session'))).toHaveLength(2)
+  })
+  it('shows association storage failure in the cost detail panel', async () => {
+    stubFetch({ ...TREE_DETAIL, associationStorageError: 'invalid-file' })
+    render(<CostPill {...propsOf('session-a', SOLO_BY_ID)} />)
+    await openPanel()
+    await screen.findByRole('status')
+    expect(screen.getByRole('status').textContent).toBe(t('pricing.associationStorageUnavailable'))
+  })
+  it.each(['pricing-unavailable', 'history-incomplete'] as const)('hides chip and panel costs for %s', async costState => {
+    stubFetch({ ...TREE_DETAIL, costState, totalCost: 9876.54 })
+    render(<CostPill {...propsOf('session-a', SOLO_BY_ID)} />)
+    const button = await screen.findByRole('button')
+    expect(button.textContent).toContain('—')
+    fireEvent.click(button)
+    await screen.findByRole('status')
+    expect(document.body.textContent).not.toContain('9876.54')
+    expect(screen.getByRole('status').textContent).toBe(t(costState === 'history-incomplete' ? 'pricing.historyIncomplete' : 'pricing.unavailable'))
+  })
   it('renders nothing before the first fetch lands (empty rule)', () => {
     stubFetch(TREE_SUMMARY)
     const { container } = render(<CostPill {...propsOf('s1')} />)

@@ -13,7 +13,57 @@ README 的深度延伸:计费规则链、价格文件格式、fork 维护者的�
 
 - `dailySlots` 可用 `daysOfWeek` 把峰谷限制在 ISO 星期(`1`=周一 … `7`=周日;缺省=每天),按请求的本地日匹配——例如 DeepSeek V4 的周末峰时按峰谷价之外的价格计。
 - 档位匹配以上下文 token 量近似:本请求 `input + cacheRead + cacheWrite`。
-- 定价表更新价格后,全部历史按新价即时重算,无需重建数据。
+- 定价上下文（识别算法、名称或价格规则）变化后，下次读取从原始记录重建冻结汇总并重新选规则；旧汇总缺指纹同样重建。首次读取可能较慢，请求数和 token 不变。源记录不完整时保留可用用量、隐藏无法可靠重算的费用。
+
+## 模型识别
+
+自动匹配分三阶段，全部忽略大小写，只有唯一命中才获得价格：
+
+1. 原始完整名称先匹配全表 `modelId`。
+2. 各 `/` 路径段均非空时取最后一段，再匹配 `modelId`。前导、尾随、连续 `/` 不生成候选；不修剪空白、不移除版本或 `flash` / `flashx` / `fast` / `mini` 等身份。
+3. 原名与去前缀候选执行 `aliasPatterns`，模型命中去重，跨模型命中报歧义。
+
+`aliasPatterns` 缺省为 `[]`，使用上游无 flags、以 `^` / `$` 锚定的可移植语法（字面量、转义标点、分组、或分支及 `?`）；插件加载时校验编译，固定添加 `i`，要求匹配覆盖整个输入，包括拒绝尾部换行。大小写不敏感符合上游约定，provider 前缀兼容仍是插件扩展。旧 `aliases` 字段被忽略，不自动转换成正则；只在旧字段中存在的名称需要上游补正则或保存本地关联。
+
+原名 ID 优先于去前缀 ID，两者优先于正则；任何阶段歧义均停止，不取第一条、不使用 contains。非法正则和忽略大小写后的重复 ID 使整份 feed 校验失败。无命中或歧义显示未定价及候选原因，费用显示 `—`，汇总只包含已识别模型；真实零单价仍已定价。不同 provider 的未识别完整名称保持独立，同一完整名称的大小写变体合并。设置页、会话页、筛选、详情和总览「已用」采用同一识别结果；原始用量记录不改写。
+
+自动识别、手动关联及其操作界面均已实现；未定价位置也可直接打开上游 Issue 请求草稿。
+
+定价总览搜索保留模型 ID 和家族的子串匹配；搜索完整别名时执行 `aliasPatterns`，不搜索正则源码中的片段。总览接口只返回 `aliasPatterns`，同步结果中的 `aliasPatterns` 为正则条数，不是匹配名称数量。
+
+## 本地名称关联
+
+在设置页、会话用量页或费用详情中，点击模型名称旁的橙色「未定价」标签，弹窗提供「关联现有模型」和「增加模型定价」；选择前者进入关联面板：
+
+1. 搜索框初始为空，不预填未定价模型 ID；只在本机定价表的模型 ID 中匹配输入关键词，忽略大小写与输入首尾空格，支持部分 ID。别名、家族及其他字段不参与匹配。空输入（含空格）不展示候选，唯一结果也不自动保存。
+2. 选择目标，必要时点击「查看定价」核验完整规则，确认模型身份后点击「绑定模型」。成功后自动关闭绑定弹窗。
+3. 页面沿用当前日期、模型与会话范围刷新。模型名旁的小问号悬停约 100ms 后显示「此模型含手动关联：[原始模型 ID]」，键盘聚焦也可显示；使用普通鼠标指针，多条来源完整列出。查看映射和撤销集中在定价表的「模型别名关联」中。
+
+在「定价表」弹窗标题旁点击「模型别名关联」，可查看当前数据目录的全部保存条目，不受用量或定价搜索筛选影响，空窗口也可打开。每条一行，左侧显示「来源 → 目标」，右侧只有「撤销关联」；不显示逐条状态提示或「查看／修改」入口。自动接管和目标失效不会删除原选择；撤销前会说明全部历史及后续用量的影响。更换映射可先撤销，再从未定价标签重新绑定。保存冲突会显示当前状态，需核对后明确重试；目录切换会清空旧选择并重读候选。操作失败不显示成功，保留搜索与选择。
+
+未定价操作弹窗的「增加模型定价」在新标签页打开 [model-price-table Issue 草稿](https://github.com/LaoYueHanNi/model-price-table/issues/new)，关联绑定页不重复此入口。英文标题为 `Add model pricing: {modelId}`，正文提供可选价格参考（币种、四项 token 单价、上下文窗口）、可选官方定价 URL，并自动填充当前定价表版本。请按需补充后自行提交。链接不自动提交、不附带用量、会话内容、API key 或项目路径。
+
+关联仅把尚无唯一自动结果的原始完整名称指向已有云端 `modelId`，不保存价格。来源忽略大小写但不去前缀；`p/internal` 不影响 `q/internal` 或 `internal`。关联目标的时间规则、上下文档位、工作日峰谷和真实零单价都正常生效；保存、修改、撤销会重算全部可恢复的历史及后续用量，原始记录不变。
+
+关联保存在当前数据目录的 `pricing-associations.json`，与价格镜像分离：
+
+```json
+{
+  "version": 1,
+  "revision": 1,
+  "associations": [
+    { "sourceModel": "provider/internal-name", "targetModelId": "glm-5.3-flash" }
+  ]
+}
+```
+
+文件缺失是 revision 0 的空表；未知版本、非法字段、重复来源、不可读或损坏文件会保留原内容、禁用人工关联并拒绝写入，页面显示存储故障。自动识别继续可用。目标只接受真实 ID，不接受 alias 或另一条关联。
+
+本机接口 `/token-usage/pricing-associations` 的 GET 返回 `directoryToken`、`revision`、存储／定价状态、可选 `feedVersion` 和全部关联，可用 `?sourceModel=…` 附带单个名称解析；POST 保存需 JSON `{sourceModel,targetModelId,revision,directoryToken}`，DELETE 撤销需 `{sourceModel,revision,directoryToken}`。先读取状态，提交当前修订号和目录标识；409 冲突返回当前状态，不能自动重试覆盖其他修改。所有响应不缓存，写请求上限 64 KiB。
+
+每条关联状态为 `active`（生效）、`automatic-takeover`（自动接管，保留原选择及是否不同）、`target-missing`（目标失效）或 `pricing-unavailable`（无有效镜像）。自动结果优先，不能手动覆盖；自动再次失败时原有效选择会重新生效。目标改名不沿 alias 追踪，但仅改变 ID 大小写仍有效；撤销后可能由自动规则继续定价。
+
+关联文件随数据目录迁移。迁移时暂停写入，源／目标同名内容不同则在复制其他文件前拒绝迁移，保留两边；仅逐字节一致才能清理源文件。损坏文件也按原始字节保护。并发保护限本宿主进程，不提供跨进程文件锁。
 
 ## 价格来源:云端镜像
 
@@ -21,11 +71,11 @@ README 的深度延伸:计费规则链、价格文件格式、fork 维护者的�
 |---|---|---|
 | `pricing.ccsa.json` | 启动自动拉取 | 云端 model-price-table(cc-switch-analyzer 同源)的本地镜像,每次重启 dsh 自动刷新,失败时沿用旧镜像 |
 
-只有这一份来源:启动自动同步的云端镜像。文件损坏或非 RMB 时按未定价处理,不影响统计页;保存到磁盘上的旧版 `pricing.json` 升级后会被忽略(只是不再被读取,文件不被主动删除)。默认数据目录:`~/.dsh/token-usage/`(配置了 `path` 时以该目录为准)。
+只有这一份来源:启动自动同步的云端镜像。无有效镜像时明确显示定价表不可用及原因（未同步、无法读取、JSON 损坏或校验失败），隐藏费用但保留用量；新同步校验失败不会覆盖旧有效镜像。保存到磁盘上的旧版 `pricing.json` 升级后会被忽略(只是不再被读取,文件不被主动删除)。默认数据目录:`~/.dsh/token-usage/`(配置了 `path` 时以该目录为准)。
 
 ### 云端 feed 格式
 
-`currency` 须为 `RMB`;`modelId` 与 `aliases` 都会展开为可匹配的键;`timeRules` / `contextTiers` / `dailySlots` 全部参与计费:
+`currency` 须为 `RMB`;仅 `modelId` 和可选 `aliasPatterns` 参与统一识别，旧 `aliases` 不参与;`timeRules` / `contextTiers` / `dailySlots` 全部参与计费:
 
 ```json
 {
@@ -35,7 +85,7 @@ README 的深度延伸:计费规则链、价格文件格式、fork 维护者的�
   "usdExchangeRate": 7,
   "models": [
     { "modelId": "deepseek-chat", "inputCostPerMillion": 2, "outputCostPerMillion": 8,
-      "cacheReadCostPerMillion": 0.5, "cacheCreationCostPerMillion": 1, "aliases": ["deepseek-v3"] }
+      "cacheReadCostPerMillion": 0.5, "cacheCreationCostPerMillion": 1, "aliasPatterns": ["^deepseek-v3$"] }
   ]
 }
 ```
@@ -53,6 +103,8 @@ README 的深度延伸:计费规则链、价格文件格式、fork 维护者的�
 
 自己维护 model-price-table fork 时,用 `pricingUrlDomestic` / `pricingUrlOverseas` 指到你的地址。
 
+插件配置页的「定价区域」右侧提供「同步定价表」按钮，可立即重新拉取当前已保存区域的定价表，无需重启。有未保存修改时先保存或放弃；同步期间禁用重复点击，成功显示版本与模型数量并刷新同窗口已打开的用量和定价总览。网络或校验失败保留旧表并提示重试；同步中切换生效区域或数据目录时，旧请求不能覆盖新配置的镜像。
+
 ## 货币展示联动
 
 地区切换同时决定统计页的费用展示货币:
@@ -67,3 +119,8 @@ README 的深度延伸:计费规则链、价格文件格式、fork 维护者的�
 - [峰谷 daysOfWeek 语义](./decisions/implemented/2026-08-29-daily-slots-days-of-week.md)
 - [上下文压缩请求计费](./decisions/implemented/2026-09-02-compaction-billing.md)
 - [废除手工 pricing.json 定价文件](./decisions/implemented/2026-09-05-abolish-manual-pricing-json.md)
+
+- [正则别名统一识别](./decisions/implemented/2026-10-11-regex-only-model-aliases.md)
+- [统一自动识别与历史重算](./decisions/implemented/2026-10-10-model-pricing-resolution.md)
+- [手动关联后端与迁移保护](./decisions/implemented/2026-10-10-model-pricing-associations.md)
+- [局部关联界面与上游草稿](./decisions/implemented/2026-10-10-model-pricing-association-ui.md)

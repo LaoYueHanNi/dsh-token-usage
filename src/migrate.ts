@@ -2,14 +2,15 @@
  * Data-directory migration of the token-usage plugin: copies every file from
  * one data directory into another, physically and verbatim — the per-day
  * JSONL shards, the pricing files, the sync marker, the session-metadata
- * index, and the stats rollup all keep their exact names and contents; no
- * row is re-bucketed or rewritten.
+ * index and model associations keep their exact names and contents. The
+ * derived rollup rebuilds instead of migrating; no row is rewritten here.
  *
  * Two-phase commit, in the shape of a database switch: every file copies
  * first (a failure aborts with the source untouched); the caller then flips
  * its running configuration to the new directory; only after that switch
  * succeeds does the caller run the cleanup, which removes the source files
- * that verifiably landed (same size) and the emptied directory. At every
+ * that verifiably landed (same size, or identical bytes for associations)
+ * and the emptied directory. At every
  * intermediate point the data exists in both places or only in the source —
  * never only in the target.
  *
@@ -19,9 +20,11 @@
  * @module token-usage/migrate
  */
 
-import { access, copyFile, mkdir, readdir, rmdir, stat, unlink } from 'node:fs/promises'
+import { constants } from 'node:fs'
+import { access, copyFile, mkdir, readFile, readdir, rmdir, stat, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { consoleLogger, type LoggerLike } from './log.ts'
+import { ASSOCIATIONS_FILE } from './pricing-associations.ts'
 
 /** Files that belong to this plugin; anything else in the directory stays. */
 const OWNED_PATTERNS = [
@@ -30,6 +33,7 @@ const OWNED_PATTERNS = [
   /^pricing\.json$/u,
   /^pricing\.ccsa\.json$/u,
   /^sessions\.json$/u,
+  /^pricing-associations\.json$/u,
 ] as const
 
 /**
@@ -68,6 +72,14 @@ function isOwned(name: string): boolean {
   return OWNED_PATTERNS.some(pattern => pattern.test(name))
 }
 
+/** Only ENOENT means absent: unreadable choices must stop migration. */
+async function associationBytes(dir: string): Promise<Buffer | null> {
+  return readFile(join(dir, ASSOCIATIONS_FILE)).catch((error: unknown) => {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+    throw error
+  })
+}
+
 /** List this plugin's files in a directory (names, not paths). */
 async function ownedFiles(dir: string): Promise<string[]> {
   const names = await readdir(dir).catch(() => [] as string[])
@@ -76,9 +88,9 @@ async function ownedFiles(dir: string): Promise<string[]> {
 
 /**
  * Phase one: copy every owned file into the target, verbatim. A target file
- * with the same name is NOT overwritten — the caller switched writes to the
- * target first, so a same-named file there is either newer live data or a
- * user placement, and either way it wins. Any copy failure aborts with the
+ * with the same name is NOT overwritten: existing normal files win, while
+ * associations must be byte-identical or migration aborts before copying.
+ * Any copy failure aborts with the
  * source directory fully intact (the half-copied target is left behind; it
  * is outside every configured directory until the switch names it).
  * @param oldDir - the quiesced source directory.
@@ -91,6 +103,10 @@ export async function copyData(
   newDir: string,
   onProgress?: (progress: MigrationProgress) => void,
 ): Promise<string[]> {
+  const [sourceChoices, targetChoices] = await Promise.all([associationBytes(oldDir), associationBytes(newDir)])
+  if (sourceChoices !== null && targetChoices !== null && !sourceChoices.equals(targetChoices)) {
+    throw new Error('pricing-associations.json migration conflict: source and target differ')
+  }
   await mkdir(newDir, { recursive: true })
   // A stale rollup in the target would aggregate the OLD day files until its
   // next lazy rebuild; drop it so the first stats read after the switch
@@ -100,6 +116,17 @@ export async function copyData(
   const copied: string[] = []
   for (const name of names) {
     const destination = join(newDir, name)
+    if (name === ASSOCIATIONS_FILE) {
+      // Never overwrite a target created after preflight, even out of process.
+      if (targetChoices === null) await copyFile(join(oldDir, name), destination, constants.COPYFILE_EXCL)
+      const landed = await associationBytes(newDir)
+      if (sourceChoices === null || landed === null || !landed.equals(sourceChoices)) {
+        throw new Error('pricing-associations.json changed during migration')
+      }
+      copied.push(name)
+      onProgress?.({ done: copied.length, total: names.length, phase: 'copying' })
+      continue
+    }
     if (await exists(destination)) {
       copied.push(name)
       onProgress?.({ done: copied.length, total: names.length, phase: 'copying' })
@@ -121,7 +148,8 @@ export async function copyData(
 /**
  * Phase three (after the caller's configuration switch): remove the source
  * files that verifiably landed — same name present in the target with the
- * same size — then the emptied directory. A source file whose copy cannot be
+ * same size (associations require identical bytes) — then the emptied
+ * directory. A source file whose copy cannot be
  * proven stays; unknown files keep the directory in place.
  * @param oldDir - the previous data directory.
  * @param newDir - the directory now in force.
@@ -137,6 +165,11 @@ export async function cleanSource(
   const names = await ownedFiles(oldDir)
   const removable: string[] = []
   for (const name of names) {
+    if (name === ASSOCIATIONS_FILE) {
+      const [source, target] = await Promise.all([associationBytes(oldDir), associationBytes(newDir)])
+      if (source !== null && target !== null && source.equals(target)) removable.push(name)
+      continue
+    }
     const landed = await access(join(newDir, name)).then(() => true, () => false)
       && await stat(join(oldDir, name)).then(s => s.size, () => -1)
         === await stat(join(newDir, name)).then(s => s.size, () => -2)

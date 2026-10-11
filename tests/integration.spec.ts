@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs'
-import { mkdtemp, readFile, readdir } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -7,6 +7,7 @@ import { Context, Service } from '@deepseek-ai/cordis'
 import { SessionSeq } from '@deepseek-ai/dsh-session'
 import * as plugin from '../src/index.ts'
 import { DEFAULT_PRICING_URL_OVERSEAS } from '../src/pricing.ts'
+import { ASSOCIATIONS_FILE } from '../src/pricing-associations.ts'
 import { compactionEvent, messageEvent, retryEvent } from './helpers.ts'
 
 /** Returns persisted sessions from a shared mutable list. */
@@ -499,6 +500,8 @@ describe('live data-directory relocation', { timeout: 15_000 }, () => {
     host!.emit('session/event', { id: 's1' }, messageEvent({ messageId: 'm1' }))
     await pollLogFile(dirA)
     await waitForState(dirA)
+    const choices = '{"version":1,"revision":5,"associations":[{"sourceModel":"p/internal","targetModelId":"m"}]}'
+    await writeFile(join(dirA, ASSOCIATIONS_FILE), choices)
 
     updateVolatileConfig(host!, { path: dirB })
     await pollGone(dirA)
@@ -506,10 +509,47 @@ describe('live data-directory relocation', { timeout: 15_000 }, () => {
     // The row and marker landed in B under their own names.
     expect((await allIds(dirB)).sort()).toEqual(['m1'])
     expect(existsSync(join(dirB, 'state.json'))).toBe(true)
+    expect(await readFile(join(dirB, ASSOCIATIONS_FILE), 'utf8')).toBe(choices)
     // Events after the move write into B.
     host!.emit('session/event', { id: 's1' }, messageEvent({ messageId: 'm2' }))
     await new Promise(resolve => setTimeout(resolve, 50))
     expect((await allIds(dirB)).sort()).toEqual(['m1', 'm2'])
+  })
+
+  it('association conflicts abort host relocation and keep live writes in the source', async () => {
+    const dirA = join(home, 'A'), dirB = join(home, 'B')
+    await mountWith({ path: dirA })
+    host!.emit('session/event', { id: 's1' }, messageEvent({ messageId: 'm1' }))
+    await pollLogFile(dirA); await waitForState(dirA)
+    await mkdir(dirB)
+    await writeFile(join(dirA, ASSOCIATIONS_FILE), 'left')
+    await writeFile(join(dirB, ASSOCIATIONS_FILE), 'rght')
+    updateVolatileConfig(host!, { path: dirB })
+    await new Promise(resolve => setTimeout(resolve, 100))
+    host!.emit('session/event', { id: 's1' }, messageEvent({ messageId: 'm2' }))
+    await vi.waitFor(async () => expect((await allIds(dirA)).sort()).toEqual(['m1', 'm2']))
+    expect(await allIds(dirB)).toEqual([])
+    expect(await readFile(join(dirA, ASSOCIATIONS_FILE), 'utf8')).toBe('left')
+    expect(await readFile(join(dirB, ASSOCIATIONS_FILE), 'utf8')).toBe('rght')
+  })
+
+  it('refreshes pricing in the new directory when the first startup download outlives migration', async () => {
+    const dirA = join(home, 'A'), dirB = join(home, 'B')
+    const feed = JSON.stringify({ currency: 'RMB', models: [{ modelId: 'm', inputCostPerMillion: 1, outputCostPerMillion: 2 }] })
+    let finish!: (value: Response) => void
+    const fetch = vi.fn().mockImplementationOnce(() => new Promise<Response>(resolve => { finish = resolve }))
+      .mockImplementation(async () => new Response(feed))
+    vi.stubGlobal('fetch', fetch)
+    await mountWith({ path: dirA })
+    await waitForState(dirA)
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1))
+    updateVolatileConfig(host!, { path: dirB })
+    await pollGone(dirA)
+    await vi.waitFor(async () => expect(await readFile(join(dirB, 'pricing.ccsa.json'), 'utf8')).toBe(feed + '\n'))
+    finish(new Response(feed))
+    await new Promise(resolve => setTimeout(resolve, 30))
+    expect(existsSync(dirA)).toBe(false)
+    expect(fetch).toHaveBeenCalledTimes(2)
   })
 
   it('moves to an explicit directory and back to the entry default when the stored path clears', async () => {

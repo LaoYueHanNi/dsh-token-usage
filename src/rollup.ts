@@ -28,6 +28,12 @@ export { TMP_FILE as ROLLUP_TMP_FILE_NAME }
 
 /** The on-disk rollup: the aggregate of every day file named ≤ {@link RollupFile.upto}. */
 export interface RollupFile {
+  /** In-memory marker for readable legacy aggregates missing session cells. */
+  requiresRebuild?: true
+  /** Identification algorithm and feed rules used to select stored RateKeys. */
+  pricingFingerprint?: string
+  /** Files absorbed into this snapshot, used to detect unavailable history. */
+  sourceFiles?: string[]
   /** Inclusive upper date (`YYYY-MM-DD`) of the day files already absorbed. */
   upto: string
   /** Totals over every absorbed record. */
@@ -41,14 +47,13 @@ export interface RollupFile {
   /** Per-model rows of the absorbed records, descending on request count. */
   byModel: UsageModelRow[]
   /** Per-(day, model, rate identity) rows of the absorbed records — rule
-   * identities, never prices, so an updated pricing table re-prices the
-   * absorbed history without a rebuild. */
+   * identities, never prices; a changed pricing fingerprint rebuilds them
+   * from raw records before repricing the absorbed history. */
   rateRows: UsageRateRow[]
   /** Per-(session, day, model, rate identity) rows of the absorbed records
    * — the session dimension the settings page's session table folds from.
-   * Part of the format contract: a rollup without it fails validation and
-   * rebuilds, because the absorbed day files are never reread to backfill
-   * the dimension lazily. */
+   * A legacy rollup missing this dimension retains usable totals but
+   * requires a rebuild; unavailable source history hides unreliable costs. */
   bySession: UsageSessionRow[]
   /** The newest absorbed records, descending by time (bounded window). */
   recent: UsageRecord[]
@@ -111,16 +116,17 @@ function isRollupFile(value: unknown): value is RollupFile {
   if (typeof value !== 'object' || value === null) return false
   const rollup = value as Record<string, unknown>
   return typeof rollup.upto === 'string' && DAY_KEY.test(rollup.upto)
+    && (rollup.pricingFingerprint === undefined || typeof rollup.pricingFingerprint === 'string')
+    && (rollup.sourceFiles === undefined || (Array.isArray(rollup.sourceFiles)
+      && rollup.sourceFiles.every(name => typeof name === 'string' && /^usage-\d{4}-\d{2}-\d{2}\.jsonl$/u.test(name))))
     && isTotals(rollup.total)
     && Array.isArray(rollup.byDay) && rollup.byDay.every(isDayRow)
     && Array.isArray(rollup.byHour) && rollup.byHour.every(isHourRow)
     && Array.isArray(rollup.byModel) && rollup.byModel.every(isModelRow)
     && Array.isArray(rollup.rateRows) && rollup.rateRows.every(isRateRow)
-    // Hard requirement, not an optional field: the absorbed frozen day
-    // files are never reread, so a legacy rollup without the session
-    // dimension could not backfill it lazily — failing validation routes
-    // the file through the one-shot rebuild instead.
-    && Array.isArray(rollup.bySession) && rollup.bySession.every(isSessionRow)
+    // A missing legacy dimension requires a rebuild, but usable totals
+    // must survive when the raw history needed for that rebuild is lost.
+    && (rollup.bySession === undefined || (Array.isArray(rollup.bySession) && rollup.bySession.every(isSessionRow)))
     && Array.isArray(rollup.recent)
 }
 
@@ -152,7 +158,7 @@ export async function readRollup(dir: string, logger: LoggerLike = consoleLogger
   const recent = (value.recent as unknown[])
     .map(coerceRecord)
     .filter((record): record is UsageRecord => record !== null)
-  return { ...value, recent }
+  return { ...value, recent, ...(value.bySession === undefined ? { bySession: [], requiresRebuild: true as const } : {}) }
 }
 
 /**
