@@ -18,5 +18,7 @@ Status: implemented
 
 ## Consequences
 
+2026-10-11 的模型识别、本地关联和定价同步交付按用户指定使用 `0.4.7` 正式版，发布内容见 [0.4.7 版本说明](../../releases/0.4.7.md)。沿用公共 npm、`latest` 标签和提交后手动发布流程；发布前完成类型检查、全量测试、双构建与打包入口核验。宿主与客户端产物一起分发，说明旧 `aliases` 停用和历史定价指纹升级带来的首次重算影响；不调整依赖基线。
+
 - 代价：包名变化要求 README 与既有用户改用新安装名。经 pnpm 10 实测，旧 `github:` 安装（依赖键 `dsh-token-usage`）用 `update` 无法迁移：pnpm 只在原 git 渠道重新解析，且按仓库现名装出 scoped 包后宿主按 patch 的 import 说明符（`@laoyuehanni/dsh-token-usage`）在 `node_modules` 下解析不到对应目录，启动报 `ERR_MODULE_NOT_FOUND`；按新名 `update` 则因依赖键不存在而静默无效。故 README 顶部放置迁移指引（先 `remove dsh-token-usage` 再 `add` npm 包，数据目录不受影响）；每次发布必须在发布机跑完整 typecheck+test+双构建（耗时换安全）；publish 者必须持有 npm 上 laoyuehanni scope 的权限；双 lockfile 继续留在仓库但被 files 白名单排除在 tarball 外。
 - 换来：获得 registry 的语义化版本分发与 `install` 一行安装；公共包规范（许可证/元数据/入口类型声明）全部齐备；prepublishOnly 兜底使"忘构建就发包"这类事故结构性消失。
