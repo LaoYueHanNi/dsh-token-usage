@@ -571,6 +571,19 @@ describe('syncCloudPricing', () => {
     await expect(syncCloudPricing(dir, 'https://example.com/feed.json')).rejects.toThrow(/503/)
   })
 
+  it('retains the previous mirror when the source changes during a fetch', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'token-usage-stale-sync-'))
+    await writeFile(join(dir, 'pricing.ccsa.json'), FEED)
+    let finish!: (response: Response) => void
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(resolve => { finish = resolve })))
+    let current = true
+    const task = syncCloudPricing(dir, 'https://example.com/old-feed.json', () => current)
+    current = false
+    finish(new Response(FEED.replace('"version":4', '"version":5')))
+    await expect(task).rejects.toMatchObject({ code: 'pricing-source-changed' })
+    expect(await readFile(join(dir, 'pricing.ccsa.json'), 'utf8')).toBe(FEED)
+  })
+
   it('creates a missing data directory before landing the mirror', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(FEED)))
     // A fresh install may not have a data dir yet (no usage recorded).

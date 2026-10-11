@@ -31,6 +31,7 @@ import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ContextTier, DailySlot, ModelPricing, ModelRates, PricingOverviewModel, PricingOverviewPayload } from '../wire.ts'
 import { PRICING_PATH } from '../wire.ts'
 import { useAsyncResource } from './async-resource.ts'
+import { usePricingAssociationRefresh } from './pricing-associations.ts'
 import { PricingAssociationDialog, PricingAssociationManagerButton } from './PricingAssociations.tsx'
 import { PricingStatus, costsAvailable } from './PricingStatus.tsx'
 import type { CurrencyView } from './format.ts'
@@ -264,6 +265,7 @@ export function PricingOverviewDialog({ usedModels, view, onClose, t }: {
   // One fetch per dialog session: no filter deps, and the hook's own
   // retry() is the failure state's retry button (a fresh local fetch).
   const [state, retry] = useAsyncResource<PricingOverviewPayload>(fetchPricingOverview, [], { retryToken: 0 })
+  usePricingAssociationRefresh(retry)
   const [search, setSearch] = useState('')
   // The token buckets driving the simulated-cost column, as typed: an
   // amount under a picked K/M/B unit each. The first preset case prefills

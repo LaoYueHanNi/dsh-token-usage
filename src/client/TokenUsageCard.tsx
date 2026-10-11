@@ -18,9 +18,10 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { IconChevronDownOutlineMedium } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { InjectFace, PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
+import type { InjectFace, PropsLocale, TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { CardActions, CardStore } from './card-form.ts'
-import { FULL_SYNC_PATH, type FullSyncView } from '../wire.ts'
+import { FULL_SYNC_PATH, PRICING_SYNC_PATH, type FullSyncView, type PricingSyncResult } from '../wire.ts'
+import { pricingTableChanged } from './pricing-associations.ts'
 import css from './TokenUsageCard.module.css'
 
 /** The view the Plugins page asks for under `plugins.bundle.config`. */
@@ -218,20 +219,23 @@ export function TokenUsageCard(props: TokenUsageCardProps) {
               </span>
             </label>
             <p className={css.hint}>{t('card.pathHint')}</p>
-            <label className={css.field} htmlFor="token-usage-card-region">
-              <span className={css.fieldLabel}>{t('card.regionLabel')}</span>
-              <select
-                id="token-usage-card-region"
-                className={css.input}
-                value={state.fields.pricingRegion}
-                disabled={lockInput}
-                onChange={event => { props.editField('pricingRegion', event.target.value) }}
-              >
-                <option value="">{t('card.regionDefault')}</option>
-                <option value="domestic">{t('card.region.domestic')}</option>
-                <option value="overseas">{t('card.region.overseas')}</option>
-              </select>
-            </label>
+            <div className={css.field}>
+              <label className={css.fieldLabel} htmlFor="token-usage-card-region">{t('card.regionLabel')}</label>
+              <div className={css.regionRow}>
+                <select
+                  id="token-usage-card-region"
+                  className={css.input}
+                  value={state.fields.pricingRegion}
+                  disabled={lockInput}
+                  onChange={event => { props.editField('pricingRegion', event.target.value) }}
+                >
+                  <option value="">{t('card.regionDefault')}</option>
+                  <option value="domestic">{t('card.region.domestic')}</option>
+                  <option value="overseas">{t('card.region.overseas')}</option>
+                </select>
+                <PricingSyncButton disabled={lockInput || state.saving} dirty={state.dirty} t={t} />
+              </div>
+            </div>
             <p className={css.hint}>
               {t('card.hint')}
               {state.overridden.pricingRegion ? ` ${t('card.overridden')}` : ''}
@@ -344,4 +348,51 @@ export function TokenUsageCard(props: TokenUsageCardProps) {
         : null}
     </li>
   )
+}
+
+function PricingSyncButton({ disabled, dirty, t }: {
+  disabled: boolean; dirty: boolean; t: TranslateNS<'token-usage'>
+}) {
+  const [status, setStatus] = useState<'idle' | 'running' | 'done' | 'failed' | 'changed' | 'migrating'>('idle')
+  const [result, setResult] = useState<PricingSyncResult | null>(null)
+  const running = useRef(false)
+  const mounted = useRef(true)
+  useEffect(() => {
+    mounted.current = true
+    return () => { mounted.current = false }
+  }, [])
+
+  const sync = async (): Promise<void> => {
+    if (running.current || disabled || dirty) return
+    running.current = true
+    setStatus('running'); setResult(null)
+    try {
+      const response = await fetch(PRICING_SYNC_PATH, { method: 'POST', cache: 'no-store' })
+      if (!response.ok) {
+        const body = await response.json() as { error?: string }
+        if (mounted.current) setStatus(body.error === 'migration-in-progress' ? 'migrating'
+          : body.error === 'directory-conflict' || body.error === 'pricing-source-changed' ? 'changed' : 'failed')
+        return
+      }
+      const body = await response.json() as PricingSyncResult
+      if (body === null || typeof body !== 'object'
+        || ![body.version, body.updatedAt, body.models, body.aliases, body.usdExchangeRate].every(value => typeof value === 'number' && Number.isFinite(value))) {
+        throw new Error('unexpected pricing sync response')
+      }
+      pricingTableChanged()
+      if (mounted.current) { setResult(body); setStatus('done') }
+    } catch {
+      if (mounted.current) setStatus('failed')
+    } finally { running.current = false }
+  }
+
+  return <>
+    <button type="button" className={css.browse} disabled={disabled || dirty || status === 'running'}
+      onClick={() => { void sync() }}>{t(status === 'running' ? 'card.pricingSync.running' : 'card.pricingSync.button')}</button>
+    {dirty ? <p className={`${css.hint} ${css.syncFeedback}`}>{t('card.pricingSync.unsaved')}</p>
+      : status === 'done' && result !== null ? <p className={`${css.note} ${css.syncFeedback}`} role="status">
+        {t('card.pricingSync.done', { version: String(result.version), models: String(result.models) })}</p>
+      : status === 'failed' || status === 'changed' || status === 'migrating' ? <p className={`${css.failed} ${css.syncFeedback}`} role="alert">
+        {t(`card.pricingSync.${status}`)}</p> : null}
+  </>
 }

@@ -19,6 +19,7 @@ import type { CardState, CardStore, SectionValue } from '../src/client/card-form
 import { CardForm } from '../src/client/card-form.ts'
 import { TokenUsageCard, type TokenUsageCardProps } from '../src/client/TokenUsageCard.tsx'
 import { zh } from '../src/client/locales.ts'
+import { PRICING_SYNC_PATH } from '../src/wire.ts'
 
 // The chevron icon is decoration; stubbing it keeps the katex css inside the
 // primitives package out of the node test environment.
@@ -352,6 +353,53 @@ describe('TokenUsageCard', () => {
     expect(save.disabled).toBe(false)
   })
 
+  it('syncs once per click, shows the result and refreshes pricing consumers', async () => {
+    let finish!: (response: Response) => void
+    const fetch = vi.fn((input: RequestInfo | URL) => String(input) === PRICING_SYNC_PATH
+      ? new Promise<Response>(resolve => { finish = resolve }) : Promise.resolve(Response.json(null)))
+    vi.stubGlobal('fetch', fetch)
+    const refreshed = vi.fn()
+    window.addEventListener('token-usage:pricing-table-changed', refreshed)
+    try {
+      render(<TokenUsageCard {...propsOf(new FakeScope(ready({})))} view="page" />)
+      const button = screen.getByRole('button', { name: '同步定价表' })
+      fireEvent.click(button); fireEvent.click(button)
+      expect(fetch.mock.calls.filter(call => String(call[0]) === PRICING_SYNC_PATH)).toHaveLength(1)
+      expect(fetch).toHaveBeenCalledWith(PRICING_SYNC_PATH, { method: 'POST', cache: 'no-store' })
+      expect((screen.getByRole('button', { name: '同步中…' }) as HTMLButtonElement).disabled).toBe(true)
+      finish(Response.json({ version: 12, updatedAt: 1, models: 3, aliases: 1, usdExchangeRate: 7 }))
+      await screen.findByText(t('card.pricingSync.done'))
+      expect(refreshed).toHaveBeenCalledTimes(1)
+      expect((button as HTMLButtonElement).disabled).toBe(false)
+    } finally { window.removeEventListener('token-usage:pricing-table-changed', refreshed) }
+  })
+
+  it.each(['http', 'network', 'invalid-response'])('reports %s sync failures and allows retry', async (failure) => {
+    const fetch = vi.fn(async () => {
+      if (failure === 'network') throw new Error('offline')
+      return failure === 'http' ? Response.json({ error: 'sync-failed' }, { status: 502 }) : Response.json({})
+    })
+    vi.stubGlobal('fetch', fetch)
+    render(<TokenUsageCard {...propsOf(new FakeScope(ready({})))} view="page" />)
+    fireEvent.click(screen.getByRole('button', { name: '同步定价表' }))
+    expect((await screen.findByRole('alert')).textContent).toBe(t('card.pricingSync.failed'))
+    expect((screen.getByRole('button', { name: '同步定价表' }) as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('requires saving or discarding edits before syncing the displayed region', () => {
+    const fetch = vi.fn()
+    vi.stubGlobal('fetch', fetch)
+    render(<TokenUsageCard {...propsOf(new FakeScope(ready({})))} view="page" />)
+    fireEvent.change(screen.getByLabelText('定价区域'), { target: { value: 'overseas' } })
+    const button = screen.getByRole('button', { name: '同步定价表' }) as HTMLButtonElement
+    expect(button.disabled).toBe(true)
+    fireEvent.click(button)
+    expect(fetch.mock.calls.some(call => call[0] === PRICING_SYNC_PATH)).toBe(false)
+    expect(screen.getByText(t('card.pricingSync.unsaved'))).not.toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '放弃' }))
+    expect(button.disabled).toBe(false)
+  })
+
   it('shows the migration progress line and locks the controls while a move runs', () => {
     const scope = new FakeScope(ready({ value: { path: 'D:/data' } }))
     // Override the selector seat to inject an in-flight migration view.
@@ -367,6 +415,7 @@ describe('TokenUsageCard', () => {
     expect((screen.getByLabelText('定价区域') as HTMLSelectElement).disabled).toBe(true)
     const save = screen.getByRole('button', { name: '保存' }) as HTMLButtonElement
     expect(save.disabled).toBe(true)
+    expect((screen.getByRole('button', { name: '同步定价表' }) as HTMLButtonElement).disabled).toBe(true)
   })
 
   it('names the mid-conversation veto on the failure line', () => {

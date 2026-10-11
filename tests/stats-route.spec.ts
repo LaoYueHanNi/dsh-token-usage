@@ -1,4 +1,4 @@
-import { mkdtemp, unlink, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, unlink, writeFile } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -8,6 +8,10 @@ import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import * as plugin from '../src/index.ts'
 import { createDirectoryGuardRoute, createFullSyncRoute, createMigrationRoute, createPricingRoute, createStatsRoute, DIR_GUARD_PATH, FULL_SYNC_PATH, isSameOriginFetch, MIGRATION_PATH, PRICING_PATH, STATS_PATH } from '../src/stats-route.ts'
 import { ASSOCIATIONS_PATH, currencyOfRegion } from '../src/wire.ts'
+import { PRICING_SYNC_PATH } from '../src/wire.ts'
+import { createPricingSyncRoute } from '../src/stats-route.ts'
+import { AssociationError } from '../src/pricing-associations.ts'
+import { DEFAULT_PRICING_URL_OVERSEAS } from '../src/pricing.ts'
 import type { UsageRecord } from '../src/usage-record.ts'
 import { messageEvent } from './helpers.ts'
 
@@ -803,6 +807,46 @@ describe('createPricingRoute', () => {
   })
 })
 
+describe('createPricingSyncRoute', () => {
+  it('waits for the mirror write before reporting success', async () => {
+    let finish!: (result: any) => void
+    const sync = vi.fn(() => new Promise<any>(resolve => { finish = resolve }))
+    const route = createPricingSyncRoute(sync)
+    expect(route.path).toBe(PRICING_SYNC_PATH)
+    const { res, captured } = fakeResponse()
+    const request = route.handler(fakeRequest({ method: 'POST' }), res)
+    expect(res.end).not.toHaveBeenCalled()
+    const result = { version: 12, updatedAt: 1, models: 3, aliases: 1, usdExchangeRate: 7 }
+    finish(result)
+    await request
+    expect(captured.status).toBe(200)
+    expect(captured.headers['cache-control']).toBe('no-store')
+    expect(JSON.parse(captured.body)).toEqual(result)
+  })
+
+  it.each([
+    { method: 'GET', site: 'same-origin', status: 405 },
+    { method: 'POST', site: 'cross-site', status: 403 },
+  ])('rejects $method from $site without triggering a sync', async ({ method, site, status }) => {
+    const sync = vi.fn()
+    const { res, captured } = fakeResponse()
+    await createPricingSyncRoute(sync).handler(fakeRequest({ method, headers: { 'sec-fetch-site': site } }), res)
+    expect(captured.status).toBe(status)
+    expect(sync).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    { error: new Error('upstream failed'), status: 502, code: 'sync-failed' },
+    { error: new AssociationError('migration-in-progress'), status: 409, code: 'migration-in-progress' },
+    { error: new AssociationError('pricing-source-changed'), status: 409, code: 'pricing-source-changed' },
+  ])('reports $code without returning a success result', async ({ error, status, code }) => {
+    const { res, captured } = fakeResponse()
+    await createPricingSyncRoute(async () => { throw error }).handler(fakeRequest({ method: 'POST' }), res)
+    expect(captured.status).toBe(status)
+    expect(JSON.parse(captured.body)).toEqual({ error: code })
+  })
+})
+
 describe('currencyOfRegion', () => {
   it('maps overseas to USD and everything else to CNY', () => {
     expect(currencyOfRegion('overseas')).toBe('USD')
@@ -828,6 +872,52 @@ describe('plugin webServer wiring', () => {
       ctx = undefined
     }
     vi.unstubAllEnvs()
+    vi.unstubAllGlobals()
+  })
+
+  it('manually refreshes the saved source during startup grace, coalesces clicks and preserves the old mirror on failure', async () => {
+    const feed = (version: number) => JSON.stringify({ version, currency: 'RMB', models: [
+      { modelId: 'm', inputCostPerMillion: version, outputCostPerMillion: 2 },
+    ] })
+    const fetch = vi.fn(async () => new Response(feed(1)))
+    vi.stubGlobal('fetch', fetch)
+    const next = new Context()
+    await next.plugin(MockWebServer)
+    await next.plugin(class extends Service {
+      constructor(context: Context) { super(context, 'sessions') }
+      list() { return [] }
+    })
+    await next.plugin(class extends Service {
+      constructor(context: Context) { super(context, 'sessionPersistence') }
+      async list() { return [] }
+    })
+    await next.plugin(class extends Service {
+      constructor(context: Context) { super(context, 'commands') }
+      register() { return () => {} }
+    })
+    await next.plugin(plugin, { pricingRegion: 'overseas' })
+    ctx = next
+    const mirror = join(home, 'token-usage', 'pricing.ccsa.json')
+    await vi.waitFor(async () => { expect(JSON.parse(await readFile(mirror, 'utf8')).version).toBe(1) })
+    const route = (next.webServer as unknown as MockWebServer).routes.find(row => row.path === PRICING_SYNC_PATH)!
+    expect(route).toBeDefined()
+    let finish!: (response: Response) => void
+    fetch.mockImplementationOnce(() => new Promise<Response>(resolve => { finish = resolve }))
+    const before = fetch.mock.calls.length
+    const first = fakeResponse(), second = fakeResponse()
+    const requests = [route.handler(fakeRequest({ method: 'POST' }), first.res), route.handler(fakeRequest({ method: 'POST' }), second.res)]
+    expect(fetch).toHaveBeenCalledTimes(before + 1)
+    expect(fetch).toHaveBeenLastCalledWith(DEFAULT_PRICING_URL_OVERSEAS, expect.anything())
+    finish(new Response(feed(2)))
+    await Promise.all(requests)
+    expect(first.captured.status).toBe(200)
+    expect(second.captured.body).toBe(first.captured.body)
+    expect(JSON.parse(await readFile(mirror, 'utf8')).version).toBe(2)
+    fetch.mockImplementationOnce(async () => new Response('offline', { status: 503 }))
+    const failed = fakeResponse()
+    await route.handler(fakeRequest({ method: 'POST' }), failed.res)
+    expect(failed.captured.status).toBe(502)
+    expect(JSON.parse(await readFile(mirror, 'utf8')).version).toBe(2)
   })
 
   it('registers the stats route when a webServer exists and serves live rows', async () => {
@@ -871,6 +961,7 @@ describe('plugin webServer wiring', () => {
     // The pricing-overview route registers alongside too.
     expect(routes.some(candidate => candidate.path === PRICING_PATH && candidate.kind === 'exact')).toBe(true)
     expect(routes.some(candidate => candidate.path === ASSOCIATIONS_PATH && candidate.kind === 'exact')).toBe(true)
+    expect(routes.some(candidate => candidate.path === PRICING_SYNC_PATH && candidate.kind === 'exact')).toBe(true)
 
     // The directory-guard route registers too and answers the live verdict:
     // no session is mid-conversation here, so a proposed move is not blocked.

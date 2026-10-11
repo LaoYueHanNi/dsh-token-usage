@@ -17,7 +17,17 @@ export const STATS_PATH = '/token-usage/stats'
 /** The pricing-overview endpoint path: the full cloud-mirror model list,
  * filter-free by design — the overview is not a filtered usage view. */
 export const PRICING_PATH = '/token-usage/pricing'
+export const PRICING_SYNC_PATH = '/token-usage/pricing-sync'
 export const ASSOCIATIONS_PATH = '/token-usage/pricing-associations'
+
+/** Returned only after a validated pricing mirror has been saved. */
+export interface PricingSyncResult {
+  version: number
+  updatedAt: number
+  models: number
+  aliases: number
+  usdExchangeRate: number
+}
 
 /** How much of the stats payload a consumer asked for. `full` is the
  * settings page's whole CostedSummary; `session` is the usage tab; `chip`

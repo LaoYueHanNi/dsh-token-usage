@@ -42,7 +42,7 @@ import type {} from '@deepseek-ai/dsh-llm'
 import { UsageLog } from './usage-log.ts'
 import { SessionMetaStore } from './session-meta.ts'
 import { cleanSource, copyData, type MigrationProgress } from './migrate.ts'
-import { resolvePricingUrl, syncCloudPricing, type PricingSourceInput } from './pricing.ts'
+import { resolvePricingUrl, syncCloudPricing, type CloudSyncResult, type PricingSourceInput } from './pricing.ts'
 import { PricingAssociationService } from './pricing-association-service.ts'
 import { createPricingAssociationsRoute } from './pricing-associations-route.ts'
 import { withPricingDirectoryMigration } from './pricing-associations.ts'
@@ -51,7 +51,7 @@ import { markTimingSynced, readSyncState } from './sync-state.ts'
 import { autoSyncIfNeeded, syncHistory, titleOfEvent } from './sync.ts'
 import { clearRecordCache, warmRecordCache } from './record-cache.ts'
 import { invalidateSummary } from './stats.ts'
-import { createDirectoryGuardRoute, createFullSyncRoute, createMigrationRoute, createPricingRoute, createStatsRoute, type FullSyncTrigger } from './stats-route.ts'
+import { createDirectoryGuardRoute, createFullSyncRoute, createMigrationRoute, createPricingRoute, createPricingSyncRoute, createStatsRoute, type FullSyncTrigger } from './stats-route.ts'
 import { currencyOfRegion, type DirectoryGuardView, type FullSyncView, type QuotaPayload } from './wire.ts'
 import { createQuotaRoute } from './quota/quota-route.ts'
 import { QuotaService } from './quota/quota-service.ts'
@@ -447,22 +447,33 @@ export function apply(ctx: Context, config: Config = {}) {
    * in force, so a completed relocation re-seeds the new location even
    * though the pricing files traveled with the migration.
    */
-  const syncPricing = (): void => {
+  const pricingSyncs = new Map<string, Promise<CloudSyncResult>>()
+  const runPricingSync = (): Promise<CloudSyncResult> => {
     // Resolve once and capture: the .then below runs when its fetch settles,
     // by which time a newer dispatch may have repointed `lastSyncedUrl`, so
     // the log line must read the URL this fetch actually used.
     const url = resolvePricingUrl(effectiveInput())
+    const dir = currentDir()
+    const key = JSON.stringify([dir, url])
+    const running = pricingSyncs.get(key)
+    if (running !== undefined) return running
     lastSyncedUrl = url
-    void syncCloudPricing(currentDir(), url)
+    const task = syncCloudPricing(dir, url, () => currentDir() === dir && resolvePricingUrl(effectiveInput()) === url)
       .then((result) => {
         logger.info(`[token-usage] pricing sync (${url}): version ${result.version} (${result.models} models, ${result.aliases} aliases, USD rate ${result.usdExchangeRate})`)
+        return result
       })
       .catch((error: unknown) => {
         // Offline or a slow network must never break the plugin: the previous
         // mirror (if any) stays active until a later sync retries the fetch.
         logger.warn('[token-usage] pricing sync failed:', error instanceof Error ? error.message : String(error))
+        throw error
       })
+      .finally(() => { pricingSyncs.delete(key) })
+    pricingSyncs.set(key, task)
+    return task
   }
+  const syncPricing = (): void => { void runPricingSync().catch(() => {}) }
 
   /**
    * Request a refresh of the mirror at the currently effective URL. Two
@@ -857,6 +868,9 @@ export function apply(ctx: Context, config: Config = {}) {
       webCtx.effect(() => webCtx.webServer.register(
         createPricingRoute(currentDir, { currency: () => currencyOfRegion(effectiveInput().pricingRegion), logger }),
       ), 'token-usage: pricing route')
+      webCtx.effect(() => webCtx.webServer.register(
+        createPricingSyncRoute(runPricingSync),
+      ), 'token-usage: pricing sync route')
       webCtx.effect(() => webCtx.webServer.register(
         createPricingAssociationsRoute(associations, logger),
       ), 'token-usage: pricing associations route')

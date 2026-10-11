@@ -2,9 +2,11 @@ import { useEffect, useRef } from 'react'
 import type { ModelResolution, PricingAssociationsPayload } from '../wire.ts'
 
 const CHANGED_EVENT = 'token-usage:pricing-associations-changed'
+const TABLE_CHANGED_EVENT = 'token-usage:pricing-table-changed'
 
 /** All mounted usage views refresh their existing query after a real commit. */
 export function pricingAssociationsChanged(): void { window.dispatchEvent(new Event(CHANGED_EVENT)) }
+export function pricingTableChanged(): void { window.dispatchEvent(new Event(TABLE_CHANGED_EVENT)) }
 
 export function usePricingAssociationRefresh(refresh: () => void): void {
   const latest = useRef(refresh)
@@ -12,7 +14,11 @@ export function usePricingAssociationRefresh(refresh: () => void): void {
   useEffect(() => {
     const changed = (): void => { latest.current() }
     window.addEventListener(CHANGED_EVENT, changed)
-    return () => { window.removeEventListener(CHANGED_EVENT, changed) }
+    window.addEventListener(TABLE_CHANGED_EVENT, changed)
+    return () => {
+      window.removeEventListener(CHANGED_EVENT, changed)
+      window.removeEventListener(TABLE_CHANGED_EVENT, changed)
+    }
   }, [])
 }
 

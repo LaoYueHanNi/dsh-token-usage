@@ -37,6 +37,7 @@ import type {
   PricingTable,
   PricingUnavailableReason,
   PricingAssociationStatus,
+  PricingSyncResult,
   RateKey,
   TimeRule,
   UsageTotals,
@@ -751,13 +752,7 @@ export async function readPricingOverview(dir: string, logger: LoggerLike = cons
 }
 
 /** The outcome of one successful cloud sync, for the command's reply. */
-export interface CloudSyncResult {
-  version: number
-  updatedAt: number
-  models: number
-  aliases: number
-  usdExchangeRate: number
-}
+export type CloudSyncResult = PricingSyncResult
 
 /**
  * Fetch the cloud pricing feed and mirror it verbatim into
@@ -767,7 +762,7 @@ export interface CloudSyncResult {
  * @param url - the feed URL (the config override or the default gitee feed).
  * @returns the sync summary.
  */
-export async function syncCloudPricing(dir: string, url: string): Promise<CloudSyncResult> {
+export async function syncCloudPricing(dir: string, url: string, isCurrent: () => boolean = () => true): Promise<CloudSyncResult> {
   if (associationWritesPaused(dir)) throw new AssociationError('migration-in-progress')
   const epoch = pricingDirectoryEpoch(dir)
   const response = await fetch(url, { signal: AbortSignal.timeout(5_000) })
@@ -789,9 +784,12 @@ export async function syncCloudPricing(dir: string, url: string): Promise<CloudS
   // legitimately not exist — create it (idempotent) before the mirror lands.
   await withPricingDirectoryWrite(dir, async () => {
     if (pricingDirectoryEpoch(dir) !== epoch) throw new AssociationError('directory-conflict')
+    if (!isCurrent()) throw new AssociationError('pricing-source-changed')
     await mkdir(dirname(target), { recursive: true })
     try {
       await writeFile(tmp, text.endsWith('\n') ? text : `${text}\n`, 'utf8')
+      if (pricingDirectoryEpoch(dir) !== epoch) throw new AssociationError('directory-conflict')
+      if (!isCurrent()) throw new AssociationError('pricing-source-changed')
       await rename(tmp, target)
     } finally { await unlink(tmp).catch(() => undefined) }
   })

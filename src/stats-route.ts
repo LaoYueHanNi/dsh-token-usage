@@ -21,6 +21,8 @@ import { bucketSeries, pointsOfBuckets } from './trend-bucket.ts'
 import { decodeChildGroups, decodeSessionScope, DIR_GUARD_PATH, FULL_SYNC_PATH, MIGRATION_PATH, PRICING_PATH, STATS_PATH, UNPRICED_KEY } from './wire.ts'
 import type { ChildGroup, ChildUsageSummary, CostedSummary, DirectoryGuardView, DisplayCurrency, FullSyncView, PricingOverviewPayload, PricingTable, RequestPoint, SessionUsageRow, StatsFields, StatsPayload, TokenSummary } from './wire.ts'
 import type { UsageRecord } from './usage-record.ts'
+import { AssociationError } from './pricing-associations.ts'
+import { PRICING_SYNC_PATH, type PricingSyncResult } from './wire.ts'
 
 /** The stats endpoint path, exported for tests and the client half. */
 export { STATS_PATH } from './wire.ts'
@@ -178,6 +180,35 @@ export interface PricingRouteOptions {
   currency?: () => DisplayCurrency
   /** Diagnostic sink for data reads; defaults to console. */
   logger?: LoggerLike
+}
+
+/** Manual refresh uses the host's saved source, never a client-supplied URL. */
+export function createPricingSyncRoute(sync: () => Promise<PricingSyncResult>): WebRoute {
+  return {
+    kind: 'exact',
+    path: PRICING_SYNC_PATH,
+    handler: async (req, res) => {
+      const headers = { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }
+      if (req.method !== 'POST') {
+        res.writeHead(405, { ...headers, allow: 'POST' })
+        res.end(JSON.stringify({ error: 'method-not-allowed' }))
+        return
+      }
+      if (!isSameOriginFetch(req)) {
+        res.writeHead(403, headers)
+        res.end(JSON.stringify({ error: 'forbidden' }))
+        return
+      }
+      try {
+        const result = await sync()
+        res.writeHead(200, headers)
+        res.end(JSON.stringify(result))
+      } catch (error: unknown) {
+        res.writeHead(error instanceof AssociationError ? error.statusCode : 502, headers)
+        res.end(JSON.stringify({ error: error instanceof AssociationError ? error.code : 'sync-failed' }))
+      }
+    },
+  }
 }
 
 /**

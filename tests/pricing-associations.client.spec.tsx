@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import { ModelAssociationBadge, PricingAssociationDialog, PricingAssociationManagerButton, PricingAssociationProvider, UnpricedModelTag } from '../src/client/PricingAssociations.tsx'
-import { pricingAssociationsChanged, pricingIssueUrl, usePricingAssociationRefresh } from '../src/client/pricing-associations.ts'
+import { pricingAssociationsChanged, pricingTableChanged, pricingIssueUrl, usePricingAssociationRefresh } from '../src/client/pricing-associations.ts'
 import { en, zh } from '../src/client/locales.ts'
 import type { ModelResolution, PricingAssociationStatus, PricingAssociationsPayload, PricingOverviewPayload } from '../src/wire.ts'
 import { ASSOCIATIONS_PATH, PRICING_PATH } from '../src/wire.ts'
@@ -419,7 +419,11 @@ describe('refresh and upstream drafts', () => {
     expect(first).toHaveBeenCalledTimes(1); expect(second).toHaveBeenCalledTimes(1)
     one.unmount(); act(() => pricingAssociationsChanged())
     expect(first).toHaveBeenCalledTimes(1); expect(second).toHaveBeenCalledTimes(2)
+    act(() => pricingTableChanged())
+    expect(first).toHaveBeenCalledTimes(1); expect(second).toHaveBeenCalledTimes(3)
     two.unmount()
+    act(() => pricingTableChanged())
+    expect(second).toHaveBeenCalledTimes(3)
   })
   it('encodes the model ID in the title and includes only the three requested pricing sections', () => {
     const rawName = 'provider/<img src=x onerror=alert(1)>&?"#'
