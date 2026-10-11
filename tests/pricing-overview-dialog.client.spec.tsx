@@ -20,6 +20,11 @@ import {
 import { zh } from '../src/client/locales.ts'
 import type { ModelRates, PricingOverviewModel, PricingOverviewPayload } from '../src/wire.ts'
 
+// No association badge is rendered here; avoid loading the host's CSS bundle.
+vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
+  Tooltip: ({ children }: { children: React.ReactElement }) => children,
+}))
+
 /** Common-namespace zh values the tests assert against (shell-owned copy). */
 const COMMON_ZH: Record<string, string> = {
   loading: '加载中…',

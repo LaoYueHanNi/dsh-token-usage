@@ -8,7 +8,10 @@ Status: implemented
 
 ## Decision
 
-**后端：`/token-usage/pricing` exact 路由**（`src/stats-route.ts` 的 `createPricingRoute`，与 migration/dir-guard 路由同模板：same-origin 校验、`no-store`、405/403/500 分支），返回**模型行**形状而非 flat `PricingTable`：`models: [{ modelId, aliases, family?, rules: ModelRates }]` + 展示用 `currency`/`usdExchangeRate`（region thunk 同 stats 路由）。`src/pricing.ts` 新增 `readPricingOverview` 保留 feed 的 models 数组形状直出（`readPricingTable` 的合并语义不受影响）；`coerceCloudPricing` 透传上游 `family` 字段（`CloudPricingModel.family?: string`，非字符串/空串丢弃）。总览只呈现云端镜像：本地 `pricing.json` 手工覆盖机制已废弃（见 [DR 2026-09-05](2026-09-05-abolish-manual-pricing-json.md)），不读它、不呈现它。不用 flat 表的原因：`cloudToTable` 把别名展开成独立键，总览里同一模型会重复成多行同价行；保留形状让前端每模型一行，别名不展示、但仍作搜索维度（命中别名即浮出该模型）。无元信息（version/updatedAt/来源/同步时间）。
+> [!NOTE]
+> 本决策中的响应完全不含版本元信息约定已于 2026-10-10 由 [DR: 未定价位置的局部关联、来源管理与上游请求草稿](2026-10-10-model-pricing-association-ui.md) 部分取代。响应包含可选 feedVersion 供上游草稿诊断，总览不增加版本展示或关联价目行。
+
+**后端：`/token-usage/pricing` exact 路由**（`src/stats-route.ts` 的 `createPricingRoute`，与 migration/dir-guard 路由同模板：same-origin 校验、`no-store`、405/403/500 分支），返回**模型行**形状而非 flat `PricingTable`：`models: [{ modelId, aliases, family?, rules: ModelRates }]` + 展示用 `currency`/`usdExchangeRate`（region thunk 同 stats 路由）。`src/pricing.ts` 新增 `readPricingOverview` 保留 feed 的 models 数组形状直出（`readPricingTable` 的合并语义不受影响）；`coerceCloudPricing` 透传上游 `family` 字段（`CloudPricingModel.family?: string`，非字符串/空串丢弃）。总览只呈现云端镜像：本地 `pricing.json` 手工覆盖机制已废弃（见 [DR 2026-09-05](2026-09-05-abolish-manual-pricing-json.md)），不读它、不呈现它。不用 flat 表的原因：`cloudToTable` 把别名展开成独立键，总览里同一模型会重复成多行同价行；保留形状让前端每模型一行，别名不展示、但仍作搜索维度（命中别名即浮出该模型）。总览不展示版本、更新时间、来源或同步时间；可选 feedVersion 仅供上游草稿诊断。
 
 **前端：入口**在筛选行（FilterBar）行尾、模型菜单之后：行内三个控件是"选择器"（决定下方数据看什么），行尾入口是"动作"（打开与筛选无关的视图），不进筛选语法。形态是**蓝色文字标签**（`.pricingLink`）：`--dsw-alias-link-primary`（fallback `label-primary`）、无边框无底、28px 点击区（padding 4px 8px + 13px/20px）、hover 显 `--dsw-interactive-bg-hover` 圆角灰底（`dialogClose` 手法）。文案用独立 locale key（中文「定价表」/ 英文 "Pricing"），不复用单模型的 `pricing.viewShort`「定价」。
 

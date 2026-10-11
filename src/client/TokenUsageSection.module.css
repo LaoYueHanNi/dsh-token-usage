@@ -199,16 +199,6 @@
   gap: 8px;
 }
 
-/* Unpriced-model warning strip: amber, like the analyzer's missing-pricing bar. */
-.warning {
-  margin: 0;
-  padding: 6px 10px;
-  font-size: 12px;
-  color: var(--dsw-alias-state-warn-label);
-  background: var(--dsw-alias-state-warn-tertiary);
-  border-radius: 6px;
-}
-
 /* Model cell: the name, plus (only for unpriced models) the warning tag,
  * one line, ellipsized. A priced name is itself the price-dialog
  * affordance — no trailing chip, so ids line up and the 150px column
@@ -246,16 +236,6 @@ button.modelName {
 
 button.modelName:hover {
   color: var(--dsw-alias-link-primary, var(--dsw-alias-label-primary));
-}
-
-.unpricedTag {
-  flex: none;
-  padding: 0 6px;
-  font-size: 10px;
-  line-height: 16px;
-  color: var(--dsw-alias-state-warn-label);
-  background: var(--dsw-alias-state-warn-tertiary);
-  border-radius: 8px;
 }
 
 /* The filter row's tail action: opens the filter-free pricing overview.

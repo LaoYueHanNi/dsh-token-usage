@@ -1,0 +1,52 @@
+.actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
+.button, .link {
+  font: inherit; font-size: 12px; color: var(--dsw-alias-label-secondary);
+  border: 1px solid var(--dsw-alias-border-l2); background: none;
+  border-radius: 6px; padding: 4px 8px; cursor: pointer;
+}
+.button:hover, .link:hover { background: var(--dsw-interactive-bg-hover); }
+.button:disabled { opacity: 0.5; cursor: default; }
+.badgeWrap { display: inline-flex; flex: none; vertical-align: middle; }
+.badgeWrap :global([role="tooltip"]) {
+  font-size: 12px; font-weight: 400; line-height: 1.4; font-style: normal;
+  max-width: min(360px, calc(100vw - 24px)); white-space: normal; overflow-wrap: anywhere; animation: none;
+}
+.badge { display: inline-flex; align-items: center; flex: none; color: var(--dsw-alias-label-secondary); cursor: default; }
+.badge:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 2px; border-radius: 50%; }
+.link { border: none; padding: 2px 4px; }
+.dialog {
+  box-sizing: border-box; width: min(480px, calc(100vw - 48px));
+  font-size: 13px; line-height: 1.5;
+}
+.dialog p, .unpricedDialog p { margin: 8px 0; font-size: 12px; line-height: 1.5; }
+.dialog h2, .unpricedDialog h2 { margin: 0; font-size: 14px; line-height: 1.5; }
+.dialog .source { font-size: 13px; font-weight: 500; margin: 12px 0 8px; }
+.unpricedDialog { box-sizing: border-box; width: min(400px, calc(100vw - 48px)); font-size: 13px; line-height: 1.5; }
+.unpricedTag {
+  appearance: none; flex: none; border: none; margin: 0; padding: 0 6px;
+  font: inherit; font-size: 10px; line-height: 16px; border-radius: 8px;
+  color: var(--dsw-alias-state-warn-label); background: var(--dsw-alias-state-warn-tertiary);
+  cursor: pointer; white-space: nowrap;
+}
+.unpricedTag:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 2px; }
+.name { overflow-wrap: anywhere; white-space: normal; }
+.label { display: block; margin: 10px 0 4px; font-size: 12px; color: var(--dsw-alias-label-secondary); }
+.search {
+  width: 100%; box-sizing: border-box; padding: 6px 8px; font: inherit; font-size: 12px;
+  color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-layer-2);
+  border: 1px solid var(--dsw-alias-border-l2); border-radius: 6px;
+}
+.candidates { max-height: 180px; overflow-y: auto; border: 1px solid var(--dsw-alias-border-l1); border-radius: 6px; margin: 8px 0; }
+.candidate { display: flex; gap: 8px; padding: 6px 8px; align-items: center; cursor: pointer; overflow-wrap: anywhere; font-size: 12px; }
+.candidate:hover { background: var(--dsw-interactive-bg-hover); }
+.candidate small { margin-inline-start: auto; color: var(--dsw-alias-label-secondary); }
+.entry { border-bottom: 1px solid var(--dsw-alias-border-l1); padding: 10px 0; }
+.mappingRow { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px 12px; padding: 8px 0; }
+.mappingRow > .name { min-width: 0; }
+.mappingRow > .button { white-space: nowrap; }
+.revokeConfirmation { grid-column: 1 / -1; margin: 0; }
+.selection { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px; font-size: 12px; margin: 8px 0; }
+.save { background: var(--dsw-alias-label-primary); color: var(--dsw-alias-bg-layer-3); }
+.save:hover:not(:disabled) { background: var(--dsw-alias-label-primary); opacity: 0.9; }
+.note { font-size: 12px; color: var(--dsw-alias-label-secondary); white-space: normal; }
+.error { font-size: 12px; color: var(--dsw-alias-label-primary); white-space: normal; }

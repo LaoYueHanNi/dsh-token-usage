@@ -14,7 +14,7 @@ Status: proposed
 
 ## Proposal
 
-本记录保留整体设计与后续阶段，状态继续为 proposed。第一阶段自动识别已由 [统一模型自动识别与带定价指纹的历史重算](../implemented/2026-10-10-model-pricing-resolution.md) 落地；下文自动链与统计契约是后续关联工作的基础，关联文件、保存／撤销接口、局部搜索界面与上游 Issue 草稿入口尚未实施。第二阶段实施关联后端，第三阶段实施关联界面，各阶段独立验证并提交到 codex/feature-model-pricing-resolution，不合并 main、不推送、不打版本、不发布。
+本记录保留整体设计与后续阶段，状态继续为 proposed。第一阶段自动识别已由 [统一模型自动识别与带定价指纹的历史重算](../implemented/2026-10-10-model-pricing-resolution.md) 落地；第二阶段的关联文件、读取／保存／撤销接口、生命周期和迁移保护已由 [未定价模型的本地关联后端与迁移保护](../implemented/2026-10-10-model-pricing-associations.md) 落地。第三阶段的局部搜索、关联预览及来源标记、保存／撤销交互与上游 Issue 草稿入口已由 [未定价位置的局部关联、来源管理与上游请求草稿](../implemented/2026-10-10-model-pricing-association-ui.md) 落地。三个阶段均已有独立实施记录，整体提案按分阶段约定继续保持 proposed。各阶段独立验证并提交到 codex/feature-model-pricing-resolution，不合并 main、不推送、不打版本、不发布。
 
 ### 自动识别顺序与归一化边界
 

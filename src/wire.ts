@@ -17,6 +17,7 @@ export const STATS_PATH = '/token-usage/stats'
 /** The pricing-overview endpoint path: the full cloud-mirror model list,
  * filter-free by design — the overview is not a filtered usage view. */
 export const PRICING_PATH = '/token-usage/pricing'
+export const ASSOCIATIONS_PATH = '/token-usage/pricing-associations'
 
 /** How much of the stats payload a consumer asked for. `full` is the
  * settings page's whole CostedSummary; `session` is the usage tab; `chip`
@@ -347,14 +348,54 @@ export type PricingTable = Record<string, ModelRates>
 
 export type CostState = 'ready' | 'pricing-unavailable' | 'history-incomplete'
 export type PricingUnavailableReason = 'missing' | 'unreadable' | 'invalid-json' | 'invalid-feed'
+export type AssociationStorageError = 'unreadable' | 'invalid-json' | 'invalid-file'
+
+export interface PricingAssociation {
+  sourceModel: string
+  targetModelId: string
+}
+
+export interface PricingAssociationStatus extends PricingAssociation {
+  state: 'active' | 'automatic-takeover' | 'target-missing' | 'pricing-unavailable'
+  resolvedTargetModelId?: string
+  automaticModelId?: string
+  targetDiffers?: boolean
+}
+
+export interface PricingAssociationsPayload {
+  feedVersion?: number
+  directoryToken: string
+  revision: number | null
+  storageState: 'ready' | 'unavailable'
+  storageError?: AssociationStorageError
+  pricingAvailable: boolean
+  pricingUnavailableReason?: PricingUnavailableReason
+  writesPaused: boolean
+  associations: PricingAssociationStatus[]
+  resolution?: ModelResolution
+}
+
+export interface SavePricingAssociation extends PricingAssociation {
+  revision: number
+  directoryToken: string
+}
+
+export interface DeletePricingAssociation {
+  sourceModel: string
+  revision: number
+  directoryToken: string
+}
 
 export interface ModelResolution {
   rawName: string
   status: 'matched' | 'unmatched' | 'ambiguous'
   modelId?: string
-  method?: 'id' | 'alias' | 'normalized-id' | 'normalized-alias' | 'pattern'
+  method?: 'id' | 'alias' | 'normalized-id' | 'normalized-alias' | 'pattern' | 'manual'
   strippedPrefix: boolean
   candidates: string[]
+  association?: PricingAssociationStatus
+  /** Preserves the unmatched/ambiguous reason when a manual choice is active. */
+  automatic?: ModelResolution
 }
 
 /**
@@ -378,6 +419,7 @@ export interface PricingOverviewModel {
  * plus the display-currency stamps the settings page converts with (same
  * region source as the stats payload). */
 export interface PricingOverviewPayload {
+  feedVersion?: number
   pricingUnavailableReason?: PricingUnavailableReason
   costState?: CostState
   models: readonly PricingOverviewModel[]
@@ -505,6 +547,8 @@ export function currencyOfRegion(region: 'domestic' | 'overseas' | undefined): D
  * produces before the route stamps the display-currency metadata.
  */
 export interface CostedSummary extends TokenSummary {
+  feedVersion?: number
+  associationStorageError?: AssociationStorageError
   pricingUnavailableReason?: PricingUnavailableReason
   costState: CostState
   modelResolutions: ModelResolution[]

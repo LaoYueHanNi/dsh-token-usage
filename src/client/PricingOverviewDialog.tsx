@@ -31,6 +31,7 @@ import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ContextTier, DailySlot, ModelPricing, ModelRates, PricingOverviewModel, PricingOverviewPayload } from '../wire.ts'
 import { PRICING_PATH } from '../wire.ts'
 import { useAsyncResource } from './async-resource.ts'
+import { PricingAssociationDialog, PricingAssociationManagerButton } from './PricingAssociations.tsx'
 import { PricingStatus, costsAvailable } from './PricingStatus.tsx'
 import type { CurrencyView } from './format.ts'
 import { formatCost, formatRate, formatTokens } from './format.ts'
@@ -38,42 +39,8 @@ import { billedRates, PricingDialog, windowText } from './PricingDialog.tsx'
 import shared from './PricingDialog.module.css'
 import styles from './PricingOverviewDialog.module.css'
 
-/** The family a model row without a feed `family` lands in; the feed
- * itself already uses this value for uncategorized rows. */
-const OTHER_FAMILY = 'other'
-
-/** The family of one row (absent → `other`): the sort key's first half
- * and one of the search dimensions. */
-function familyOf(model: PricingOverviewModel): string {
-  return model.family ?? OTHER_FAMILY
-}
-
-/**
- * Sort models by family (alphabetical, absent → `other`), then by modelId —
- * the feed's own classification drives the browsing order so same-family
- * models stay adjacent, with zero client-side mapping.
- */
-export function sortPricingModels(models: readonly PricingOverviewModel[]): PricingOverviewModel[] {
-  return [...models].sort((a, b) => {
-    const familyA = familyOf(a)
-    const familyB = familyOf(b)
-    if (familyA !== familyB) return familyA < familyB ? -1 : 1
-    return a.modelId < b.modelId ? -1 : a.modelId > b.modelId ? 1 : 0
-  })
-}
-
-/**
- * Whether one model row matches the search: a case-insensitive substring
- * hit on the modelId, any alias, or the family. An empty query
- * matches everything.
- */
-export function matchesPricingSearch(model: PricingOverviewModel, query: string): boolean {
-  if (query === '') return true
-  const needle = query.toLowerCase()
-  if (model.modelId.toLowerCase().includes(needle)) return true
-  if (familyOf(model).toLowerCase().includes(needle)) return true
-  return model.aliases.some(alias => alias.toLowerCase().includes(needle))
-}
+import { matchesPricingSearch, sortPricingModels } from './pricing-search.ts'
+export { matchesPricingSearch, sortPricingModels } from './pricing-search.ts'
 
 /** One preset usage case of the simulated-cost column: raw token buckets.
  * A case button's hover title derives from the data (input-side total,
@@ -307,6 +274,7 @@ export function PricingOverviewDialog({ usedModels, view, onClose, t }: {
   const [sortMode, setSortMode] = useState<'family' | 'cost-desc' | 'cost-asc'>('family')
   // The drilled-in model whose full price table is open above the overview.
   const [detail, setDetail] = useState<PricingOverviewModel | null>(null)
+  const [associationsOpen, setAssociationsOpen] = useState(false)
   // The wall clock the effective-world hits are judged at: taken once on
   // mount so a dialog left open never reshuffles itself at a rule boundary.
   const [nowMs] = useState(() => Date.now())
@@ -381,7 +349,10 @@ export function PricingOverviewDialog({ usedModels, view, onClose, t }: {
       }}
     >
       <div className={shared['dialogHead']}>
-        <span className={shared['dialogTitle']}>{t('pricing.table')}</span>
+        <div className={styles.titleActions}>
+          <span className={shared['dialogTitle']}>{t('pricing.table')}</span>
+          <PricingAssociationManagerButton t={t} onOpen={() => setAssociationsOpen(true)} />
+        </div>
         <button
           type="button"
           className={shared['dialogClose']}
@@ -391,6 +362,7 @@ export function PricingOverviewDialog({ usedModels, view, onClose, t }: {
           ✕
         </button>
       </div>
+      {associationsOpen && <PricingAssociationDialog initialSource={null} view={view} t={t} onClose={() => setAssociationsOpen(false)} />}
       {state.status === 'loading'
         ? <p className={styles['note']}>{t('loading')}</p>
         : null}

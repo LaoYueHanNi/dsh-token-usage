@@ -8,6 +8,8 @@
   width: min(720px, calc(100vw - 48px));
 }
 
+.titleActions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+
 .note {
   margin: 0;
   font-size: 13px;

@@ -6,9 +6,12 @@ Status: implemented
 
 提供商前缀和上游 v110 `aliasPatterns` 无法通过原有精确字典识别；子串匹配会混淆 `glm-5.3-flash` / `glm-5.3-flashx` 等不同身份。识别必须贯通历史费用、模型折叠与筛选、会话汇总、详情和总览「已用」。旧 rollup 保存了按旧模型规则选择的 `RateKey`，只换单价不能还原新规则下的时间区间、上下文档位和工作日峰谷。
 
-本条实施 [整体提案](../proposed/2026-10-10-prefixed-model-normalize-and-local-map.md) 的第一阶段；手动关联后端、界面及 Issue 草稿入口仍在提案中。
+本条实施 [整体提案](../proposed/2026-10-10-prefixed-model-normalize-and-local-map.md) 的第一阶段；手动关联后端现由第二阶段实施记录承接，界面及 Issue 草稿入口现由 [第三阶段实施记录](2026-10-10-model-pricing-association-ui.md) 承接。
 
 ## Decision
+
+> [!NOTE]
+> 本决策中的仅自动解析及 feed-only 上下文契约已于 2026-10-10 由 [DR: 未定价模型的本地关联后端与迁移保护](2026-10-10-model-pricing-associations.md) 部分取代。自动链顺序不变，失败或歧义后才使用完整来源的人工关联；上下文与指纹包含关联内容。
 
 **统一自动识别入口。** `src/model-resolution.ts` 在全表逐阶段匹配：原始完整名称的 modelId → 历史 aliases；原名没有命中时，取各段非空的 `/` 路径最后一段，重复 ID → alias；均无命中才将原名与去前缀候选交给 aliasPatterns。原名优先于去前缀，ID 优先于 alias，同阶段歧义停止，不继续寻找另一价目。
 
@@ -22,7 +25,7 @@ Status: implemented
 
 同目录 rebuild 和历史同步的失效删除共用串行队列，避免临时文件互相踩踏和失效后旧写入复活。发布 rollup 前检查目录与当前 feed 指纹；过期快照可以完成自身响应，但不能覆盖新快照缓存。队列覆盖本宿主进程内读写，不提供跨进程锁。
 
-**费用可用性是显式契约。** 统计提供 `modelResolutions`（原名、状态、规范 ID、命中方式、去前缀情况和歧义候选）及 `costState`：ready / pricing-unavailable / history-incomplete。chip 只带费用状态及定价不可用原因，按需 session 详情才带识别明细。镜像不可用原因分为 missing / unreadable / invalid-json / invalid-feed。各视图隐藏不可用金额，用量仍可查看；正常表的未命中、歧义单独告警，无尚未实现的关联按钮。
+**费用可用性是显式契约。** 统计提供 `modelResolutions`（原名、状态、规范 ID、命中方式、去前缀情况和歧义候选）及 `costState`：ready / pricing-unavailable / history-incomplete。chip 带费用状态、定价不可用原因及关联存储故障，按需 session 详情才带识别明细。镜像不可用原因分为 missing / unreadable / invalid-json / invalid-feed。各视图隐藏不可用金额，用量仍可查看；正常表的未命中、歧义单独告警，并通过第三阶段的关联入口提供人工选择或上游草稿。
 
 重建检查文件清单、读取/解析完整性和旧累计用量是否能恢复。无法完整重算时不发布新 rollup，保留可用旧聚合与新记录；金额占位为 0，但通过 costState 隐藏，不把旧 RateKey 套到新模型伪造费用。会话和子会话从保留的 bySession 单元恢复用量；缺失的逐请求时间戳和小时粒度无法由聚合还原，请求序列只显示可读取记录。旧 rollup 仅缺会话维度时保留累计用量并强制重建，无法凭空恢复会话归属；其他结构损坏仍从可读原始文件恢复。
 
@@ -42,4 +45,4 @@ Status: implemented
 
 识别、计价、折叠、筛选和各视图口径一致，大小写不改变模型，错误或歧义不猜价格。用量事实、发布版本和依赖锁文件保持不变。测试覆盖阶段优先级、身份隔离、非法 feed、旧汇总升级、历史规则重选、并发重建/失效以及费用不可用的界面。
 
-规则或身份变化后的首次读取需要重建冻结聚合，耗时随历史增长；缺失源记录时主动放弃可靠金额和无法恢复的时间粒度。每次读取仍需检查镜像内容，编译和名称结果仅在内容变化时重置。手动关联和上游 Issue 草稿入口未实现，整体提案继续为 proposed。
+规则或身份变化后的首次读取需要重建冻结聚合，耗时随历史增长；缺失源记录时主动放弃可靠金额和无法恢复的时间粒度。每次读取仍需检查镜像与关联内容，编译和名称结果在内容变化时重置。手动关联后端已实施，操作界面和上游 Issue 草稿入口现由第三阶段实现，整体提案继续为 proposed。

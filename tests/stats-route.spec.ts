@@ -7,7 +7,7 @@ import { Context, Service } from '@deepseek-ai/cordis'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import * as plugin from '../src/index.ts'
 import { createDirectoryGuardRoute, createFullSyncRoute, createMigrationRoute, createPricingRoute, createStatsRoute, DIR_GUARD_PATH, FULL_SYNC_PATH, isSameOriginFetch, MIGRATION_PATH, PRICING_PATH, STATS_PATH } from '../src/stats-route.ts'
-import { currencyOfRegion } from '../src/wire.ts'
+import { ASSOCIATIONS_PATH, currencyOfRegion } from '../src/wire.ts'
 import type { UsageRecord } from '../src/usage-record.ts'
 import { messageEvent } from './helpers.ts'
 
@@ -870,6 +870,7 @@ describe('plugin webServer wiring', () => {
     expect(routes.some(candidate => candidate.path === MIGRATION_PATH && candidate.kind === 'exact')).toBe(true)
     // The pricing-overview route registers alongside too.
     expect(routes.some(candidate => candidate.path === PRICING_PATH && candidate.kind === 'exact')).toBe(true)
+    expect(routes.some(candidate => candidate.path === ASSOCIATIONS_PATH && candidate.kind === 'exact')).toBe(true)
 
     // The directory-guard route registers too and answers the live verdict:
     // no session is mid-conversation here, so a proposed move is not blocked.

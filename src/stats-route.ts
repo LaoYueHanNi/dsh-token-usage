@@ -214,6 +214,7 @@ export function createPricingRoute(dir: () => string, options: PricingRouteOptio
         res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
         res.end(JSON.stringify({
           models,
+          ...(context.feedVersion !== undefined ? { feedVersion: context.feedVersion } : {}),
           costState: context.available ? 'ready' : 'pricing-unavailable',
           ...(context.unavailableReason !== undefined ? { pricingUnavailableReason: context.unavailableReason } : {}),
           currency: options.currency?.() ?? 'CNY',
@@ -349,6 +350,8 @@ function slimSessionPayload(input: {
     totalCost: summary.totalCost,
     unpricedModels: summary.unpricedModels,
     costState: summary.costState,
+    ...(summary.feedVersion !== undefined ? { feedVersion: summary.feedVersion } : {}),
+    ...(summary.associationStorageError !== undefined ? { associationStorageError: summary.associationStorageError } : {}),
     ...(summary.pricingUnavailableReason !== undefined ? { pricingUnavailableReason: summary.pricingUnavailableReason } : {}),
     currency,
     usdExchangeRate,

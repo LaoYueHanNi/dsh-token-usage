@@ -43,6 +43,9 @@ import { UsageLog } from './usage-log.ts'
 import { SessionMetaStore } from './session-meta.ts'
 import { cleanSource, copyData, type MigrationProgress } from './migrate.ts'
 import { resolvePricingUrl, syncCloudPricing, type PricingSourceInput } from './pricing.ts'
+import { PricingAssociationService } from './pricing-association-service.ts'
+import { createPricingAssociationsRoute } from './pricing-associations-route.ts'
+import { withPricingDirectoryMigration } from './pricing-associations.ts'
 import { extractFirstTokenTimeFromStream, modelOfEvent, recordOfEvent, type RequestTiming } from './usage-record.ts'
 import { markTimingSynced, readSyncState } from './sync-state.ts'
 import { autoSyncIfNeeded, syncHistory, titleOfEvent } from './sync.ts'
@@ -341,6 +344,7 @@ export function apply(ctx: Context, config: Config = {}) {
    * open (and the one the startup pricing sync targets).
    */
   const currentDir = (): string => current?.dir ?? resolveDataDir(sectionSource().path)
+  const associations = new PricingAssociationService(currentDir, logger)
 
   /**
    * Move the running data directory as a two-phase commit: refuse while any
@@ -364,38 +368,45 @@ export function apply(ctx: Context, config: Config = {}) {
       throw new Error(`cannot move the data directory while ${String(interacting)} session(s) are mid-conversation; let them finish and save again`)
     }
 
-    // Quiesce the source: drain queued appends so the files on disk are final.
-    await previous.log.flush()
-    // The metadata index writes on its own queue; drain it too, so the
-    // sessions.json that migrates is final.
-    await previous.meta.flush()
+    await withPricingDirectoryMigration(previous.dir, nextDir, async () => {
+      // Quiesce the source: drain queued appends so the files on disk are final.
+      await previous.log.flush()
+      // The metadata index writes on its own queue; drain it too, so the
+      // sessions.json that migrates is final.
+      await previous.meta.flush()
 
-    migration = { phase: 'copying', done: 0, total: 0 }
-    const report = (progress: MigrationProgress): void => {
-      migration = { ...progress }
-      logger.info(`[token-usage] moving ${String(progress.done)}/${String(progress.total)} (${progress.phase})`)
-    }
-    // Phase 1: copy everything, verbatim. An existing same-named target file
-    // wins (live data or a user placement); a failure aborts before the flip.
-    await copyData(previous.dir, nextDir, report)
+      migration = { phase: 'copying', done: 0, total: 0 }
+      const report = (progress: MigrationProgress): void => {
+        migration = { ...progress }
+        logger.info(`[token-usage] moving ${String(progress.done)}/${String(progress.total)} (${progress.phase})`)
+      }
+      // Phase 1: copy everything, verbatim. An existing same-named target file
+      // wins (live data or a user placement); a failure aborts before the flip.
+      await copyData(previous.dir, nextDir, report)
 
-    // Phase 2: flip the running configuration. A fresh log knows the rows the
-    // target already holds, so post-flip events dedupe against them; a fresh
-    // metadata index points at the copied sessions.json (mtime-stamped).
-    const log = new UsageLog(nextDir, logger)
-    await log.scan()
-    const moved = await log.refileByEventDay()
-    current = { dir: nextDir, log, meta: new SessionMetaStore(nextDir, logger) }
-    clearRecordCache(previous.dir)
-    if (moved > 0) invalidateDerivedState(nextDir)
-    void warmRecordCache(nextDir, undefined, logger)
+      // Phase 2: flip the running configuration. A fresh log knows the rows the
+      // target already holds, so post-flip events dedupe against them; a fresh
+      // metadata index points at the copied sessions.json (mtime-stamped).
+      const log = new UsageLog(nextDir, logger)
+      await log.scan()
+      const moved = await log.refileByEventDay()
+      current = { dir: nextDir, log, meta: new SessionMetaStore(nextDir, logger) }
+      associations.directoryChanged()
+      clearRecordCache(previous.dir)
+      if (moved > 0) invalidateDerivedState(nextDir)
+      void warmRecordCache(nextDir, undefined, logger)
 
-    // Phase 3: remove the source files that verifiably landed, then the
-    // emptied directory. Nothing unknown is touched.
-    migration = { phase: 'cleaning', done: 0, total: 0 }
-    const result = await cleanSource(previous.dir, nextDir, report, logger)
-    migration = undefined
-    logger.info(`[token-usage] data directory moved to ${nextDir} (${String(result.cleaned)} files relocated)`)
+      // Phase 3: remove the source files that verifiably landed, then the
+      // emptied directory. Nothing unknown is touched.
+      migration = { phase: 'cleaning', done: 0, total: 0 }
+      const result = await cleanSource(previous.dir, nextDir, report, logger)
+      migration = undefined
+      logger.info(`[token-usage] data directory moved to ${nextDir} (${String(result.cleaned)} files relocated)`)
+    })
+    // A download bound to the old directory is now stale. Refresh after the
+    // pause ends, so a first mirror or simultaneous region edit reaches the
+    // directory that is actually in force.
+    syncPricing()
   }
 
   // The feed URL the latest dispatch targeted; the startup gate reads only
@@ -686,6 +697,7 @@ export function apply(ctx: Context, config: Config = {}) {
     const log = new UsageLog(dir, logger)
     const meta = new SessionMetaStore(dir, logger)
     current = { dir, log, meta }
+    associations.directoryChanged()
     void warmRecordCache(dir, undefined, logger)
 
     // Last-known route model per session: failure rows need a model to
@@ -845,6 +857,9 @@ export function apply(ctx: Context, config: Config = {}) {
       webCtx.effect(() => webCtx.webServer.register(
         createPricingRoute(currentDir, { currency: () => currencyOfRegion(effectiveInput().pricingRegion), logger }),
       ), 'token-usage: pricing route')
+      webCtx.effect(() => webCtx.webServer.register(
+        createPricingAssociationsRoute(associations, logger),
+      ), 'token-usage: pricing associations route')
       // The input-bar quota button's data channel: the current provider's
       // quota snapshot (rate-limit windows / balance), served by the quota
       // service. A disabled feature still answers — with the `disabled`

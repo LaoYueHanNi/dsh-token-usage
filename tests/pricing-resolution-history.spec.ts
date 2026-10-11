@@ -7,6 +7,11 @@ import { readRollup, writeRollup } from '../src/rollup.ts'
 import { attachCosts, buildSummary, filterSummary, invalidateSummary, requestSeriesOf, summarizeRecords, type RateResolver } from '../src/stats.ts'
 import { UNPRICED_KEY } from '../src/wire.ts'
 import type { UsageRecord } from '../src/usage-record.ts'
+import { PricingAssociationService } from '../src/pricing-association-service.ts'
+import { ASSOCIATIONS_FILE } from '../src/pricing-associations.ts'
+import { createPricingRoute, createStatsRoute } from '../src/stats-route.ts'
+import type { IncomingMessage, ServerResponse } from 'node:http'
+import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 
 const dirs: string[] = []
 afterEach(async () => { vi.unstubAllGlobals(); await Promise.all(dirs.splice(0).map(dir => rm(dir, { recursive: true, force: true }))) })
@@ -33,6 +38,111 @@ const rules = (): CloudPricingModel => ({ ...row, aliasPatterns: ['^m(-(low|high
   contextTiers: [{ threshold: 500_000, inputCostPerMillion: 4, outputCostPerMillion: 0,
     dailySlots: [{ windows: [{ startMinute: 540, endMinute: 720 }], daysOfWeek: [1], inputCostPerMillion: 5, outputCostPerMillion: 0 }] }],
 }] })
+
+describe('manual association historical repricing', () => {
+  async function mutation(service: PricingAssociationService, target?: string) {
+    const state = await service.read()
+    return service.mutate(target === undefined ? 'delete' : 'save', { sourceModel: 'P/internal',
+      ...(target === undefined ? {} : { targetModelId: target }), revision: state.revision, directoryToken: state.directoryToken })
+  }
+  it('save, rule edit, target edit and revoke rebuild frozen RateKeys and preserve raw usage', async () => {
+    const records = [record('P/internal'), record('p/INTERNAL', at(17), 'second'), record('P/internal', at(22), 'third')]
+    const dir = await data(records), path = join(dir, 'usage-2026-01-12.jsonl')
+    const original = await readFile(path, 'utf8')
+    const priced = rules(), free = { ...row, modelId: 'free', inputCostPerMillion: 0, outputCostPerMillion: 0 }
+    await writeFile(join(dir, 'pricing.ccsa.json'), JSON.stringify(feed([priced, free])))
+    const service = new PricingAssociationService(() => dir)
+    const before = await build(dir, await readPricingContext(dir))
+    expect(before.unpricedModels).toEqual(['P/internal'])
+    await mutation(service, 'm')
+    const saved = await build(dir, await readPricingContext(dir))
+    expect(saved.totalCost).toBe(10)
+    expect(saved.byModel).toHaveLength(1)
+    expect(saved.bySession.reduce((sum, cell) => sum + cell.cost, 0)).toBe(10)
+    priced.timeRules![0]!.contextTiers![0]!.threshold = 2_000_000
+    await writeFile(join(dir, 'pricing.ccsa.json'), JSON.stringify(feed([priced, free])))
+    expect((await build(dir, await readPricingContext(dir))).totalCost).toBe(7)
+    await mutation(service, 'free')
+    const changed = await build(dir, await readPricingContext(dir))
+    expect(changed.totalCost).toBe(0)
+    expect(changed.unpricedModels).toEqual([])
+    expect(changed.byModel[0]?.model).toBe('free')
+    await mutation(service)
+    const revoked = await build(dir, await readPricingContext(dir))
+    expect(revoked.unpricedModels).toEqual(['P/internal'])
+    for (const result of [saved, changed, revoked]) expect(result.total).toEqual(before.total)
+    expect(await readFile(path, 'utf8')).toBe(original)
+  })
+  it('association changes with missing sources retain usage and hide costs', async () => {
+    const dir = await data([record('P/internal')])
+    await writeFile(join(dir, 'pricing.ccsa.json'), JSON.stringify(feed([rules()])))
+    const before = await build(dir, await readPricingContext(dir))
+    await unlink(join(dir, 'usage-2026-01-12.jsonl'))
+    await mutation(new PricingAssociationService(() => dir), 'm')
+    const changed = await build(dir, await readPricingContext(dir))
+    expect(changed.costState).toBe('history-incomplete')
+    expect(changed.total).toEqual(before.total)
+    expect(changed.totalCost).toBe(0)
+  })
+  it('a corrupted association file disables manual prices but keeps automatic ones', async () => {
+    const dir = await data([record('P/internal'), record('m', at(), 'automatic')])
+    await writeFile(join(dir, 'pricing.ccsa.json'), JSON.stringify(feed([row])))
+    await mutation(new PricingAssociationService(() => dir), 'm')
+    expect((await build(dir, await readPricingContext(dir))).totalCost).toBe(2)
+    await writeFile(join(dir, ASSOCIATIONS_FILE), '{bad')
+    const changed = await build(dir, await readPricingContext(dir))
+    expect(changed).toMatchObject({ costState: 'ready', associationStorageError: 'invalid-json', totalCost: 1, unpricedModels: ['P/internal'] })
+    expect(changed.total.requests).toBe(2)
+  })
+  it('revocation after automatic takeover keeps automatic pricing', async () => {
+    const dir = await data([record('P/internal')])
+    await writeFile(join(dir, 'pricing.ccsa.json'), JSON.stringify(feed([row])))
+    const service = new PricingAssociationService(() => dir)
+    await mutation(service, 'm')
+    await writeFile(join(dir, 'pricing.ccsa.json'), JSON.stringify(feed([{ ...row, aliasPatterns: ['^internal$'], inputCostPerMillion: 8 }])))
+    expect((await build(dir, await readPricingContext(dir))).totalCost).toBe(8)
+    await mutation(service)
+    expect((await build(dir, await readPricingContext(dir))).totalCost).toBe(8)
+  })
+  it('whole, filtered, session, chip, children and details share the manual identity', async () => {
+    const records = [record('P/internal'), record('m', at(), 'direct'), { ...record('p/INTERNAL', at(), 'child-request'), sessionId: 'child' }, record('q/internal', at(), 'other')]
+    const dir = await data(records)
+    await writeFile(join(dir, 'pricing.ccsa.json'), JSON.stringify(feed([row])))
+    await mutation(new PricingAssociationService(() => dir), 'm')
+    async function get(route: WebRoute, query = '') {
+      let body = '', status = 0
+      const response = { writeHead: (code: number) => { status = code }, end: (value: string) => { body = value } } as unknown as ServerResponse
+      await route.handler({ method: 'GET', headers: {}, url: '/token-usage/stats' + query } as IncomingMessage, response)
+      expect(status).toBe(200)
+      return JSON.parse(body)
+    }
+    const route = createStatsRoute(() => dir)
+    const whole = await get(route)
+    expect(whole.feedVersion).toBe(1)
+    expect(whole.totalCost).toBe(3)
+    expect(whole.total.requests).toBe(4)
+    expect(whole.byModel.find((row: any) => row.model === 'm').totals.requests).toBe(3)
+    expect(whole.modelResolutions.find((row: any) => row.rawName === 'P/internal')).toMatchObject({ method: 'manual', modelId: 'm' })
+    expect(whole.pricing['P/internal']).toEqual(whole.pricing.m)
+    const filtered = await get(route, '?model=P%2FINTERNAL')
+    expect(filtered.totalCost).toBe(3)
+    expect(filtered.total.requests).toBe(3)
+    const session = await get(route, '?sessionId=s&sessionId=child&fields=session&childId=child&model=M')
+    const chip = await get(route, '?sessionId=s&sessionId=child&fields=chip&model=m')
+    expect(session.feedVersion).toBe(whole.feedVersion)
+    expect(chip.feedVersion).toBe(whole.feedVersion)
+    expect((await new PricingAssociationService(() => dir).read()).feedVersion).toBe(whole.feedVersion)
+    expect(session.totalCost).toBe(3)
+    expect(chip.totalCost).toBe(session.totalCost)
+    expect(session.children.child.totalCost).toBe(1)
+    expect(session.children.child.total.requests).toBe(1)
+    expect(whole.sessionRows.reduce((sum: number, row: any) => sum + row.cost, 0)).toBe(3)
+    const overview = await get(createPricingRoute(() => dir))
+    expect(overview.feedVersion).toBe(whole.feedVersion)
+    expect(overview.models.map((row: any) => row.modelId)).toEqual(['m'])
+    expect(filtered.byModel.map((row: any) => row.model)).toEqual(['m'])
+  })
+})
 
 describe('pricing history rebuild', () => {
   it('upgrades a legacy rollup from unpriced to per-request time/tier/weekday rules without changing usage', async () => {

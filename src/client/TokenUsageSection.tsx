@@ -32,6 +32,8 @@ import { PricingOverviewDialog } from './PricingOverviewDialog.tsx'
 import { RequestsCell, RequestsSplitHead, RequestsStatCard, StatCard } from './StatCard.tsx'
 import { SessionTable } from './SessionTable.tsx'
 import { PricingStatus, costsAvailable } from './PricingStatus.tsx'
+import { ModelAssociationBadge, PricingAssociationProvider, UnpricedModelTag } from './PricingAssociations.tsx'
+import { usePricingAssociationRefresh } from './pricing-associations.ts'
 import { TrendChart } from './TrendChart.tsx'
 import { useColorSchemeMirror } from './use-color-scheme.ts'
 import styles from './TokenUsageSection.module.css'
@@ -153,7 +155,7 @@ function FilterBar({ filters, models, onChange, onPricingTable, t }: {
        * view independent of the three selectors (it never takes filters).
        * A link-styled label, not a bordered button — bordered reads as a
        * fourth selector of the same family. */}
-      <button type="button" className={styles['pricingLink']} onClick={onPricingTable}>
+      <button type="button" data-pricing-overview-trigger className={styles['pricingLink']} onClick={onPricingTable}>
         {t('pricing.table')}
       </button>
     </div>
@@ -224,7 +226,9 @@ export function TokenUsageSection({ t, close, sessionListed, openSession }: Sett
   const [pricingTableOpen, setPricingTableOpen] = useState(false)
   const [usedSnapshot, setUsedSnapshot] = useState<ReadonlySet<string>>(() => new Set())
   const [retryToken, setRetryToken] = useState(0)
+  const lastSummary = useRef<UsageSummary | null>(null)
   const retry = useCallback(() => { setRetryToken(previous => previous + 1) }, [])
+  usePricingAssociationRefresh(retry)
 
   const query = filterQuery(filters)
   // A mid-edit inverted range (`query === null`) is fed to the hook as the
@@ -252,22 +256,32 @@ export function TokenUsageSection({ t, close, sessionListed, openSession }: Sett
     setModels(next)
   }, [state, filters.model, models])
 
+  if (state.status === 'ready') lastSummary.current = state.value
+  const retainedView = lastSummary.current !== null ? currencyViewOf(lastSummary.current) : { symbol: '￥' as const, rate: 1 }
+  const pricingOverview = pricingTableOpen ? <PricingOverviewDialog usedModels={usedSnapshot} view={retainedView}
+    onClose={() => setPricingTableOpen(false)} t={t} /> : null
   if (state.status === 'loading') {
     return (
       <div ref={rootRef} className={styles['section']}>
+        <PricingAssociationProvider resolutions={lastSummary.current?.modelResolutions} feedVersion={lastSummary.current?.feedVersion} view={retainedView} t={t}>
+        {pricingOverview}
         <h2 className={styles['title']}>{t('nav.label')}</h2>
         <p className={styles['muted']}>{t('loading')}</p>
+        </PricingAssociationProvider>
       </div>
     )
   }
   if (state.status === 'error') {
     return (
       <div ref={rootRef} className={styles['section']}>
+        <PricingAssociationProvider resolutions={lastSummary.current?.modelResolutions} feedVersion={lastSummary.current?.feedVersion} view={retainedView} t={t}>
+        {pricingOverview}
         <div className={styles['head']}>
           <h2 className={styles['title']}>{t('nav.label')}</h2>
           <button type="button" className={styles['button']} onClick={retry}>{t('retry')}</button>
         </div>
         <p className={styles['error']}>{t('loadFailed', { message: state.message })}</p>
+        </PricingAssociationProvider>
       </div>
     )
   }
@@ -276,6 +290,8 @@ export function TokenUsageSection({ t, close, sessionListed, openSession }: Sett
   const view = currencyViewOf(state.value)
   return (
     <div ref={rootRef} className={styles['section']}>
+    <PricingAssociationProvider resolutions={state.value.modelResolutions} feedVersion={state.value.feedVersion} view={view} t={t}>
+      {pricingOverview}
       <h2 className={styles['title']}>{t('nav.label')}</h2>
       <p className={styles['muted']}>{t('dataDir', { path: state.value.dataDir })}</p>
       <FilterBar
@@ -288,19 +304,6 @@ export function TokenUsageSection({ t, close, sessionListed, openSession }: Sett
         }}
         t={t}
       />
-      {pricingTableOpen
-        ? (
-          // The overview is independent of the filters and of the empty-
-          // state branch below: even a day with no usage still has a full
-          // pricing table worth browsing.
-          <PricingOverviewDialog
-            usedModels={usedSnapshot}
-            view={view}
-            onClose={() => setPricingTableOpen(false)}
-            t={t}
-          />
-        )
-        : null}
       {total.requests === 0 && (total.failures ?? 0) === 0
         ? (
           // One hint covers both an empty log and an empty filtered window:
@@ -330,18 +333,7 @@ export function TokenUsageSection({ t, close, sessionListed, openSession }: Sett
               <StatCard label={t('stat.cacheRead')} value={formatTokens(total.cacheReadTokens)} />
               <StatCard label={t('stat.cacheWrite')} value={formatTokens(total.cacheWriteTokens)} />
             </div>
-            <PricingStatus costState={state.value.costState} resolutions={state.value.modelResolutions} pricingUnavailableReason={state.value.pricingUnavailableReason} t={t} />
-            {costsAvailable(state.value.costState) && state.value.unpricedModels.length > 0
-              ? (
-                <p className={styles['warning']} role="status">
-                  {t('unpriced.warning', {
-                    count: String(state.value.unpricedModels.length),
-                    models: state.value.unpricedModels.join(', '),
-                    zero: formatCost(0, view),
-                  })}
-                </p>
-              )
-              : null}
+            <PricingStatus costState={state.value.costState} pricingUnavailableReason={state.value.pricingUnavailableReason} associationStorageError={state.value.associationStorageError} t={t} />
             <TrendChart
               rows={state.value.byDay}
               t={t}
@@ -420,9 +412,10 @@ export function TokenUsageSection({ t, close, sessionListed, openSession }: Sett
                                         : (
                                           <>
                                             <span className={styles['modelName']}>{row.model}</span>
-                                            <span className={styles['unpricedTag']}>{t('pricing.unpriced')}</span>
+                                            <UnpricedModelTag model={row.model} t={t} />
                                           </>
                                         )}
+                                      <ModelAssociationBadge model={row.model} t={t} />
                                     </span>
                                   </td>
                                   <td>
@@ -488,6 +481,7 @@ export function TokenUsageSection({ t, close, sessionListed, openSession }: Sett
           onDone={dismissToast}
         />
       )}
+    </PricingAssociationProvider>
     </div>
   )
 }

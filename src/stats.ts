@@ -633,6 +633,8 @@ export function attachCosts(
     total: summary.total,
     totalCost,
     costState,
+    ...(context?.feedVersion !== undefined ? { feedVersion: context.feedVersion } : {}),
+    ...(context?.associations.state === 'unavailable' ? { associationStorageError: context.associations.error } : {}),
     ...(context?.unavailableReason !== undefined ? { pricingUnavailableReason: context.unavailableReason } : {}),
     modelResolutions: context === undefined ? [] : summary.byModel.map(row => context.resolveModel(row.model)),
     unpricedModels,

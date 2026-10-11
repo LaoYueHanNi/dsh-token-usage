@@ -5,11 +5,12 @@
  * landed (same name, same size) plus the emptied directory.
  */
 import { existsSync } from 'node:fs'
-import { mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanSource, copyData, type MigrationProgress } from '../src/migrate.ts'
+import { ASSOCIATIONS_FILE } from '../src/pricing-associations.ts'
 
 let oldDir: string
 let newDir: string
@@ -17,6 +18,46 @@ let newDir: string
 beforeEach(async () => {
   oldDir = await mkdtemp(join(tmpdir(), 'token-usage-mig-old-'))
   newDir = await mkdtemp(join(tmpdir(), 'token-usage-mig-new-'))
+})
+
+describe('association migration byte protection', () => {
+  it.each(['{broken', JSON.stringify({ version: 1, revision: 2, associations: [{ sourceModel: 'P/name', targetModelId: 'a' }] })])('copies even unparseable choices verbatim and cleans only identical bytes', async bytes => {
+    await writeFile(join(oldDir, ASSOCIATIONS_FILE), bytes)
+    expect(await copyData(oldDir, newDir)).toContain(ASSOCIATIONS_FILE)
+    expect(await readFile(join(newDir, ASSOCIATIONS_FILE), 'utf8')).toBe(bytes)
+    await cleanSource(oldDir, newDir)
+    expect(existsSync(join(oldDir, ASSOCIATIONS_FILE))).toBe(false)
+  })
+  it('reuses an identical target file', async () => {
+    await Promise.all([oldDir, newDir].map(dir => writeFile(join(dir, ASSOCIATIONS_FILE), 'same')))
+    expect(await copyData(oldDir, newDir)).toContain(ASSOCIATIONS_FILE)
+    await cleanSource(oldDir, newDir)
+    expect(existsSync(oldDir)).toBe(false)
+  })
+  it('same-size conflict aborts before copying anything or deleting target rollup', async () => {
+    await writeFile(join(oldDir, ASSOCIATIONS_FILE), 'left')
+    await writeFile(join(newDir, ASSOCIATIONS_FILE), 'rght')
+    await writeFile(join(oldDir, 'state.json'), 'marker')
+    await writeFile(join(newDir, 'rollup.json'), 'cache')
+    await expect(copyData(oldDir, newDir)).rejects.toThrow('migration conflict')
+    expect(existsSync(join(newDir, 'state.json'))).toBe(false)
+    expect(await readFile(join(newDir, 'rollup.json'), 'utf8')).toBe('cache')
+    expect(await readFile(join(oldDir, ASSOCIATIONS_FILE), 'utf8')).toBe('left')
+    expect(await readFile(join(newDir, ASSOCIATIONS_FILE), 'utf8')).toBe('rght')
+  })
+  it('cleanup keeps source if target choices changed with the same size', async () => {
+    await writeFile(join(oldDir, ASSOCIATIONS_FILE), 'left')
+    await copyData(oldDir, newDir)
+    await writeFile(join(newDir, ASSOCIATIONS_FILE), 'rght')
+    expect(await cleanSource(oldDir, newDir)).toMatchObject({ cleaned: 0 })
+    expect(await readFile(join(oldDir, ASSOCIATIONS_FILE), 'utf8')).toBe('left')
+  })
+  it('an unreadable source is not treated as absent', async () => {
+    await mkdir(join(oldDir, ASSOCIATIONS_FILE))
+    await writeFile(join(newDir, 'rollup.json'), 'cache')
+    await expect(copyData(oldDir, newDir)).rejects.toThrow()
+    expect(await readFile(join(newDir, 'rollup.json'), 'utf8')).toBe('cache')
+  })
 })
 
 describe('copyData', () => {

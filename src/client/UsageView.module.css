@@ -257,6 +257,9 @@
   text-overflow: ellipsis;
 }
 
+.modelIdentity { display: inline-flex; align-items: center; gap: 4px; max-width: 180px; }
+.modelName { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+
 /* Subagent rows are drill-in links. */
 .childLink {
   border: none;

@@ -21,10 +21,11 @@
  * @module token-usage/pricing
  */
 
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { createModelResolver, modelKey, validateModelIdentities } from './model-resolution.ts'
+import { AssociationError, associationWritesPaused, pricingDirectoryEpoch, readAssociations, withPricingDirectoryRead, withPricingDirectoryWrite, type AssociationSnapshot } from './pricing-associations.ts'
 import { consoleLogger, type LoggerLike } from './log.ts'
 import type {
   ContextTier,
@@ -35,6 +36,7 @@ import type {
   PricingOverviewModel,
   PricingTable,
   PricingUnavailableReason,
+  PricingAssociationStatus,
   RateKey,
   TimeRule,
   UsageTotals,
@@ -571,12 +573,15 @@ async function readJsonFile(dir: string, name: string, logger: LoggerLike = cons
 /**
  * The synced cloud table of one data directory plus the alias → modelId
  * lookup, compiled identity resolver, exchange rate and history fingerprint
- * from one validated feed snapshot.
+ * from one validated feed and association snapshot.
  * @param dir - the plugin's data directory.
  * @param logger - diagnostic sink (defaults to console).
  * @returns the flat table and the canonical map (both empty when absent).
  */
 export interface PricingContext {
+  feedVersion?: number
+  associations: AssociationSnapshot
+  associationStatuses: PricingAssociationStatus[]
   unavailableReason?: PricingUnavailableReason
   table: PricingTable
   canonical: Map<string, string>
@@ -585,11 +590,14 @@ export interface PricingContext {
   usdExchangeRate: number
   models: PricingOverviewModel[]
   resolveModel(name: string): ModelResolution
+  resolveAutomatic(name: string): ModelResolution
   ratesForModel(name: string): ModelRates | undefined
 }
 
 /** One immutable feed snapshot; its indexes are private and resolutions lazy. */
-export function pricingContextOf(feed: CloudPricingData | null, unavailableReason: PricingUnavailableReason = 'invalid-feed'): PricingContext {
+export function pricingContextOf(feed: CloudPricingData | null, unavailableReason: PricingUnavailableReason = 'invalid-feed',
+  associations: AssociationSnapshot = { state: 'ready', source: null, file: { version: 1, revision: 0, associations: [] } },
+): PricingContext {
   const identify = createModelResolver(feed?.models ?? [])
   const table: PricingTable = Object.create(null)
   const rates = new Map<string, ModelRates>()
@@ -605,9 +613,27 @@ export function pricingContextOf(feed: CloudPricingData | null, unavailableReaso
       rules,
     }
   })
+  const ids = new Map(models.map(model => [modelKey(model.modelId), model.modelId]))
+  const associationStatuses: PricingAssociationStatus[] = (associations.state === 'ready' ? associations.file.associations : []).map(saved => {
+    const automatic = identify(saved.sourceModel)
+    const target = ids.get(modelKey(saved.targetModelId))
+    const common = { ...saved, ...(target !== undefined ? { resolvedTargetModelId: target } : {}) }
+    if (automatic.modelId !== undefined) return { ...common, state: 'automatic-takeover', automaticModelId: automatic.modelId,
+      targetDiffers: modelKey(automatic.modelId) !== modelKey(saved.targetModelId) }
+    return { ...common, state: feed === null ? 'pricing-unavailable' : target === undefined ? 'target-missing' : 'active' }
+  })
+  const savedByName = new Map(associationStatuses.map(saved => [modelKey(saved.sourceModel), saved]))
+  const resolutions = new Map<string, ModelResolution>()
   const resolveModel = (name: string): ModelResolution => {
-    const result = identify(name)
+    const cached = resolutions.get(name)
+    if (cached !== undefined) return cached
+    const automatic = identify(name)
+    const association = savedByName.get(modelKey(name))
+    const result: ModelResolution = association?.state === 'active'
+      ? { rawName: name, status: 'matched', modelId: association.resolvedTargetModelId!, method: 'manual', strippedPrefix: false, candidates: [], association, automatic }
+      : association === undefined ? automatic : { ...automatic, association }
     if (result.modelId !== undefined) table[name] = rates.get(result.modelId)!
+    resolutions.set(name, result)
     return result
   }
   class CanonicalIndex extends Map<string, string> {
@@ -632,13 +658,17 @@ export function pricingContextOf(feed: CloudPricingData | null, unavailableReaso
     aliasPatterns: [...model.aliasPatterns ?? []].sort(),
     rules: model.rules,
   })).sort((a, b) => a.modelId.localeCompare(b.modelId))
-  const fingerprint = createHash('sha256').update(JSON.stringify({ algorithm: 1, available: feed !== null, models: semantic },
+  const associationsKey = associations.state === 'ready'
+    ? associations.file.associations.map(saved => [modelKey(saved.sourceModel), modelKey(saved.targetModelId)]).sort((a, b) => a[0]!.localeCompare(b[0]!))
+    : null
+  const fingerprint = createHash('sha256').update(JSON.stringify({ algorithm: 2, available: feed !== null, models: semantic, associations: associationsKey },
     (key, value: unknown) => key === 'label' ? undefined : value)).digest('hex')
   return {
+    ...(feed !== null ? { feedVersion: feed.version } : {}),
     ...(feed === null ? { unavailableReason } : {}),
     table, canonical, available: feed !== null, fingerprint,
     usdExchangeRate: feed?.usdExchangeRate ?? DEFAULT_USD_EXCHANGE_RATE,
-    models, resolveModel,
+    associations, associationStatuses, models, resolveModel, resolveAutomatic: identify,
     ratesForModel: name => {
       const id = resolveModel(name).modelId
       return id === undefined ? undefined : rates.get(id)
@@ -646,23 +676,30 @@ export function pricingContextOf(feed: CloudPricingData | null, unavailableReaso
   }
 }
 
-const contextCache = new Map<string, { source: string | null; reason: PricingUnavailableReason; context: PricingContext }>()
+const contextCache = new Map<string, { source: string | null; reason: PricingUnavailableReason; associationKey: string; context: PricingContext }>()
 
 export async function readPricingContext(dir: string, logger: LoggerLike = consoleLogger): Promise<PricingContext> {
+  return withPricingDirectoryRead(dir, () => readPricingContextLocked(dir, logger))
+}
+
+/** Internal seam for association mutations that already hold the directory queue. */
+export async function readPricingContextLocked(dir: string, logger: LoggerLike = consoleLogger): Promise<PricingContext> {
   let reason: PricingUnavailableReason = 'invalid-feed'
-  const source = await readFile(join(dir, PRICING_CCSA_FILE), 'utf8').catch((error: unknown) => {
+  const [source, associations] = await Promise.all([readFile(join(dir, PRICING_CCSA_FILE), 'utf8').catch((error: unknown) => {
     reason = (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'unreadable'
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') logger.error('[token-usage] cannot read pricing mirror:', error)
     return null
-  })
+  }), readAssociations(dir)])
+  const associationKey = JSON.stringify([associations.source, associations.state === 'unavailable' ? associations.error : null])
   const cached = contextCache.get(dir)
-  if (cached !== undefined && cached.source === source && (source !== null || cached.reason === reason)) return cached.context
+  if (cached !== undefined && cached.source === source && cached.associationKey === associationKey
+    && (source !== null || cached.reason === reason)) return cached.context
   let value: unknown = null
   if (source !== null) {
     try { value = JSON.parse(source) } catch { reason = 'invalid-json'; logger.error('[token-usage] pricing mirror is not valid JSON') }
   }
-  const context = pricingContextOf(coerceCloudPricing(value), reason)
-  contextCache.set(dir, { source, reason, context })
+  const context = pricingContextOf(coerceCloudPricing(value), reason, associations)
+  contextCache.set(dir, { source, reason, associationKey, context })
   return context
 }
 
@@ -731,6 +768,8 @@ export interface CloudSyncResult {
  * @returns the sync summary.
  */
 export async function syncCloudPricing(dir: string, url: string): Promise<CloudSyncResult> {
+  if (associationWritesPaused(dir)) throw new AssociationError('migration-in-progress')
+  const epoch = pricingDirectoryEpoch(dir)
   const response = await fetch(url, { signal: AbortSignal.timeout(5_000) })
   if (!response.ok) throw new Error(`HTTP ${String(response.status)}`)
   const text = await response.text()
@@ -748,9 +787,14 @@ export async function syncCloudPricing(dir: string, url: string): Promise<CloudS
   const tmp = join(dir, `${PRICING_CCSA_FILE}.tmp`)
   // A fresh install may not have recorded any usage yet, so the data dir can
   // legitimately not exist — create it (idempotent) before the mirror lands.
-  await mkdir(dirname(target), { recursive: true })
-  await writeFile(tmp, text.endsWith('\n') ? text : `${text}\n`, 'utf8')
-  await rename(tmp, target)
+  await withPricingDirectoryWrite(dir, async () => {
+    if (pricingDirectoryEpoch(dir) !== epoch) throw new AssociationError('directory-conflict')
+    await mkdir(dirname(target), { recursive: true })
+    try {
+      await writeFile(tmp, text.endsWith('\n') ? text : `${text}\n`, 'utf8')
+      await rename(tmp, target)
+    } finally { await unlink(tmp).catch(() => undefined) }
+  })
   return {
     version: feed.version,
     updatedAt: feed.updatedAt,

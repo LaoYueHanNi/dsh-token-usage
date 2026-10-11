@@ -48,6 +48,9 @@ import { useAsyncResource, useDebouncedValue } from './async-resource.ts'
 import { totalTokens } from './day.ts'
 import { currencyViewOf, formatCost, formatTokens, hitRateDisplay } from './format.ts'
 import { PricingStatus, costsAvailable } from './PricingStatus.tsx'
+import { ModelAssociationBadge, PricingAssociationProvider, UnpricedModelTag } from './PricingAssociations.tsx'
+import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
+import { usePricingAssociationRefresh } from './pricing-associations.ts'
 import { buildChildIndex, buildStatsFreshnessKey, subtreeIds } from './session-stats.ts'
 import { useColorSchemeMirror } from './use-color-scheme.ts'
 import { CostDeltaFlyLabel } from './CostDeltaFlyLabel.tsx'
@@ -117,6 +120,8 @@ export function CostPill({ sessionId, useSessions, useProjection, t }: CostPillP
   const costRef = useRef<HTMLSpanElement>(null)
   useColorSchemeMirror(rootRef)
   const [open, setOpen] = useState(false)
+  const [associationTick, setAssociationTick] = useState(0)
+  usePricingAssociationRefresh(() => setAssociationTick(tick => tick + 1))
 
   // Same membership as the Usage tab's "with subagents" scope: the active
   // session plus every origin=subagent descendant. An ordinary fork is not
@@ -147,7 +152,7 @@ export function CostPill({ sessionId, useSessions, useProjection, t }: CostPillP
       const ids = (idsPart ?? '').split('\n').filter(id => id !== '')
       return fetchSummary(ids, 'chip', signal)
     },
-    [debouncedKey],
+    [debouncedKey, associationTick],
     { silentAfterFirst: true, retryToken: 0 },
   )
   const summary = treeRes.status === 'ready' ? treeRes.value : null
@@ -174,7 +179,7 @@ export function CostPill({ sessionId, useSessions, useProjection, t }: CostPillP
       const ids = (idsPart ?? '').split('\n').filter(id => id !== '')
       return fetchSummary(ids, 'session', signal)
     },
-    [open, debouncedKey],
+    [open, debouncedKey, associationTick],
     { silentAfterFirst: true, retryToken: 0 },
   )
   const [selfRes] = useAsyncResource<UsageSummary | null>(
@@ -182,7 +187,7 @@ export function CostPill({ sessionId, useSessions, useProjection, t }: CostPillP
       if (!open || sessionId === '') return Promise.resolve(null)
       return fetchSummary([sessionId], 'chip', signal)
     },
-    [open, sessionId, debouncedKey],
+    [open, sessionId, debouncedKey, associationTick],
     { silentAfterFirst: true, retryToken: 0 },
   )
 
@@ -250,6 +255,7 @@ export function CostPill({ sessionId, useSessions, useProjection, t }: CostPillP
 
   return (
     <div ref={rootRef} className={styles.root}>
+    <PricingAssociationProvider resolutions={detail?.modelResolutions} feedVersion={summary.feedVersion} view={view} t={t}>
       <button
         type="button"
         className={styles.pill}
@@ -289,7 +295,7 @@ export function CostPill({ sessionId, useSessions, useProjection, t }: CostPillP
             <span>{t('panel.hitRate', { value: hit.text })}</span>
           </span>
           <div className={styles.rows}>
-            <PricingStatus costState={summary.costState} resolutions={detail?.modelResolutions ?? []} pricingUnavailableReason={summary.pricingUnavailableReason} t={t} />
+            <PricingStatus costState={summary.costState} pricingUnavailableReason={summary.pricingUnavailableReason} associationStorageError={summary.associationStorageError} t={t} />
             <span className={styles.row}>
               <span className={styles.rowLabel}>{t('panel.self')}</span>
               <span className={styles.rowValue}>
@@ -320,7 +326,7 @@ export function CostPill({ sessionId, useSessions, useProjection, t }: CostPillP
               : (
                   <>
                     {detail.byModel.map(row => (
-                      <ModelRow key={row.model} row={row} view={view} available={costsAvailable(detail.costState) && !detail.unpricedModels.includes(row.model)} />
+                      <ModelRow key={row.model} row={row} view={view} t={t} unpriced={detail.unpricedModels.includes(row.model)} available={costsAvailable(detail.costState) && !detail.unpricedModels.includes(row.model)} />
                     ))}
                     {costsAvailable(detail.costState) && detail.unpricedModels.length > 0 && (
                       <span className={`${styles.row} ${styles.unpriced}`}>
@@ -333,16 +339,19 @@ export function CostPill({ sessionId, useSessions, useProjection, t }: CostPillP
           </span>
         </div>
       )}
+    </PricingAssociationProvider>
     </div>
   )
 }
 
 /** One per-model breakdown row: model id + request count, billed cost, tokens. */
-function ModelRow({ row, view, available }: { row: CostedModelRow; view: ReturnType<typeof currencyViewOf>; available: boolean }): ReactNode {
+function ModelRow({ row, view, available, unpriced, t }: { row: CostedModelRow; view: ReturnType<typeof currencyViewOf>; available: boolean; unpriced: boolean; t: TranslateNS<'token-usage'> }): ReactNode {
   return (
     <span className={styles.row}>
       <span className={styles.rowLabel}>
         {row.model}
+        {unpriced && <UnpricedModelTag model={row.model} t={t} />}
+        <ModelAssociationBadge model={row.model} t={t} />
         <span className={styles.requests}>× {row.totals.requests}</span>
       </span>
       <span className={styles.rowValue}>
