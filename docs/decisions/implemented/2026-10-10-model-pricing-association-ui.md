@@ -6,7 +6,7 @@ Status: implemented
 
 [关联后端](2026-10-10-model-pricing-associations.md) 已能保存名称引用、重算历史并报告生命周期，但没有界面入口，用户仍无法在发现未定价时选目标或撤销。按规范 ID 折叠后，还必须保留每个原始来源，避免自动和人工混合行隐藏人工选择；没有当前用量的失效或被接管关联也不能消失。
 
-本条落实 [整体提案](../proposed/2026-10-10-prefixed-model-normalize-and-local-map.md) 的第三阶段。三个阶段分别有实施记录，整体提案按分阶段约定继续保持 proposed，代码仅在功能分支，不发布、不改版本。
+本条落实 [整体决策](2026-10-10-prefixed-model-normalize-and-local-map.md) 的第三阶段。三个阶段均已有实施记录，整体决策已转为 implemented；实现状态不代表合并 main 或发布，不改版本。
 
 ## Decision
 
