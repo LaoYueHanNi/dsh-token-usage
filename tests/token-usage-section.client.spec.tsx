@@ -123,8 +123,8 @@ function stubFetch(impl: () => Promise<unknown>): ReturnType<typeof vi.fn> {
  * model in the first one. */
 const OVERVIEW: PricingOverviewPayload = {
   models: [
-    { modelId: 'deepseek-reasoner', aliases: ['deepseek-think'], family: 'deepseek', rules: SUMMARY.pricing['deepseek-reasoner']! },
-    { modelId: 'glm-4.7', aliases: [], family: 'glm', rules: SUMMARY.pricing['deepseek-reasoner']! },
+    { modelId: 'deepseek-reasoner', aliasPatterns: ['^deepseek-think$'], family: 'deepseek', rules: SUMMARY.pricing['deepseek-reasoner']! },
+    { modelId: 'glm-4.7', aliasPatterns: [], family: 'glm', rules: SUMMARY.pricing['deepseek-reasoner']! },
   ],
   currency: 'CNY',
   usdExchangeRate: 7,

@@ -376,7 +376,7 @@ function PricingSyncButton({ disabled, dirty, t }: {
       }
       const body = await response.json() as PricingSyncResult
       if (body === null || typeof body !== 'object'
-        || ![body.version, body.updatedAt, body.models, body.aliases, body.usdExchangeRate].every(value => typeof value === 'number' && Number.isFinite(value))) {
+        || ![body.version, body.updatedAt, body.models, body.aliasPatterns, body.usdExchangeRate].every(value => typeof value === 'number' && Number.isFinite(value))) {
         throw new Error('unexpected pricing sync response')
       }
       pricingTableChanged()

@@ -130,7 +130,8 @@ function checkAssociations(value: PricingAssociationsPayload): PricingAssociatio
 
 function checkPricing(value: PricingOverviewPayload): PricingOverviewPayload {
   if (value === null || typeof value !== 'object' || !Array.isArray(value.models)
-    || value.models.some(row => row === null || typeof row.modelId !== 'string' || !Array.isArray(row.aliases) || row.rules?.base === undefined)) {
+    || value.models.some(row => row === null || typeof row.modelId !== 'string'
+      || !Array.isArray(row.aliasPatterns) || !row.aliasPatterns.every((pattern: unknown) => typeof pattern === 'string') || row.rules?.base === undefined)) {
     throw new Error('unexpected pricing response')
   }
   return value

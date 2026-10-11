@@ -9,15 +9,18 @@ Status: implemented
 ## Decision
 
 > [!NOTE]
+> 本决策中的旧 aliases 接口、字典展开及别名子串搜索已于 2026-10-11 由 [DR: 模型别名统一使用 aliasPatterns 正则](2026-10-11-regex-only-model-aliases.md) 取代；总览返回正则，别名按完整输入执行正则匹配。
+
+> [!NOTE]
 > 本决策中的响应完全不含版本元信息约定已于 2026-10-10 由 [DR: 未定价位置的局部关联、来源管理与上游请求草稿](2026-10-10-model-pricing-association-ui.md) 部分取代。响应包含可选 feedVersion 供上游草稿诊断，总览不增加版本展示或关联价目行。
 
-**后端：`/token-usage/pricing` exact 路由**（`src/stats-route.ts` 的 `createPricingRoute`，与 migration/dir-guard 路由同模板：same-origin 校验、`no-store`、405/403/500 分支），返回**模型行**形状而非 flat `PricingTable`：`models: [{ modelId, aliases, family?, rules: ModelRates }]` + 展示用 `currency`/`usdExchangeRate`（region thunk 同 stats 路由）。`src/pricing.ts` 新增 `readPricingOverview` 保留 feed 的 models 数组形状直出（`readPricingTable` 的合并语义不受影响）；`coerceCloudPricing` 透传上游 `family` 字段（`CloudPricingModel.family?: string`，非字符串/空串丢弃）。总览只呈现云端镜像：本地 `pricing.json` 手工覆盖机制已废弃（见 [DR 2026-09-05](2026-09-05-abolish-manual-pricing-json.md)），不读它、不呈现它。不用 flat 表的原因：`cloudToTable` 把别名展开成独立键，总览里同一模型会重复成多行同价行；保留形状让前端每模型一行，别名不展示、但仍作搜索维度（命中别名即浮出该模型）。总览不展示版本、更新时间、来源或同步时间；可选 feedVersion 仅供上游草稿诊断。
+**后端：`/token-usage/pricing` exact 路由**（`src/stats-route.ts` 的 `createPricingRoute`，与 migration/dir-guard 路由同模板：same-origin 校验、`no-store`、405/403/500 分支），返回**模型行**形状而非 flat `PricingTable`：`models: [{ modelId, aliasPatterns, family?, rules: ModelRates }]` + 展示用 `currency`/`usdExchangeRate`（region thunk 同 stats 路由）。`src/pricing.ts` 新增 `readPricingOverview` 保留 feed 的 models 数组形状直出（`readPricingTable` 按需解析已观察到的正则名称）；`coerceCloudPricing` 透传上游 `family` 字段（`CloudPricingModel.family?: string`，非字符串/空串丢弃）。总览只呈现云端镜像：本地 `pricing.json` 手工覆盖机制已废弃（见 [DR 2026-09-05](2026-09-05-abolish-manual-pricing-json.md)），不读它、不呈现它。不用 flat 表的原因：`cloudToTable` 会按需将观察到的正则名称缓存为独立键，总览里同一模型会重复成多行同价行；保留形状让前端每模型一行，别名不展示、但仍作搜索维度（命中别名即浮出该模型）。总览不展示版本、更新时间、来源或同步时间；可选 feedVersion 仅供上游草稿诊断。
 
 **前端：入口**在筛选行（FilterBar）行尾、模型菜单之后：行内三个控件是"选择器"（决定下方数据看什么），行尾入口是"动作"（打开与筛选无关的视图），不进筛选语法。形态是**蓝色文字标签**（`.pricingLink`）：`--dsw-alias-link-primary`（fallback `label-primary`）、无边框无底、28px 点击区（padding 4px 8px + 13px/20px）、hover 显 `--dsw-interactive-bg-hover` 圆角灰底（`dialogClose` 手法）。文案用独立 locale key（中文「定价表」/ 英文 "Pricing"），不复用单模型的 `pricing.viewShort`「定价」。
 
 **前端：总览弹窗**（`src/client/PricingOverviewDialog.tsx`）。native `<dialog>`（PricingDialog 模式：showModal、Esc/背板关闭、焦点困住、top layer；背板点击关闭以**按下落点守卫**——click 在按下/释放目标的最近共同祖先上派发，从输入框拖选文本到弹窗外松开时该祖先恰是 dialog 元素（top layer 外的一切落点都解析为 dialog），仅按 click target 判定会把拖选释放误判为背板点击而关掉弹窗，故要求 mousedown 也落在背板上才关），宽度 `min(720px, calc(100vw - 48px))`。按需 fetch `/token-usage/pricing`（不带任何 query 参数——与筛选解耦，筛选变化不影响已打开的总览；fetch 失败与空镜像统一提示「模型定价获取失败」+ 重试）。结构：搜索框（弹窗顶部固定区）+ **平铺模型长表**（`table-layout: fixed` + 模型列 40%，列宽由表头定义、不随内容或搜索变化；列头 sticky；滚动壳固定 `height: min(60vh, 520px)`）；每行 = 模型名 + 生效价 4 列（入/出/缓/写，口径见下文「生效价主行」），货币跟随页面视图（`currencyViewOf`，USD 换算并在表下标注）。
 
-**平铺排序、已用标记与家族序**。总览是单层平铺表：所有模型行直接列出、不分组不折叠，默认按 feed 每模型行自带的 `family` 字段排序（家族字母序，家族内 modelId 字母序，缺失落 `other`）——上游权威分类直出、前端零映射表零推断，家族只驱动排序与搜索，不驱动任何 UI 结构，同族模型天然相邻。搜索（modelId/别名/家族名，大小写不敏感子串）过滤行并保持排序。当前筛选 `byModel` 中出现过的模型行加 10px「已用」小徽标（规格同 `unpricedTag`、中性配色；快照在打开瞬间取定，`showModal` 期间 backdrop 盖住筛选行、筛选不可能变化）。点击模型行 → **二级弹窗**展示该模型完整价格表（复用 `PricingDialog`，native showModal 天然层叠：总览在下、详情在上），关闭回到总览；因详情是总览的 DOM 子元素、React 会模拟 close 事件的传播，总览的 `onClose` 以事件 target 守卫，只有总览自身的 close 才收起总览。
+**平铺排序、已用标记与家族序**。总览是单层平铺表：所有模型行直接列出、不分组不折叠，默认按 feed 每模型行自带的 `family` 字段排序（家族字母序，家族内 modelId 字母序，缺失落 `other`）——上游权威分类直出、前端零映射表零推断，家族只驱动排序与搜索，不驱动任何 UI 结构，同族模型天然相邻。搜索过滤行并保持排序：modelId/家族名做大小写不敏感子串匹配，完整别名输入执行 aliasPatterns；不在正则源码中查子串。当前筛选 `byModel` 中出现过的模型行加 10px「已用」小徽标（规格同 `unpricedTag`、中性配色；快照在打开瞬间取定，`showModal` 期间 backdrop 盖住筛选行、筛选不可能变化）。点击模型行 → **二级弹窗**展示该模型完整价格表（复用 `PricingDialog`，native showModal 天然层叠：总览在下、详情在上），关闭回到总览；因详情是总览的 DOM 子元素、React 会模拟 close 事件的传播，总览的 `onClose` 以事件 target 守卫，只有总览自身的 close 才收起总览。
 
 **前端结构**：`PricingDialog`/`ModelPriceTable` 从 `TokenUsageSection.tsx` 搬出为叶子模块 `src/client/PricingDialog.tsx`（+ `PricingDialog.module.css`，仿 `StatCard.tsx` 先例），byModel 表照旧用 TokenUsageSection.module.css 的同名类（CSS Modules 哈希隔离）。
 

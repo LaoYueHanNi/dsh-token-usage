@@ -367,7 +367,7 @@ describe('TokenUsageCard', () => {
       expect(fetch.mock.calls.filter(call => String(call[0]) === PRICING_SYNC_PATH)).toHaveLength(1)
       expect(fetch).toHaveBeenCalledWith(PRICING_SYNC_PATH, { method: 'POST', cache: 'no-store' })
       expect((screen.getByRole('button', { name: '同步中…' }) as HTMLButtonElement).disabled).toBe(true)
-      finish(Response.json({ version: 12, updatedAt: 1, models: 3, aliases: 1, usdExchangeRate: 7 }))
+      finish(Response.json({ version: 12, updatedAt: 1, models: 3, aliasPatterns: 1, usdExchangeRate: 7 }))
       await screen.findByText(t('card.pricingSync.done'))
       expect(refreshed).toHaveBeenCalledTimes(1)
       expect((button as HTMLButtonElement).disabled).toBe(false)

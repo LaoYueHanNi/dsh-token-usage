@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { pricingContextOf, readPricingContext, resolveRate, syncCloudPricing, type CloudPricingData, type CloudPricingModel, type PricingContext } from '../src/pricing.ts'
+import { coerceCloudPricing, pricingContextOf, readPricingContext, resolveRate, syncCloudPricing, type CloudPricingData, type CloudPricingModel, type PricingContext } from '../src/pricing.ts'
 import { readRollup, writeRollup } from '../src/rollup.ts'
 import { attachCosts, buildSummary, filterSummary, invalidateSummary, requestSeriesOf, summarizeRecords, type RateResolver } from '../src/stats.ts'
 import { UNPRICED_KEY } from '../src/wire.ts'
@@ -168,6 +168,23 @@ describe('pricing history rebuild', () => {
     expect(after.totalCost).toBe(5)
     expect(after.modelResolutions[0]).toMatchObject({ modelId: 'm', method: 'pattern', strippedPrefix: true })
   })
+  it('drops prices from old alias-based history while preserving usage, then applies new regexes', async () => {
+    const records = [record('old-name')]
+    const dir = await data(records)
+    const raw = { ...row, aliases: ['old-name'] }
+    const oldRates = summarizeRecords(records, () => resolveRate(pricingContextOf(feed([row])).table.m!, at(), 1_000_000, 0).key)
+    await writeRollup(dir, { upto: '2026-01-12', ...oldRates, sourceFiles: ['usage-2026-01-12.jsonl'], pricingFingerprint: 'old-alias-algorithm' })
+    const current = pricingContextOf(coerceCloudPricing({ ...feed([row]), models: [raw] })!)
+    const unpriced = await build(dir, current)
+    expect(unpriced.total).toEqual(oldRates.total)
+    expect(unpriced.totalCost).toBe(0)
+    expect(unpriced.unpricedModels).toEqual(['old-name'])
+    expect((await readRollup(dir))?.pricingFingerprint).toBe(current.fingerprint)
+    const restored = await build(dir, pricingContextOf(feed([{ ...row, aliasPatterns: ['^old-name$'] }])))
+    expect(restored.total).toEqual(unpriced.total)
+    expect(restored.totalCost).toBe(1)
+    expect(restored.byModel[0]?.model).toBe('m')
+  })
   it('rule edits with an unchanged feed version reselect RateKeys', async () => {
     const dir = await data()
     expect((await build(dir, pricingContextOf(feed([rules()])))).totalCost).toBe(5)
@@ -252,9 +269,11 @@ describe('pricing history rebuild', () => {
 })
 
 describe('pricing snapshots', () => {
-  it('preserves the detail dictionary and canonical index for unused legacy aliases', () => {
-    const context = pricingContextOf(feed([{ ...row, aliases: ['legacy'], aliasPatterns: ['^m-high$'] }]))
+  it('resolves regex detail and canonical lookups lazily without enumerating patterns', () => {
+    const context = pricingContextOf(feed([{ ...row, aliasPatterns: ['^legacy$', '^m-high$'] }]))
+    expect(Object.keys(context.table)).toEqual(['m'])
     expect(context.table.legacy).toBe(context.table.m)
+    expect(context.canonical.get('legacy')).toBe('m')
     expect([...context.canonical]).toContainEqual(['legacy', 'm'])
     expect(context.canonical.has('p/M-HIGH')).toBe(true)
     expect(context.canonical.get('p/M-HIGH')).toBe('m')
@@ -276,10 +295,12 @@ describe('pricing snapshots', () => {
   it('fingerprints identification and rules, excluding metadata and exchange-only edits', () => {
     const base = feed([rules()]); const key = pricingContextOf(base).fingerprint
     expect(pricingContextOf({ ...base, version: 999, updatedAt: 999, usdExchangeRate: 8, models: [{ ...rules(), family: 'new' }] }).fingerprint).toBe(key)
-    for (const model of [{ ...rules(), aliases: ['new'] }, { ...rules(), aliasPatterns: ['^new$'] }, { ...rules(), inputCostPerMillion: 9 }]) {
+    for (const model of [{ ...rules(), aliasPatterns: ['^new$'] }, { ...rules(), inputCostPerMillion: 9 }]) {
       expect(pricingContextOf(feed([model])).fingerprint).not.toBe(key)
     }
     expect(pricingContextOf(null).fingerprint).not.toBe(pricingContextOf(feed([])).fingerprint)
+    const legacy = coerceCloudPricing({ ...base, models: [{ ...rules(), aliases: ['ignored'] }] })!
+    expect(pricingContextOf(legacy).fingerprint).toBe(key)
   })
   it('rejects an invalid synced regex without replacing the valid mirror', async () => {
     const dir = await data(); const path = join(dir, 'pricing.ccsa.json'); const original = JSON.stringify(feed([row]))

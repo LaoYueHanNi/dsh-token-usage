@@ -25,7 +25,7 @@ export interface PricingSyncResult {
   version: number
   updatedAt: number
   models: number
-  aliases: number
+  aliasPatterns: number
   usdExchangeRate: number
 }
 
@@ -400,7 +400,7 @@ export interface ModelResolution {
   rawName: string
   status: 'matched' | 'unmatched' | 'ambiguous'
   modelId?: string
-  method?: 'id' | 'alias' | 'normalized-id' | 'normalized-alias' | 'pattern' | 'manual'
+  method?: 'id' | 'normalized-id' | 'pattern' | 'manual'
   strippedPrefix: boolean
   candidates: string[]
   association?: PricingAssociationStatus
@@ -410,16 +410,13 @@ export interface ModelResolution {
 
 /**
  * One model row of the pricing overview: the shape the cloud feed carries
- * (modelId + its aliases + its upstream family) plus the full rule set —
- * deliberately NOT flattened through {@link PricingTable}, so the overview
- * shows one row per model with aliases as a footnote instead of one row per
- * alias-key.
+ * (modelId + alias patterns + upstream family) plus the full rule set.
+ * The overview keeps one row per model rather than enumerating aliases.
  */
 export interface PricingOverviewModel {
   modelId: string
-  /** The feed's alias list for this model (empty when it carries none). */
-  aliases: readonly string[]
-  aliasPatterns?: readonly string[]
+  /** Validated full-name regexes; empty when the feed carries none. */
+  aliasPatterns: readonly string[]
   /** The feed's upstream family grouping; absent rows group under `other`. */
   family?: string
   rules: ModelRates

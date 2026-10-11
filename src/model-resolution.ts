@@ -2,7 +2,6 @@ import type { ModelResolution } from './wire.ts'
 
 export interface ModelIdentity {
   modelId: string
-  aliases?: readonly string[]
   aliasPatterns?: readonly string[]
 }
 
@@ -35,7 +34,7 @@ export function compileAliasPattern(pattern: string): RegExp {
       } else if (char === '\\') {
         const literal = body[offset++]
         if (literal === undefined || /[A-Za-z0-9\s]/.test(literal)) throw new Error('alias patterns allow escaped punctuation only')
-      } else if (!/[A-Za-z0-9_/-]/.test(char)) {
+      } else if (!/[A-Za-z0-9_/:\-]/.test(char)) {
         throw new Error('unsupported alias pattern syntax')
       }
       atoms++
@@ -46,6 +45,12 @@ export function compileAliasPattern(pattern: string): RegExp {
   expression(0)
   if (offset !== body.length) throw new Error('unbalanced alias pattern group')
   return new RegExp(pattern, 'i')
+}
+
+/** `$` also accepts a trailing newline in JS; require a full-span match. */
+export function matchesAliasPattern(regex: RegExp, name: string): boolean {
+  const match = regex.exec(name)
+  return match !== null && match.index === 0 && match[0].length === name.length
 }
 
 export function validateModelIdentities(models: readonly ModelIdentity[]): void {
@@ -63,7 +68,6 @@ export function validateModelIdentities(models: readonly ModelIdentity[]): void 
 export function createModelResolver(models: readonly ModelIdentity[]): (name: string) => ModelResolution {
   validateModelIdentities(models)
   const ids = new Map<string, Set<string>>()
-  const aliases = new Map<string, Set<string>>()
   const patterns: Array<{ modelId: string; regex: RegExp }> = []
   const add = (index: Map<string, Set<string>>, name: string, id: string): void => {
     const key = modelKey(name)
@@ -73,7 +77,6 @@ export function createModelResolver(models: readonly ModelIdentity[]): (name: st
   }
   for (const model of models) {
     add(ids, model.modelId, model.modelId)
-    for (const alias of model.aliases ?? []) if (alias !== '') add(aliases, alias, model.modelId)
     for (const pattern of model.aliasPatterns ?? []) patterns.push({ modelId: model.modelId, regex: compileAliasPattern(pattern) })
   }
   const cache = new Map<string, ModelResolution>()
@@ -90,9 +93,7 @@ export function createModelResolver(models: readonly ModelIdentity[]): (name: st
     let result: ModelResolution | undefined
     for (const [candidate, normalized] of [[rawName, false], ...(suffix === undefined ? [] : [[suffix, true]])] as Array<[string, boolean]>) {
       const idHits = ids.get(modelKey(candidate))
-      const aliasHits = aliases.get(modelKey(candidate))
       if (idHits !== undefined) result = resultOf(idHits, normalized ? 'normalized-id' : 'id', normalized)
-      else if (aliasHits !== undefined) result = resultOf(aliasHits, normalized ? 'normalized-alias' : 'alias', normalized)
       if (result !== undefined) break
     }
     if (result === undefined && rawName !== '') {
@@ -100,8 +101,7 @@ export function createModelResolver(models: readonly ModelIdentity[]): (name: st
       let strippedPrefix = false
       for (const { modelId, regex } of patterns) {
         for (const candidate of suffix === undefined ? [rawName] : [rawName, suffix]) {
-          const match = regex.exec(candidate)
-          if (match !== null && match.index === 0 && match[0].length === candidate.length) {
+          if (matchesAliasPattern(regex, candidate)) {
             hits.add(modelId)
             if (candidate !== rawName) strippedPrefix = true
           }

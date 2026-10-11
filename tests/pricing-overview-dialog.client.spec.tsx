@@ -102,14 +102,14 @@ const MINIMAX_RATES: ModelRates = {
 }
 
 const MODELS: PricingOverviewModel[] = [
-  { modelId: 'glm-4.7', aliases: ['glm', 'chatglm'], family: 'glm', rules: RATES },
-  { modelId: 'glm-4.6', aliases: [], family: 'glm', rules: CHEAP_RATES },
-  { modelId: 'deepseek-chat', aliases: ['dsv3'], family: 'deepseek', rules: RATES },
+  { modelId: 'glm-4.7', aliasPatterns: ['^glm$', '^chatglm$'], family: 'glm', rules: RATES },
+  { modelId: 'glm-4.6', aliasPatterns: [], family: 'glm', rules: CHEAP_RATES },
+  { modelId: 'deepseek-chat', aliasPatterns: ['^dsv3$'], family: 'deepseek', rules: RATES },
   // No family on the wire: lands in the feed's own `other` bucket.
-  { modelId: 'kimi-k2', aliases: ['moonshot', 'kimi', 'm2'], rules: NO_CACHE_RATES },
-  { modelId: 'deepseek-v4-pro', aliases: [], family: 'deepseek', rules: V4_PRO_RATES },
-  { modelId: 'gemini-3.7-flash', aliases: [], family: 'gemini', rules: GEMINI_RATES },
-  { modelId: 'MiniMax-M3', aliases: [], family: 'minimax', rules: MINIMAX_RATES },
+  { modelId: 'kimi-k2', aliasPatterns: ['^moonshot$', '^kimi$', '^m2$'], rules: NO_CACHE_RATES },
+  { modelId: 'deepseek-v4-pro', aliasPatterns: [], family: 'deepseek', rules: V4_PRO_RATES },
+  { modelId: 'gemini-3.7-flash', aliasPatterns: [], family: 'gemini', rules: GEMINI_RATES },
+  { modelId: 'MiniMax-M3', aliasPatterns: [], family: 'minimax', rules: MINIMAX_RATES },
 ]
 
 const OVERVIEW: PricingOverviewPayload = {
@@ -211,6 +211,14 @@ describe('matchesPricingSearch', () => {
     // The family-less model lands in `other`; only the family matches here.
     expect(matchesPricingSearch(MODELS[3]!, 'other')).toBe(true)
     expect(matchesPricingSearch(MODELS[0]!, 'qwen')).toBe(false)
+  })
+  it('matches the entered full alias against regexes, not regex-source substrings or deprecated fields', () => {
+    const model = { ...MODELS[0]!, modelId: 'Claude-Fable-5.1', family: 'anthropic',
+      aliases: ['legacy-name'], aliasPatterns: ['^claude-fable-5-1-thinking(-(medium|max))?$'] }
+    expect(matchesPricingSearch(model, 'CLAUDE-FABLE-5-1-THINKING-MEDIUM')).toBe(true)
+    for (const query of ['m', 'medium', 'legacy-name', '^claude', 'claude-fable-5-1-thinking-max\n', 'claude-fable-5-1-thinking-fast']) {
+      expect(matchesPricingSearch(model, query)).toBe(false)
+    }
   })
 })
 

@@ -26,11 +26,11 @@ const name = 'provider/internal'
 const unresolved = (rawName = name): ModelResolution => ({ rawName, status: 'unmatched', strippedPrefix: false, candidates: [] })
 const active = (sourceModel = name, targetModelId = 'm'): PricingAssociationStatus => ({ sourceModel, targetModelId, resolvedTargetModelId: targetModelId, state: 'active' })
 const overview: PricingOverviewPayload = { currency: 'CNY', usdExchangeRate: 7, costState: 'ready', feedVersion: 110, models: [
-  { modelId: 'm', aliases: ['internal', 'old-m'], family: 'alpha', rules: { base: { inputPerMillion: 1, outputPerMillion: 2 },
+  { modelId: 'm', aliasPatterns: ['^internal$', '^old-m$'], family: 'alpha', rules: { base: { inputPerMillion: 1, outputPerMillion: 2 },
     contextTiers: [{ threshold: 500000, rates: { inputPerMillion: 3, outputPerMillion: 4 } }],
     timeRules: [{ startTime: 0, endTime: 100, rates: { inputPerMillion: 5, outputPerMillion: 6 } }],
     dailySlots: [{ windows: [{ startMinute: 60, endMinute: 120 }], daysOfWeek: [1], rates: { inputPerMillion: 7, outputPerMillion: 8 } }] } },
-  { modelId: 'b', aliases: [], family: 'beta', rules: { base: { inputPerMillion: 0, outputPerMillion: 0 }, contextTiers: [], dailySlots: [], timeRules: [] } },
+  { modelId: 'b', aliasPatterns: [], family: 'beta', rules: { base: { inputPerMillion: 0, outputPerMillion: 0 }, contextTiers: [], dailySlots: [], timeRules: [] } },
 ] }
 const empty = (): PricingAssociationsPayload => ({ revision: 0, directoryToken: 'directory-A', storageState: 'ready', pricingAvailable: true, writesPaused: false, associations: [], feedVersion: 110 })
 
@@ -137,8 +137,8 @@ describe('local association selection', () => {
   })
   it('searches only model IDs, including partial IDs, without matching families or hidden aliases', async () => {
     const pricing: PricingOverviewPayload = { ...overview, models: [
-      { ...overview.models[0]!, modelId: 'Claude-Fable-5.1', family: 'anthropic', aliases: ['claude-fable-5-1-thinking-medium', 'claude-fable-5-1-thinking-max'] },
-      { ...overview.models[1]!, modelId: 'MiniMax-M3', family: 'minimax', aliases: ['vendor-speed'] },
+      { ...overview.models[0]!, modelId: 'Claude-Fable-5.1', family: 'anthropic', aliasPatterns: ['^claude-fable-5-1-thinking-medium$', '^claude-fable-5-1-thinking-max$'] },
+      { ...overview.models[1]!, modelId: 'MiniMax-M3', family: 'minimax', aliasPatterns: ['^vendor-speed$'] },
     ] }
     await ready(empty(), name, pricing)
     const search = screen.getByRole('searchbox')

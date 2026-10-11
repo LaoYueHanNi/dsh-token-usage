@@ -19,15 +19,17 @@ README 的深度延伸:计费规则链、价格文件格式、fork 维护者的�
 
 自动匹配分三阶段，全部忽略大小写，只有唯一命中才获得价格：
 
-1. 原始完整名称先匹配全表 `modelId`，再匹配历史 `aliases`。
-2. 各 `/` 路径段均非空时取最后一段，再匹配 ID、alias。前导、尾随、连续 `/` 不生成候选；不修剪空白、不移除版本或 `flash` / `flashx` / `fast` / `mini` 等身份。
+1. 原始完整名称先匹配全表 `modelId`。
+2. 各 `/` 路径段均非空时取最后一段，再匹配 `modelId`。前导、尾随、连续 `/` 不生成候选；不修剪空白、不移除版本或 `flash` / `flashx` / `fast` / `mini` 等身份。
 3. 原名与去前缀候选执行 `aliasPatterns`，模型命中去重，跨模型命中报歧义。
 
-`aliasPatterns` 缺省为 `[]`，使用上游无 flags、以 `^` / `$` 锚定的可移植语法（字面量、转义标点、分组、或分支及 `?`）；插件加载时校验编译，固定添加 `i`，要求匹配覆盖整个输入，包括拒绝尾部换行。大小写及 provider 前缀兼容是插件扩展，上游默认识别区分大小写且不去前缀。
+`aliasPatterns` 缺省为 `[]`，使用上游无 flags、以 `^` / `$` 锚定的可移植语法（字面量、转义标点、分组、或分支及 `?`）；插件加载时校验编译，固定添加 `i`，要求匹配覆盖整个输入，包括拒绝尾部换行。大小写不敏感符合上游约定，provider 前缀兼容仍是插件扩展。旧 `aliases` 字段被忽略，不自动转换成正则；只在旧字段中存在的名称需要上游补正则或保存本地关联。
 
-原名优先于去前缀，ID 优先于 alias；任何阶段歧义均停止，不取第一条、不使用 contains。非法正则和忽略大小写后的重复 ID 使整份 feed 校验失败。无命中或歧义显示未定价及候选原因，费用显示 `—`，汇总只包含已识别模型；真实零单价仍已定价。不同 provider 的未识别完整名称保持独立，同一完整名称的大小写变体合并。设置页、会话页、筛选、详情和总览「已用」采用同一识别结果；原始用量记录不改写。
+原名 ID 优先于去前缀 ID，两者优先于正则；任何阶段歧义均停止，不取第一条、不使用 contains。非法正则和忽略大小写后的重复 ID 使整份 feed 校验失败。无命中或歧义显示未定价及候选原因，费用显示 `—`，汇总只包含已识别模型；真实零单价仍已定价。不同 provider 的未识别完整名称保持独立，同一完整名称的大小写变体合并。设置页、会话页、筛选、详情和总览「已用」采用同一识别结果；原始用量记录不改写。
 
 自动识别、手动关联及其操作界面均已实现；未定价位置也可直接打开上游 Issue 请求草稿。
+
+定价总览搜索保留模型 ID 和家族的子串匹配；搜索完整别名时执行 `aliasPatterns`，不搜索正则源码中的片段。总览接口只返回 `aliasPatterns`，同步结果中的 `aliasPatterns` 为正则条数，不是匹配名称数量。
 
 ## 本地名称关联
 
@@ -73,7 +75,7 @@ README 的深度延伸:计费规则链、价格文件格式、fork 维护者的�
 
 ### 云端 feed 格式
 
-`currency` 须为 `RMB`;`modelId`、历史 `aliases` 和可选 `aliasPatterns` 参与下述统一识别;`timeRules` / `contextTiers` / `dailySlots` 全部参与计费:
+`currency` 须为 `RMB`;仅 `modelId` 和可选 `aliasPatterns` 参与统一识别，旧 `aliases` 不参与;`timeRules` / `contextTiers` / `dailySlots` 全部参与计费:
 
 ```json
 {
@@ -83,7 +85,7 @@ README 的深度延伸:计费规则链、价格文件格式、fork 维护者的�
   "usdExchangeRate": 7,
   "models": [
     { "modelId": "deepseek-chat", "inputCostPerMillion": 2, "outputCostPerMillion": 8,
-      "cacheReadCostPerMillion": 0.5, "cacheCreationCostPerMillion": 1, "aliases": ["deepseek-v3"], "aliasPatterns": [] }
+      "cacheReadCostPerMillion": 0.5, "cacheCreationCostPerMillion": 1, "aliasPatterns": ["^deepseek-v3$"] }
   ]
 }
 ```
@@ -118,6 +120,7 @@ README 的深度延伸:计费规则链、价格文件格式、fork 维护者的�
 - [上下文压缩请求计费](./decisions/implemented/2026-09-02-compaction-billing.md)
 - [废除手工 pricing.json 定价文件](./decisions/implemented/2026-09-05-abolish-manual-pricing-json.md)
 
+- [正则别名统一识别](./decisions/implemented/2026-10-11-regex-only-model-aliases.md)
 - [统一自动识别与历史重算](./decisions/implemented/2026-10-10-model-pricing-resolution.md)
 - [手动关联后端与迁移保护](./decisions/implemented/2026-10-10-model-pricing-associations.md)
 - [局部关联界面与上游草稿](./decisions/implemented/2026-10-10-model-pricing-association-ui.md)

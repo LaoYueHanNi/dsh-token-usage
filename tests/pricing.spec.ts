@@ -303,7 +303,7 @@ describe('readPricingOverview', () => {
       models: [{
         modelId: 'deepseek-v4-flash',
         family: 'deepseek',
-        aliases: ['deepseek-flash', 'dsv4-flash'],
+        aliasPatterns: ['^deepseek-flash$', '^dsv4-flash$'],
         inputCostPerMillion: 1.5,
         outputCostPerMillion: 4.5,
         contextTiers: [{ threshold: 512000, inputCostPerMillion: 3, outputCostPerMillion: 9 }],
@@ -315,8 +315,7 @@ describe('readPricingOverview', () => {
     // alias-keyed flat table, which would repeat the model per alias.
     expect(rows[0]).toEqual({
       modelId: 'deepseek-v4-flash',
-      aliases: ['deepseek-flash', 'dsv4-flash'],
-      aliasPatterns: [],
+      aliasPatterns: ['^deepseek-flash$', '^dsv4-flash$'],
       family: 'deepseek',
       rules: {
         base: { inputPerMillion: 1.5, outputPerMillion: 4.5 },
@@ -346,14 +345,14 @@ describe('coerceCloudPricing', () => {
       updatedAt: 1_780_000_000,
       currency: 'RMB',
       models: [
-        { modelId: 'deepseek-chat', inputCostPerMillion: 2, outputCostPerMillion: 8, aliases: ['deepseek-v3'] },
+        { modelId: 'deepseek-chat', inputCostPerMillion: 2, outputCostPerMillion: 8, aliasPatterns: ['^deepseek-v3$'] },
         { modelId: 'broken', inputCostPerMillion: -1, outputCostPerMillion: 2 },
         { inputCostPerMillion: 1, outputCostPerMillion: 2 },
       ],
     })
     expect(feed).not.toBeNull()
     expect(feed!.models).toHaveLength(1)
-    expect(feed!.models[0]).toMatchObject({ modelId: 'deepseek-chat', aliases: ['deepseek-v3'] })
+    expect(feed!.models[0]).toMatchObject({ modelId: 'deepseek-chat', aliasPatterns: ['^deepseek-v3$'] })
   })
 
   it('refuses non-RMB currencies and wrong envelopes', () => {
@@ -425,6 +424,23 @@ describe('readUsdExchangeRate', () => {
 })
 
 describe('cloudToTable', () => {
+  it('resolves optional regex names through both helpers without enumerating or guessing aliases', () => {
+    const models = [{ modelId: 'm', aliasPatterns: ['^other(-(low|high))?$'], inputCostPerMillion: 2, outputCostPerMillion: 3 }]
+    const table = cloudToTable({ currency: 'RMB', version: 1, updatedAt: 0, models })
+    const canonical = canonicalMapOf(models)
+    expect(Object.keys(table)).toEqual(['m'])
+    expect([...canonical]).toEqual([['m', 'm']])
+    expect(table['provider/OTHER-high']).toBe(table.m)
+    expect(canonical.get('provider/OTHER-high')).toBe('m')
+    expect(canonical.has('other-low')).toBe(true)
+    expect(table['other-fast']).toBeUndefined()
+    expect(table['other-low\n']).toBeUndefined()
+    expect(canonical.get('other-fast')).toBeUndefined()
+    const conflict = cloudToTable({ currency: 'RMB', version: 1, updatedAt: 0, models: [
+      ...models, { ...models[0]!, modelId: 'n' },
+    ] })
+    expect(conflict['other-high']).toBeUndefined()
+  })
   it('maps fields, expands aliases, and keeps the rule chain', () => {
     const table = cloudToTable({
       version: 4,
@@ -436,7 +452,7 @@ describe('cloudToTable', () => {
         outputCostPerMillion: 105,
         cacheReadCostPerMillion: 2.1,
         cacheCreationCostPerMillion: 26.25,
-        aliases: ['claude-sonnet-4'],
+        aliasPatterns: ['^claude-sonnet-4$'],
         contextTiers: [{ threshold: 128000, inputCostPerMillion: 42, outputCostPerMillion: 210 }],
       }],
     })
@@ -456,7 +472,7 @@ describe('cloudToTable', () => {
       updatedAt: 0,
       currency: 'RMB',
       models: [
-        { modelId: 'alias-holder', inputCostPerMillion: 1, outputCostPerMillion: 1, aliases: ['shared-name'] },
+        { modelId: 'alias-holder', inputCostPerMillion: 1, outputCostPerMillion: 1, aliasPatterns: ['^shared-name$'] },
         { modelId: 'shared-name', inputCostPerMillion: 9, outputCostPerMillion: 9 },
       ],
     })
@@ -467,7 +483,7 @@ describe('cloudToTable', () => {
 describe('canonicalMapOf', () => {
   it('maps aliases onto the modelId and leaves the id pointing at itself', () => {
     const map = canonicalMapOf([
-      { modelId: 'deepseek-v4-flash', aliases: ['deepseek-v4-flash-0731', 'deepseek-v4-flash-08xx'] },
+      { modelId: 'deepseek-v4-flash', aliasPatterns: ['^deepseek-v4-flash-0731$', '^deepseek-v4-flash-08xx$'] },
     ])
     expect(map.get('deepseek-v4-flash')).toBe('deepseek-v4-flash')
     expect(map.get('deepseek-v4-flash-0731')).toBe('deepseek-v4-flash')
@@ -479,7 +495,7 @@ describe('canonicalMapOf', () => {
 
   it('lets a model id win a collision with another model\'s alias', () => {
     const map = canonicalMapOf([
-      { modelId: 'alias-holder', aliases: ['shared-name'] },
+      { modelId: 'alias-holder', aliasPatterns: ['^shared-name$'] },
       { modelId: 'shared-name' },
     ])
     expect(map.get('shared-name')).toBe('shared-name')
@@ -488,8 +504,8 @@ describe('canonicalMapOf', () => {
 
   it('leaves a cross-model shared alias unresolved', () => {
     const map = canonicalMapOf([
-      { modelId: 'a', aliases: ['shared'] },
-      { modelId: 'b', aliases: ['shared'] },
+      { modelId: 'a', aliasPatterns: ['^shared$'] },
+      { modelId: 'b', aliasPatterns: ['^shared$'] },
     ])
     expect(map.get('shared')).toBeUndefined()
     expect(map.get('a')).toBe('a')
@@ -536,7 +552,7 @@ describe('syncCloudPricing', () => {
     updatedAt: 1_780_000_000,
     currency: 'RMB',
     models: [
-      { modelId: 'deepseek-chat', inputCostPerMillion: 2, outputCostPerMillion: 8, aliases: ['deepseek-v3'] },
+      { modelId: 'deepseek-chat', inputCostPerMillion: 2, outputCostPerMillion: 8, aliasPatterns: ['^deepseek-v3$'] },
     ],
   })
 
@@ -545,15 +561,27 @@ describe('syncCloudPricing', () => {
     vi.stubGlobal('fetch', fetch)
     const dir = await mkdtemp(join(tmpdir(), 'token-usage-sync-'))
     const result = await syncCloudPricing(dir, 'https://example.com/feed.json')
-    expect(result).toEqual({ version: 4, updatedAt: 1_780_000_000, models: 1, aliases: 1, usdExchangeRate: 7 })
+    expect(result).toEqual({ version: 4, updatedAt: 1_780_000_000, models: 1, aliasPatterns: 1, usdExchangeRate: 7 })
     expect(fetch).toHaveBeenCalledWith('https://example.com/feed.json', expect.anything())
     // The mirror keeps the raw feed (plus a trailing newline); the merged
     // read already reflects it.
     expect(await readFile(join(dir, 'pricing.ccsa.json'), 'utf8')).toBe(`${FEED}\n`)
-    expect(await readPricingTable(dir)).toEqual({
-      'deepseek-chat': flat(2, 8),
-      'deepseek-v3': flat(2, 8),
-    })
+    const table = await readPricingTable(dir)
+    expect(Object.keys(table)).toEqual(['deepseek-chat'])
+    expect(table['deepseek-v3']).toEqual(flat(2, 8))
+  })
+  it('syncs an upstream regex containing a literal colon', async () => {
+    const payload = JSON.stringify({ version: 115, updatedAt: 1, currency: 'RMB', models: [{
+      modelId: 'nemotron-3-super', inputCostPerMillion: 1, outputCostPerMillion: 2,
+      aliasPatterns: ['^nemotron-3-super-120b-a12b:free$'],
+    }] })
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(payload)))
+    const dir = await mkdtemp(join(tmpdir(), 'token-usage-colon-sync-'))
+    const result = await syncCloudPricing(dir, 'https://example.com/feed.json')
+    expect(result).toMatchObject({ version: 115, models: 1, aliasPatterns: 1 })
+    expect(await readFile(join(dir, 'pricing.ccsa.json'), 'utf8')).toBe(`${payload}\n`)
+    const table = await readPricingTable(dir)
+    expect(table['nemotron-3-super-120b-a12b:free']).toBe(table['nemotron-3-super'])
   })
 
   it('rejects a non-RMB feed without writing the mirror', async () => {
@@ -590,9 +618,8 @@ describe('syncCloudPricing', () => {
     const dir = join(tmpdir(), `token-usage-absent-${Date.now()}-${Math.random().toString(36).slice(2)}`)
     const result = await syncCloudPricing(dir, 'https://example.com/feed.json')
     expect(result.models).toBe(1)
-    expect(await readPricingTable(dir)).toEqual({
-      'deepseek-chat': flat(2, 8),
-      'deepseek-v3': flat(2, 8),
-    })
+    const table = await readPricingTable(dir)
+    expect(table['deepseek-chat']).toEqual(flat(2, 8))
+    expect(table['deepseek-v3']).toBe(table['deepseek-chat'])
   })
 })

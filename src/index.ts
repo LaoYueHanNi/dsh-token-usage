@@ -460,7 +460,7 @@ export function apply(ctx: Context, config: Config = {}) {
     lastSyncedUrl = url
     const task = syncCloudPricing(dir, url, () => currentDir() === dir && resolvePricingUrl(effectiveInput()) === url)
       .then((result) => {
-        logger.info(`[token-usage] pricing sync (${url}): version ${result.version} (${result.models} models, ${result.aliases} aliases, USD rate ${result.usdExchangeRate})`)
+        logger.info(`[token-usage] pricing sync (${url}): version ${result.version} (${result.models} models, ${result.aliasPatterns} alias patterns, USD rate ${result.usdExchangeRate})`)
         return result
       })
       .catch((error: unknown) => {

@@ -225,7 +225,7 @@ describe('CostPill', () => {
         return Response.json({ directoryToken: 'directory', revision: saved ? 1 : 0, storageState: 'ready', pricingAvailable: true,
           writesPaused: false, associations: saved ? [association] : [], resolution: saved ? { ...automatic, status: 'matched', method: 'manual', modelId: targetModelId, association, automatic } : automatic })
       }
-      if (url.pathname === PRICING_PATH) return Response.json({ currency: 'CNY', usdExchangeRate: 7, models: [{ modelId: targetModelId, aliases: [], rules: {
+      if (url.pathname === PRICING_PATH) return Response.json({ currency: 'CNY', usdExchangeRate: 7, models: [{ modelId: targetModelId, aliasPatterns: [], rules: {
         base: { inputPerMillion: 1, outputPerMillion: 2 }, contextTiers: [], dailySlots: [], timeRules: [],
       } }] })
       return Response.json({ ...TREE_SUMMARY, totalCost: saved ? 8 : 0, costState: 'ready', unpricedModels: saved ? [] : [sourceModel],

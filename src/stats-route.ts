@@ -213,7 +213,7 @@ export function createPricingSyncRoute(sync: () => Promise<PricingSyncResult>): 
 
 /**
  * Build the pricing-overview route the settings page's overview dialog reads:
- * the full cloud-mirror model list in its model-row shape (modelId + aliases
+ * the full cloud-mirror model list in its model-row shape (modelId + aliasPatterns
  * + family + rules, never flattened into the alias-keyed table). The overview
  * is deliberately filter-free — it serves every model the mirror carries, so
  * it takes no query parameters and stays independent of the stats filters.

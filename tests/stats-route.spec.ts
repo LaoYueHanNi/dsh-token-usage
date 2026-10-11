@@ -330,7 +330,7 @@ describe('createStatsRoute', () => {
       models: [{
         modelId: 'deepseek-v4-flash',
         inputCostPerMillion: 1, outputCostPerMillion: 2, cacheReadCostPerMillion: 0.5,
-        aliases: ['deepseek-v4-flash-0731'],
+        aliasPatterns: ['^deepseek-v4-flash-0731$'],
       }],
     }))
     const route = createStatsRoute(() => dir)
@@ -747,7 +747,7 @@ describe('createPricingRoute', () => {
       models: [{
         modelId: 'deepseek-chat',
         family: 'deepseek',
-        aliases: ['deepseek-v3'],
+        aliasPatterns: ['^deepseek-v3$'],
         inputCostPerMillion: 2,
         outputCostPerMillion: 8,
         cacheReadCostPerMillion: 1,
@@ -763,13 +763,13 @@ describe('createPricingRoute', () => {
     const body = JSON.parse(captured.body) as {
       currency: string
       usdExchangeRate: number
-      models: Array<{ modelId: string; family: string; aliases: string[]; rules: { base: Record<string, number> } }>
+      models: Array<{ modelId: string; family: string; aliasPatterns: string[]; rules: { base: Record<string, number> } }>
     }
     // The display stamps follow the region thunk; the wire rates stay RMB.
     expect(body.currency).toBe('USD')
     expect(body.usdExchangeRate).toBe(7.25)
     expect(body.models).toHaveLength(1)
-    expect(body.models[0]).toMatchObject({ modelId: 'deepseek-chat', family: 'deepseek', aliases: ['deepseek-v3'] })
+    expect(body.models[0]).toMatchObject({ modelId: 'deepseek-chat', family: 'deepseek', aliasPatterns: ['^deepseek-v3$'] })
     expect(body.models[0]!.rules.base).toEqual({ inputPerMillion: 2, outputPerMillion: 8, cacheReadPerMillion: 1, cacheWritePerMillion: 4 })
   })
 
@@ -816,7 +816,7 @@ describe('createPricingSyncRoute', () => {
     const { res, captured } = fakeResponse()
     const request = route.handler(fakeRequest({ method: 'POST' }), res)
     expect(res.end).not.toHaveBeenCalled()
-    const result = { version: 12, updatedAt: 1, models: 3, aliases: 1, usdExchangeRate: 7 }
+    const result = { version: 12, updatedAt: 1, models: 3, aliasPatterns: 1, usdExchangeRate: 7 }
     finish(result)
     await request
     expect(captured.status).toBe(200)

@@ -152,7 +152,6 @@ export interface CloudPricingModel extends CloudRates {
   family?: string
   contextTiers?: CloudTier[]
   timeRules?: CloudTimeRule[]
-  aliases?: string[]
   aliasPatterns?: string[]
 }
 
@@ -259,6 +258,7 @@ export function coerceCloudPricing(value: unknown): CloudPricingData | null {
   for (const raw of feed.models as unknown[]) {
     if (typeof raw !== 'object' || raw === null) continue
     const row = raw as Record<string, unknown>
+    // Upstream retains deprecated aliases; only aliasPatterns owns alias identity here.
     if (row.aliasPatterns !== undefined && (!Array.isArray(row.aliasPatterns)
       || !row.aliasPatterns.every(pattern => typeof pattern === 'string' && pattern !== ''))) return null
     if (typeof row.modelId === 'string' && row.modelId !== '') {
@@ -281,9 +281,6 @@ export function coerceCloudPricing(value: unknown): CloudPricingData | null {
           timeRules: (row.timeRules as unknown[]).map(coerceTimeRule)
             .filter((rule): rule is CloudTimeRule => rule !== null),
         }
-        : {}),
-      ...(Array.isArray(row.aliases) && row.aliases.every(alias => typeof alias === 'string')
-        ? { aliases: row.aliases as string[] }
         : {}),
       ...(Array.isArray(row.aliasPatterns) ? { aliasPatterns: row.aliasPatterns as string[] } : {}),
     })
@@ -351,53 +348,57 @@ function cloudModelRates(model: CloudPricingModel): ModelRates {
 }
 
 /**
- * Flatten one cloud feed into a pricing table: every `modelId` becomes a key
- * and every alias becomes a key holding the same rule set. Aliases land
- * first, ids last, so a model id always wins a collision with another
- * model's alias.
+ * Seed model IDs and resolve observed regex/provider names on demand.
+ * Patterns cannot be expanded into a finite list of dictionary keys.
  * @param feed - the coerced cloud feed.
- * @returns the flat table keyed by model ids and aliases.
+ * @returns a table keyed by model IDs and successfully looked-up names.
  */
 export function cloudToTable(feed: CloudPricingData): PricingTable {
-  const table: PricingTable = Object.create(null)
   const identify = createModelResolver(feed.models)
-  for (const model of feed.models) {
-    for (const alias of model.aliases ?? []) {
-      const resolution = identify(alias)
-      if (alias !== '' && resolution.modelId === model.modelId) table[alias] = cloudModelRates(model)
-    }
-  }
+  const table = resolvedTable(name => identify(name).modelId)
   for (const model of feed.models) table[model.modelId] = cloudModelRates(model)
   return table
+}
+
+function resolvedTable(identify: (name: string) => string | undefined): PricingTable {
+  const entries: PricingTable = Object.create(null)
+  return new Proxy(entries, {
+    get(target, key: string | symbol): unknown {
+      if (typeof key !== 'string' || Object.hasOwn(target, key)) return Reflect.get(target, key)
+      const id = identify(key)
+      if (id === undefined) return undefined
+      const rules = target[id]
+      if (rules !== undefined) target[key] = rules
+      return rules
+    },
+  })
 }
 
 /** One model row's identity for alias → modelId folding. */
 export interface CanonicalModelRef {
   modelId: string
-  aliases?: readonly string[]
   aliasPatterns?: readonly string[]
 }
 
 /**
- * Map every priced name (modelId and each alias) onto its canonical
- * modelId, using the same collision order as {@link cloudToTable}:
- * case-insensitive model IDs win over aliases; shared aliases stay absent.
- * Names that do not appear in the feed are absent; callers fall back
- * to the raw name.
+ * Resolve names lazily through the same ID/regex chain as pricing.
+ * Only IDs and observed matches are enumerated; ambiguous names stay absent.
  * @param models - the feed's model rows (or the overview projection).
  * @returns name → modelId; unpriced names are not keys.
  */
 export function canonicalMapOf(models: readonly CanonicalModelRef[]): Map<string, string> {
-  const map = new Map<string, string>()
   const identify = createModelResolver(models)
-  for (const model of models) {
-    for (const name of [model.modelId, ...model.aliases ?? []]) {
-      const result = identify(name)
-      if (name !== '' && result.modelId !== undefined) {
-        map.set(name, result.modelId)
-        map.set(modelKey(name), result.modelId)
-      }
+  class CanonicalIndex extends Map<string, string> {
+    override get(name: string): string | undefined {
+      const id = identify(name).modelId
+      if (id !== undefined) this.set(name, id)
+      return id
     }
+    override has(name: string): boolean { return this.get(name) !== undefined }
+  }
+  const map = new CanonicalIndex()
+  for (const model of models) {
+    map.get(model.modelId)
   }
   return map
 }
@@ -600,7 +601,7 @@ export function pricingContextOf(feed: CloudPricingData | null, unavailableReaso
   associations: AssociationSnapshot = { state: 'ready', source: null, file: { version: 1, revision: 0, associations: [] } },
 ): PricingContext {
   const identify = createModelResolver(feed?.models ?? [])
-  const table: PricingTable = Object.create(null)
+  const table = resolvedTable(name => resolveModel(name).modelId)
   const rates = new Map<string, ModelRates>()
   const models = (feed?.models ?? []).map(model => {
     const rules = cloudModelRates(model)
@@ -608,7 +609,6 @@ export function pricingContextOf(feed: CloudPricingData | null, unavailableReaso
     table[model.modelId] = rules
     return {
       modelId: model.modelId,
-      aliases: [...model.aliases ?? []],
       aliasPatterns: [...model.aliasPatterns ?? []],
       ...(model.family !== undefined ? { family: model.family } : {}),
       rules,
@@ -646,23 +646,19 @@ export function pricingContextOf(feed: CloudPricingData | null, unavailableReaso
     override has(name: string): boolean { return this.get(name) !== undefined }
   }
   const canonical = new CanonicalIndex()
-  // Preserve the existing dictionary/index entries for model details while
-  // newly observed provider and regex names are resolved through the same index.
-  for (const model of models) {
-    for (const name of [model.modelId, ...model.aliases]) if (name !== '') canonical.get(name)
-  }
+  // Regex names enter the dictionary/index only when observed.
+  for (const model of models) canonical.get(model.modelId)
   // Display labels, family, feed version/timestamp and exchange rate cannot
   // change RateKey. Slot order is retained because RateKey uses slot indexes.
   const semantic = models.map(model => ({
     modelId: modelKey(model.modelId),
-    aliases: [...new Set(model.aliases.map(modelKey))].sort(),
     aliasPatterns: [...model.aliasPatterns ?? []].sort(),
     rules: model.rules,
   })).sort((a, b) => a.modelId.localeCompare(b.modelId))
   const associationsKey = associations.state === 'ready'
     ? associations.file.associations.map(saved => [modelKey(saved.sourceModel), modelKey(saved.targetModelId)]).sort((a, b) => a[0]!.localeCompare(b[0]!))
     : null
-  const fingerprint = createHash('sha256').update(JSON.stringify({ algorithm: 2, available: feed !== null, models: semantic, associations: associationsKey },
+  const fingerprint = createHash('sha256').update(JSON.stringify({ algorithm: 3, available: feed !== null, models: semantic, associations: associationsKey },
     (key, value: unknown) => key === 'label' ? undefined : value)).digest('hex')
   return {
     ...(feed !== null ? { feedVersion: feed.version } : {}),
@@ -739,9 +735,8 @@ export async function readUsdExchangeRate(dir: string, logger: LoggerLike = cons
 /**
  * The cloud feed of one data directory in its model-row shape (not flattened
  * through {@link cloudToTable}): one row per model carrying the modelId, the
- * alias list, the upstream family, and the full rule set — what the pricing
- * overview route serves so the page can show aliases as footnotes instead of
- * one row per alias-key. Absent, malformed, or non-RMB mirrors read as an
+ * alias patterns, upstream family, and full rule set — one row per model.
+ * Absent, malformed, or non-RMB mirrors read as an
  * empty list, matching {@link readPricingTable}'s stay-alive semantics.
  * @param dir - the plugin's data directory.
  * @param logger - diagnostic sink (defaults to console).
@@ -797,7 +792,7 @@ export async function syncCloudPricing(dir: string, url: string, isCurrent: () =
     version: feed.version,
     updatedAt: feed.updatedAt,
     models: feed.models.length,
-    aliases: feed.models.reduce((sum, model) => sum + (model.aliases?.length ?? 0), 0),
+    aliasPatterns: feed.models.reduce((sum, model) => sum + (model.aliasPatterns?.length ?? 0), 0),
     usdExchangeRate: feed.usdExchangeRate ?? DEFAULT_USD_EXCHANGE_RATE,
   }
 }

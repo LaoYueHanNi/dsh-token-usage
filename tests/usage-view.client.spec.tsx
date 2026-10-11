@@ -258,7 +258,7 @@ describe('UsageView', () => {
         if (options?.method === 'POST') saved = true
         return Response.json(associations())
       }
-      if (url.pathname === PRICING_PATH) return Response.json({ currency: 'CNY', usdExchangeRate: 7, costState: 'ready', models: [{ modelId: targetModelId, aliases: [], rules: {
+      if (url.pathname === PRICING_PATH) return Response.json({ currency: 'CNY', usdExchangeRate: 7, costState: 'ready', models: [{ modelId: targetModelId, aliasPatterns: [], rules: {
         base: { inputPerMillion: 1, outputPerMillion: 2 }, timeRules: [], contextTiers: [], dailySlots: [],
       } }] })
       const original = url.searchParams.getAll('sessionId').length > 1 ? TREE_SUMMARY : ROOT_SUMMARY

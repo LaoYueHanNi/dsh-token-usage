@@ -10,8 +10,8 @@ import { ASSOCIATIONS_FILE, associationWritesPaused, coerceAssociations, readAss
 import { coerceCloudPricing, pricingContextOf, readPricingContext, syncCloudPricing } from '../src/pricing.ts'
 
 const feed = { currency: 'RMB', version: 1, models: [
-  { modelId: 'a', aliases: ['old-a', 'shared'], inputCostPerMillion: 1, outputCostPerMillion: 2 },
-  { modelId: 'b', aliases: ['shared'], inputCostPerMillion: 3, outputCostPerMillion: 4 },
+  { modelId: 'a', aliasPatterns: ['^old-a$', '^shared$'], inputCostPerMillion: 1, outputCostPerMillion: 2 },
+  { modelId: 'b', aliasPatterns: ['^shared$'], inputCostPerMillion: 3, outputCostPerMillion: 4 },
 ] }
 const file = (associations = [{ sourceModel: 'P/internal', targetModelId: 'a' }], revision = 1) => ({ version: 1 as const, revision, associations })
 const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
@@ -105,7 +105,7 @@ describe('association service lifecycle', () => {
   })
   it('target rename through alias stays invalid; case-only rename stays active', async () => {
     await save()
-    await writeFile(join(dir, 'pricing.ccsa.json'), JSON.stringify({ ...feed, models: [{ ...feed.models[0], modelId: 'new-a', aliases: ['a'] }] }))
+    await writeFile(join(dir, 'pricing.ccsa.json'), JSON.stringify({ ...feed, models: [{ ...feed.models[0], modelId: 'new-a', aliasPatterns: ['^a$'] }] }))
     expect((await service.read('P/internal')).resolution).toMatchObject({ status: 'unmatched', association: { state: 'target-missing' } })
     await writeFile(join(dir, 'pricing.ccsa.json'), JSON.stringify({ ...feed, models: [{ ...feed.models[0], modelId: 'A' }] }))
     expect((await service.read('P/internal')).resolution).toMatchObject({ method: 'manual', modelId: 'A' })
@@ -141,7 +141,7 @@ describe('association concurrency and failure', () => {
   })
   it('rechecks automatic source and target against the feed at commit time', async () => {
     const current = await service.read()
-    await writeFile(join(dir, 'pricing.ccsa.json'), JSON.stringify({ ...feed, models: [{ ...feed.models[0], aliases: ['internal'] }] }))
+    await writeFile(join(dir, 'pricing.ccsa.json'), JSON.stringify({ ...feed, models: [{ ...feed.models[0], aliasPatterns: ['^internal$'] }] }))
     await expect(service.mutate('save', { sourceModel: 'internal', targetModelId: 'a', revision: 0, directoryToken: current.directoryToken })).rejects.toMatchObject({ code: 'source-automatically-priced' })
   })
   it('failed writes preserve choices and the queue remains usable', async () => {

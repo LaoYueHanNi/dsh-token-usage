@@ -1,4 +1,16 @@
 import type { PricingOverviewModel } from '../wire.ts'
+import { compileAliasPattern, matchesAliasPattern } from '../model-resolution.ts'
+
+const patternCache = new WeakMap<PricingOverviewModel, RegExp[]>()
+
+function patternsOf(model: PricingOverviewModel): RegExp[] {
+  let patterns = patternCache.get(model)
+  if (patterns === undefined) {
+    patterns = model.aliasPatterns.map(compileAliasPattern)
+    patternCache.set(model, patterns)
+  }
+  return patterns
+}
 
 export function sortPricingModels(models: readonly PricingOverviewModel[]): PricingOverviewModel[] {
   return [...models].sort((a, b) => {
@@ -13,5 +25,5 @@ export function matchesPricingSearch(model: PricingOverviewModel, query: string)
   if (query === '') return true
   const needle = query.toLowerCase()
   return model.modelId.toLowerCase().includes(needle) || (model.family ?? 'other').toLowerCase().includes(needle)
-    || model.aliases.some(alias => alias.toLowerCase().includes(needle))
+    || patternsOf(model).some(regex => matchesAliasPattern(regex, query))
 }

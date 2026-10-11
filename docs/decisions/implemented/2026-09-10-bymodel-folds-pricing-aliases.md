@@ -11,11 +11,14 @@ Status: implemented
 ## Decision
 
 > [!NOTE]
+> 本决策中的旧 aliases 识别阶段已于 2026-10-11 由 [DR: 模型别名统一使用 aliasPatterns 正则](2026-10-11-regex-only-model-aliases.md) 取代；当前仅识别 ID 与正则。
+
+> [!NOTE]
 > 本决策中的 别名碰撞、未定价名称分组及历史无需重建的约定 已于 2026-10-10 由 [DR: 统一模型自动识别与带定价指纹的历史重算](2026-10-10-model-pricing-resolution.md) 取代。
 
 **rollup / 原始记录仍按原始模型名存储。** 别名随云端 feed 变，写进聚合文件会在下次定价更新后分组错位。折叠只发生在读路径的费用层（`attachCosts`），用当前 feed 的统一识别结果。定价上下文指纹变化时仍须从原始记录重新选择 RateKey；原始模型名不变。
 
-识别按原名 ID → 原名 alias → 去前缀 ID / alias → 完整正则分阶段执行，全部忽略大小写；同阶段跨模型命中报歧义，不能先写者赢。未定价完整名称按忽略大小写分组，保留原始拼写，不同 provider 保持独立。命中后行的 `model` 展示为该定价条目的 **modelId**，行上不列出别名。
+识别按原名 ID → 有效 provider 末段 ID → 原名与末段的完整正则分阶段执行，全部忽略大小写；跨模型正则命中报歧义，不能先写者赢。未定价完整名称按忽略大小写分组，保留原始拼写，不同 provider 保持独立。命中后行的 `model` 展示为该定价条目的 **modelId**，行上不列出别名。
 
 模型筛选下拉来自折叠后的 `byModel`，选项已是 modelId。`filterSummary`（及 recent / requestSeries）按规范名匹配：选 `deepseek-v4-flash` 含其全部别名用量；残留的别名 query 也覆盖整族；未定价名规范名等于自身，按完整名称忽略大小写匹配。会话页 `UsageView` 走同一条 `attachCosts`，按模型表一并聚合。
 
