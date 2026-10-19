@@ -375,7 +375,11 @@ function QuotaGlyph({ share }: { share: number }): ReactNode {
 function QuotaColumn({ window, t }: { window: QuotaWindow; t: QuotaButtonProps['t'] }): ReactNode {
   const remaining = quotaRemainingPercent(window)
   const severity: QuotaSeverity = quotaSeverityOf(window)
-  const label = t(TIER_LABEL_KEYS[window.tier])
+  const label = window.balanceKind === 'recharge'
+    ? t('quota.tier.recharge')
+    : window.balanceKind === 'bonus'
+      ? t('quota.tier.bonus')
+      : t(TIER_LABEL_KEYS[window.tier])
 
   // Balance windows lead with the amount (the figure the user manages
   // against); ratio windows with the remaining share. The `meta` suffix
@@ -419,15 +423,21 @@ function QuotaColumn({ window, t }: { window: QuotaWindow; t: QuotaButtonProps['
 }
 
 /** The panel's width tier for one payload: what the windows PAINT decides —
- * a lone amount (no computable bar, the DeepSeek shape) reads at the
- * minimal plate, one bar (a weekly-only plan, or a balance with a spend
+ * a lone amount (no computable bar, the API-key DeepSeek shape) reads at
+ * the minimal plate, two amount purses (account recharge + bonus) the
+ * full plate, one bar (a weekly-only plan, or a balance with a spend
  * total like OpenRouter) the middle one, two or more bars the full plate.
  * Errors and payloads without windows read the full plate (their copy
  * runs long). */
 function panelWidthOf(payload: QuotaPayload | null): number {
   if (payload === null || payload.status !== 'ok') return PANEL_WIDTH_FULL
   const bars = payload.windows.filter(window => quotaUsedPercent(window) !== undefined).length
-  if (bars === 0) return payload.windows.length > 0 ? PANEL_WIDTH_BALANCE : PANEL_WIDTH_FULL
+  if (bars === 0) {
+    // One amount (the API-key DeepSeek shape) stays the minimal plate.
+    // Two purses (recharge + bonus) need the full plate so both labels fit.
+    if (payload.windows.length === 1) return PANEL_WIDTH_BALANCE
+    return PANEL_WIDTH_FULL
+  }
   return bars === 1 ? PANEL_WIDTH_SINGLE : PANEL_WIDTH_FULL
 }
 
@@ -438,6 +448,8 @@ function errorText(error: QuotaError, t: QuotaButtonProps['t']): string {
       return t('quota.error.auth', { message: error.message })
     case 'no-credential':
       return t('quota.error.noCredential', { ref: error.message })
+    case 'signed-out':
+      return t('quota.error.signedOut')
     case 'http':
       return t('quota.error.http', { message: error.message })
     case 'network':

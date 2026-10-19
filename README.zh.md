@@ -61,7 +61,7 @@ plugins:
 
 ## 供应商配额
 
-输入栏按钮跟随当前选中的供应商，点开即可查看套餐余量（与推理共用同一把 API Key）：
+输入栏按钮跟随当前选中的供应商，点开即可查看套餐余量（API Key 供应商与推理共用同一把密钥；DeepSeek 账号读取登录态余额）：
 
 <img src="docs/images/zhipu-plan-usage_zh.png" width="520" alt="智谱 GLM 配额面板">
 
@@ -73,7 +73,8 @@ plugins:
 | Kimi For Coding | 5 小时、每周 |
 | MiniMax Coding Plan（国内 / 国际） | 5 小时、每周 |
 | OpenCode Go | 5 小时、每周、每月 |
-| DeepSeek（官方） | ¥ 账户余额 |
+| DeepSeek（官方 API Key） | ¥ 账户余额 |
+| DeepSeek 账号 | 充值余额、赠金余额 |
 | OpenRouter | $ 剩余额度 |
 
 不支持的供应商不显示该按钮；查询失败可在面板内重试。默认开启，可用 `quota.enabled: false` 关闭。暂不支持：火山方舟、ZenMux、智谱团队版、Claude / Codex / Gemini / Grok 官方订阅、GitHub Copilot。

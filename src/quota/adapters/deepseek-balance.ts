@@ -1,6 +1,10 @@
 /**
- * DeepSeek balance adapter: the pay-as-you-go account balance of the
- * official DeepSeek platform — the dsh default provider (`deepseek-official`).
+ * DeepSeek balance adapter: the pay-as-you-go balance of an API key on the
+ * official DeepSeek platform — the dsh provider `deepseek-official`.
+ * The signed-in account route (`deepseek-account`) is a different grant
+ * and a different endpoint; the account adapter owns it. This adapter
+ * refuses that route key even when its base URL is a deepseek.com host
+ * (the account default is `https://api.deepseek.com/anthropic`).
  *
  * Endpoint: `GET {root}/user/balance` with a Bearer key. The root is the
  * profile's inference `baseURL` with a trailing OpenAI-compatible `/v1`
@@ -35,12 +39,13 @@ function balanceRootOf(baseUrl: string | undefined): string {
   return raw.replace(/\/+$/u, '').replace(/\/v1$/u, '')
 }
 
-/** The DeepSeek account-balance adapter. */
+/** The DeepSeek API-key balance adapter. */
 export const deepseekBalanceAdapter: QuotaAdapter = {
   id: 'deepseek-balance',
   label: 'DeepSeek Balance',
   routes: [ROUTE_OFFICIAL],
   matches(input) {
+    if (input.provider === 'deepseek-account') return false
     if (input.provider === ROUTE_OFFICIAL) return true
     const host = hostOf(input.baseUrl)
     return host !== undefined && (host === 'deepseek.com' || host.endsWith('.deepseek.com'))

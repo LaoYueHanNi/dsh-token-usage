@@ -110,20 +110,50 @@ class FakeCredentials extends Service {
   }
 }
 
-/** The llm provider directory: one configurable coding-plan route. */
+/** The llm provider directory: one configurable coding-plan route plus the account route. */
 class FakeLlm extends Service {
   constructor(ctx: Context) {
     super(ctx, 'llm')
   }
 
   listConfigurableProviders() {
-    return [{
-      provider: 'zai-coding-cn',
-      displayName: 'Zhipu GLM Coding Plan',
-      settingsNs: 'llm-pi-ai',
-      settingsPath: ['providers', 'zai-coding-cn'],
-      declared: true,
-    }]
+    return [
+      {
+        provider: 'zai-coding-cn',
+        displayName: 'Zhipu GLM Coding Plan',
+        settingsNs: 'llm-pi-ai',
+        settingsPath: ['providers', 'zai-coding-cn'],
+        declared: true,
+      },
+      {
+        provider: 'deepseek-account',
+        displayName: 'DeepSeek Account',
+        settingsNs: 'llm-deepseek-account',
+        settingsPath: [],
+        declared: true,
+      },
+    ]
+  }
+}
+
+/** Host account service: one mutable wallet snapshot, no Platform traffic. */
+class FakeDeepSeekAccount extends Service {
+  balance: {
+    status: 'ready' | 'failed'
+    value?: Array<{ currency: string; balance: string }>
+    bonusWallets?: Array<{ currency: string; balance: string }>
+  } | null = {
+    status: 'ready',
+    value: [{ currency: 'CNY', balance: '110.50' }],
+    bonusWallets: [{ currency: 'CNY', balance: '8.00' }],
+  }
+
+  constructor(ctx: Context) {
+    super(ctx, 'deepseekAccount')
+  }
+
+  async getBalance(): Promise<FakeDeepSeekAccount['balance']> {
+    return this.balance
   }
 }
 
@@ -184,6 +214,7 @@ describe('quota integration', () => {
   let webServer: MockWebServer | undefined
   let settings: FakeSettings | undefined
   let credentials: FakeCredentials | undefined
+  let account: FakeDeepSeekAccount | undefined
   let home: string
 
   /** Mount the plugin over the fake services; fetch stub answers Zhipu. */
@@ -207,6 +238,8 @@ describe('quota integration', () => {
     if (options.apiKeyRef === true) credentials.setValue('ZAI_KEY', 'sk-live-ref')
     if (options.apiRecord === true) credentials.setRecord('llm-pi-ai/zai-coding-cn', { key: 'sk-live-record' })
     await next.plugin(FakeLlm)
+    await next.plugin(FakeDeepSeekAccount)
+    account = next.get('deepseekAccount') as FakeDeepSeekAccount
     await next.plugin(MockWebServer)
     webServer = next.get('webServer') as MockWebServer
     const fetchMock = vi.fn(async () => new Response(ZHIPU_BODY, { status: 200 }))
@@ -247,6 +280,7 @@ describe('quota integration', () => {
       webServer = undefined
       settings = undefined
       credentials = undefined
+      account = undefined
     }
     vi.unstubAllEnvs()
     vi.unstubAllGlobals()
@@ -339,6 +373,34 @@ describe('quota integration', () => {
     const { payload } = await callQuota('fresh-session')
     expect(payload).toMatchObject({ status: 'ok', intervalSec: 15 })
     expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('serves the signed-in DeepSeek account balance without an API key', async () => {
+    const fetchMock = await mount()
+    const { payload } = await callQuota('s1', 'deepseek-account')
+    expect(payload).toMatchObject({
+      status: 'ok',
+      provider: 'deepseek-account',
+      providerName: 'DeepSeek Account',
+      adapterId: 'deepseek-account',
+      windows: [
+        { tier: 'balance', remainingValue: 110.5, unit: 'cny', balanceKind: 'recharge' },
+        { tier: 'balance', remainingValue: 8, unit: 'cny', balanceKind: 'bonus' },
+      ],
+    })
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('reports signed-out when the DeepSeek account grant is absent', async () => {
+    const fetchMock = await mount()
+    account!.balance = null
+    const { payload } = await callQuota('s1', 'deepseek-account')
+    expect(payload).toMatchObject({
+      status: 'error',
+      provider: 'deepseek-account',
+      error: { kind: 'signed-out' },
+    })
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it('answers unsupported for a provider with no adapter', async () => {

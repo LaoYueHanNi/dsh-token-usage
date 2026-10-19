@@ -242,6 +242,8 @@ export const zh = {
   'quota.tier.weekly': '每周',
   'quota.tier.monthly': '每月',
   'quota.tier.balance': '余额',
+  'quota.tier.recharge': '充值余额',
+  'quota.tier.bonus': '赠金余额',
   'quota.resetIn': '{time} 后重置',
   'quota.updatedAt': '更新于 {time}',
   'quota.retry': '重试',
@@ -249,6 +251,7 @@ export const zh = {
   'quota.error.noCredential': '未解析到 API Key（{ref}）；请先在供应商设置中配置密钥。',
   'quota.error.http': '供应商接口返回错误（{message}）。',
   'quota.error.network': '网络错误（{message}）。',
+  'quota.error.signedOut': '未登录 DeepSeek 账号，登录后可查看余额。',
   'quota.error.parse': '响应解析失败（{message}）。',
 } as const
 
@@ -483,6 +486,8 @@ export const en: Record<TokenUsageKey, string> = {
   'quota.tier.weekly': 'Weekly',
   'quota.tier.monthly': 'Monthly',
   'quota.tier.balance': 'Balance',
+  'quota.tier.recharge': 'Topped-up balance',
+  'quota.tier.bonus': 'Granted balance',
   'quota.resetIn': 'resets in {time}',
   'quota.updatedAt': 'Updated {time}',
   'quota.retry': 'Retry',
@@ -490,6 +495,7 @@ export const en: Record<TokenUsageKey, string> = {
   'quota.error.noCredential': 'No API key resolved ({ref}); configure the provider\'s key first.',
   'quota.error.http': 'The provider endpoint returned an error ({message}).',
   'quota.error.network': 'Network error ({message}).',
+  'quota.error.signedOut': 'Sign in to DeepSeek to view the account balance.',
   'quota.error.parse': 'Failed to parse the response ({message}).',
 }
 

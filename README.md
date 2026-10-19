@@ -61,7 +61,7 @@ plugins:
 
 ## Provider quota
 
-The input-bar button follows the currently selected provider and opens a panel with remaining quota (the same API key as inference):
+The input-bar button follows the currently selected provider and opens a panel with remaining quota (API-key providers share the inference key; the DeepSeek account reads the signed-in balance):
 
 <img src="docs/images/zhipu-plan-usage.png" width="520" alt="Zhipu GLM quota panel">
 
@@ -73,7 +73,8 @@ The input-bar button follows the currently selected provider and opens a panel w
 | Kimi For Coding | 5-hour, weekly |
 | MiniMax Coding Plan (CN / international) | 5-hour, weekly |
 | OpenCode Go | 5-hour, weekly, monthly |
-| DeepSeek (official) | ¥ account balance |
+| DeepSeek (official API key) | ¥ account balance |
+| DeepSeek account | topped-up balance, granted balance |
 | OpenRouter | $ remaining credits |
 
 Unsupported providers hide the button; a failed query can be retried from the panel. On by default; turn it off with `quota.enabled: false`. Not supported yet: Volcengine, ZenMux, Zhipu Team plan, Claude / Codex / Gemini / Grok official subscriptions, GitHub Copilot.

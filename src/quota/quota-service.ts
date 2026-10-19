@@ -21,6 +21,7 @@ import { resolveQuotaAdapter } from './registry.ts'
 import type { QuotaAdapter } from './types.ts'
 import { QuotaQueryError } from './types.ts'
 import { withCatalogBaseUrl, type ResolvedQuotaCredentials } from './credentials.ts'
+import type { AccountBalanceReader } from './types.ts'
 
 /** Default cache lifetime of one provider's ok result. */
 const DEFAULT_CACHE_TTL_MS = 45_000
@@ -41,6 +42,8 @@ export interface QuotaServiceDeps {
   cacheTtlMs?: number
   /** Clock seam; tests freeze it. */
   now?: () => number
+  /** DeepSeek account wallets. Absent readers make that route `signed-out`. */
+  readAccountBalance?: AccountBalanceReader
 }
 
 /** One cached provider ok result. */
@@ -135,7 +138,7 @@ export class QuotaService {
       }
     }
     const providerName = displayNameOf(provider, credentials, adapter)
-    if (credentials.apiKey === undefined) {
+    if (adapter.usesApiKey !== false && credentials.apiKey === undefined) {
       return {
         status: 'error',
         provider,
@@ -178,6 +181,7 @@ export class QuotaService {
         apiKey: credentials.apiKey ?? '',
         signal: AbortSignal.timeout(QUERY_TIMEOUT_MS),
         ...(this.#deps.fetchFn !== undefined ? { fetchFn: this.#deps.fetchFn } : { fetchFn: globalThis.fetch }),
+        ...(this.#deps.readAccountBalance !== undefined ? { readAccountBalance: this.#deps.readAccountBalance } : {}),
       })
       const payload: QuotaSnapshot = {
         status: 'ok',

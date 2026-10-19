@@ -666,10 +666,13 @@ export interface QuotaWindow {
   maxValue?: number
   /** Currency of the absolute fields. */
   unit?: 'usd' | 'cny'
+  /** Which DeepSeek account purse a balance window came from. Absent on
+   * API-key balances, which stay a single unlabeled amount. */
+  balanceKind?: 'recharge' | 'bonus'
 }
 
 /** Why a quota query failed, normalized so the panel can pick friendly copy. */
-export type QuotaErrorKind = 'auth' | 'no-credential' | 'http' | 'network' | 'parse'
+export type QuotaErrorKind = 'auth' | 'no-credential' | 'signed-out' | 'http' | 'network' | 'parse'
 
 /** The error face of a quota response. */
 export interface QuotaError {

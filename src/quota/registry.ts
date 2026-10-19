@@ -11,6 +11,7 @@
  * @module token-usage/quota/registry
  */
 
+import { deepseekAccountAdapter } from './adapters/deepseek-account.ts'
 import { deepseekBalanceAdapter } from './adapters/deepseek-balance.ts'
 import { kimiAdapter } from './adapters/kimi.ts'
 import { minimaxAdapter } from './adapters/minimax.ts'
@@ -25,6 +26,9 @@ export const QUOTA_ADAPTERS: readonly QuotaAdapter[] = [
   kimiAdapter,
   minimaxAdapter,
   opencodeGoAdapter,
+  // Ahead of the API-key balance adapter: the account route's default
+  // base URL is a deepseek.com host, and first match wins.
+  deepseekAccountAdapter,
   deepseekBalanceAdapter,
   openrouterAdapter,
 ]

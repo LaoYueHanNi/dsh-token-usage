@@ -245,6 +245,36 @@ describe('QuotaButton', () => {
     expect((screen.getByRole('dialog') as HTMLElement).style.width).toBe('320px')
   })
 
+  it('labels DeepSeek account purses and widens the plate for both amounts', async () => {
+    stubFetch({
+      status: 'ok', provider: 'deepseek-account', providerName: 'DeepSeek Account',
+      adapterId: 'deepseek-account', fetchedAt: FETCHED_AT, intervalSec: 60,
+      windows: [
+        { tier: 'balance', remainingValue: 110.5, unit: 'cny', balanceKind: 'recharge' },
+        { tier: 'balance', remainingValue: 8, unit: 'cny', balanceKind: 'bonus' },
+      ],
+    })
+    render(<QuotaButton {...propsOf()} />)
+    fireEvent.click(await screen.findByLabelText('供应商配额'))
+    const panel = screen.getByRole('dialog')
+    expect(panel.textContent).toContain('充值余额')
+    expect(panel.textContent).toContain('¥110.50')
+    expect(panel.textContent).toContain('赠金余额')
+    expect(panel.textContent).toContain('¥8.00')
+    expect((panel as HTMLElement).style.width).toBe('320px')
+  })
+
+  it('keeps the button when the DeepSeek account is signed out', async () => {
+    stubFetch({
+      status: 'error', provider: 'deepseek-account', providerName: 'DeepSeek Account',
+      adapterId: 'deepseek-account', fetchedAt: FETCHED_AT, intervalSec: 60,
+      error: { kind: 'signed-out', message: 'deepseek-account' },
+    })
+    render(<QuotaButton {...propsOf()} />)
+    fireEvent.click(await screen.findByLabelText('供应商配额'))
+    expect(screen.getByRole('dialog').textContent).toContain('未登录 DeepSeek 账号')
+  })
+
   it('paints the trigger from the finest window; an absolute amount stays neutral when funded', async () => {
     stubFetch({
       ...OK_PAYLOAD,

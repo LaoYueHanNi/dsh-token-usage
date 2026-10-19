@@ -10,6 +10,7 @@ describe('resolveQuotaAdapter', () => {
   it('routes the built-in route keys', () => {
     expect(resolveQuotaAdapter({ provider: 'zai-coding-cn' })?.id).toBe('zhipu-coding-plan')
     expect(resolveQuotaAdapter({ provider: 'deepseek-official' })?.id).toBe('deepseek-balance')
+    expect(resolveQuotaAdapter({ provider: 'deepseek-account' })?.id).toBe('deepseek-account')
     expect(resolveQuotaAdapter({ provider: 'openrouter' })?.id).toBe('openrouter-credits')
     expect(resolveQuotaAdapter({ provider: 'minimax' })?.id).toBe('minimax-coding-plan')
     expect(resolveQuotaAdapter({ provider: 'kimi-coding' })?.id).toBe('kimi-coding-plan')
@@ -21,6 +22,10 @@ describe('resolveQuotaAdapter', () => {
     expect(resolveQuotaAdapter({ provider: 'my-gateway', baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4' })?.id).toBe('zhipu-coding-plan')
     expect(resolveQuotaAdapter({ provider: 'my-gateway', baseUrl: 'https://openrouter.ai/api/v1' })?.id).toBe('openrouter-credits')
     expect(resolveQuotaAdapter({ provider: 'my-gateway', baseUrl: 'https://opencode.ai/zen/go/v1' })?.id).toBe('opencode-go')
+    expect(resolveQuotaAdapter({
+      provider: 'deepseek-account',
+      baseUrl: 'https://api.deepseek.com/anthropic',
+    })?.id).toBe('deepseek-account')
   })
 
   it('returns undefined for providers no adapter handles', () => {

@@ -8,6 +8,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { QuotaQueryContext } from '../src/quota/types.ts'
 import { QuotaQueryError } from '../src/quota/types.ts'
+import { deepseekAccountAdapter } from '../src/quota/adapters/deepseek-account.ts'
 import { deepseekBalanceAdapter } from '../src/quota/adapters/deepseek-balance.ts'
 import { kimiAdapter } from '../src/quota/adapters/kimi.ts'
 import { minimaxAdapter } from '../src/quota/adapters/minimax.ts'
@@ -449,6 +450,112 @@ describe('deepseekBalanceAdapter', () => {
     expect(deepseekBalanceAdapter.matches({ provider: 'deepseek-official' })).toBe(true)
     expect(deepseekBalanceAdapter.matches({ provider: 'relay', baseUrl: 'https://api.deepseek.com/v1' })).toBe(true)
     expect(deepseekBalanceAdapter.matches({ provider: 'relay', baseUrl: 'https://open.bigmodel.cn' })).toBe(false)
+  })
+
+  it('does not claim the signed-in account route even on a deepseek host', () => {
+    expect(deepseekBalanceAdapter.matches({
+      provider: 'deepseek-account',
+      baseUrl: 'https://api.deepseek.com/anthropic',
+    })).toBe(false)
+  })
+})
+
+describe('deepseekAccountAdapter', () => {
+  const readerOf = (body: {
+    status: 'ready' | 'failed'
+    value?: Array<{ currency: string; balance: string }>
+    bonusWallets?: Array<{ currency: string; balance: string }>
+  } | null) => vi.fn(async () => body)
+
+  it('reads the CNY recharge purse and a positive bonus purse', async () => {
+    const readAccountBalance = readerOf({
+      status: 'ready',
+      value: [
+        { currency: 'USD', balance: '1.00' },
+        { currency: 'CNY', balance: '110.50' },
+      ],
+      bonusWallets: [
+        { currency: 'CNY', balance: '8.00' },
+        { currency: 'USD', balance: '0.00' },
+      ],
+    })
+    const result = await deepseekAccountAdapter.query({
+      provider: 'deepseek-account',
+      apiKey: '',
+      fetchFn: vi.fn(),
+      readAccountBalance,
+    })
+    expect(result.windows).toEqual([
+      { tier: 'balance', remainingValue: 110.5, unit: 'cny', balanceKind: 'recharge' },
+      { tier: 'balance', remainingValue: 8, unit: 'cny', balanceKind: 'bonus' },
+    ])
+    expect(readAccountBalance).toHaveBeenCalledTimes(1)
+  })
+
+  it('omits a zero bonus purse and keeps a zero recharge purse', async () => {
+    const result = await deepseekAccountAdapter.query({
+      provider: 'deepseek-account',
+      apiKey: '',
+      fetchFn: vi.fn(),
+      readAccountBalance: readerOf({
+        status: 'ready',
+        value: [{ currency: 'CNY', balance: '0.00' }],
+        bonusWallets: [{ currency: 'CNY', balance: '0.00' }],
+      }),
+    })
+    expect(result.windows).toEqual([
+      { tier: 'balance', remainingValue: 0, unit: 'cny', balanceKind: 'recharge' },
+    ])
+  })
+
+  it('falls back to USD when the purse has no CNY entry', async () => {
+    const result = await deepseekAccountAdapter.query({
+      provider: 'deepseek-account',
+      apiKey: '',
+      fetchFn: vi.fn(),
+      readAccountBalance: readerOf({
+        status: 'ready',
+        value: [{ currency: 'USD', balance: '3.25' }],
+        bonusWallets: [],
+      }),
+    })
+    expect(result.windows).toEqual([
+      { tier: 'balance', remainingValue: 3.25, unit: 'usd', balanceKind: 'recharge' },
+    ])
+  })
+
+  it('reports signed-out when the host has no reader or the grant is gone', async () => {
+    await expect(deepseekAccountAdapter.query({
+      provider: 'deepseek-account', apiKey: '', fetchFn: vi.fn(),
+    })).rejects.toMatchObject({ kind: 'signed-out' })
+    await expect(deepseekAccountAdapter.query({
+      provider: 'deepseek-account', apiKey: '', fetchFn: vi.fn(),
+      readAccountBalance: readerOf(null),
+    })).rejects.toMatchObject({ kind: 'signed-out' })
+  })
+
+  it('reports a network failure when the wallet read fails or throws', async () => {
+    await expect(deepseekAccountAdapter.query({
+      provider: 'deepseek-account', apiKey: '', fetchFn: vi.fn(),
+      readAccountBalance: readerOf({ status: 'failed' }),
+    })).rejects.toMatchObject({ kind: 'network' })
+    await expect(deepseekAccountAdapter.query({
+      provider: 'deepseek-account', apiKey: '', fetchFn: vi.fn(),
+      readAccountBalance: async () => { throw new Error('socket hang up') },
+    })).rejects.toMatchObject({ kind: 'network', message: 'socket hang up' })
+  })
+
+  it('matches only the account route key', () => {
+    expect(deepseekAccountAdapter.matches({ provider: 'deepseek-account' })).toBe(true)
+    expect(deepseekAccountAdapter.matches({
+      provider: 'deepseek-account',
+      baseUrl: 'https://api.deepseek.com/anthropic',
+    })).toBe(true)
+    expect(deepseekAccountAdapter.matches({ provider: 'deepseek-official' })).toBe(false)
+    expect(deepseekAccountAdapter.matches({
+      provider: 'relay',
+      baseUrl: 'https://api.deepseek.com/v1',
+    })).toBe(false)
   })
 })
 

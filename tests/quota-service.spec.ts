@@ -206,6 +206,36 @@ describe('QuotaService', () => {
     expect(await service.snapshot()).toMatchObject({ providerName: 'my-gw · OpenCode Go' })
   })
 
+  it('reads DeepSeek account wallets without an API key', async () => {
+    const readAccountBalance = vi.fn(async () => ({
+      status: 'ready' as const,
+      value: [{ currency: 'CNY', balance: '42.00' }],
+      bonusWallets: [{ currency: 'CNY', balance: '5.00' }],
+    }))
+    const fetchFn = fetchOf(ZHIPU_BODY)
+    const service = new QuotaService({
+      resolveProvider: () => 'deepseek-account',
+      resolveCredentials: async () => ({ displayName: 'DeepSeek Account' }),
+      fetchFn,
+      readAccountBalance,
+      intervalSec: 30,
+    })
+    const payload = await service.snapshot()
+    expect(payload).toMatchObject({
+      status: 'ok',
+      provider: 'deepseek-account',
+      providerName: 'DeepSeek Account',
+      adapterId: 'deepseek-account',
+      windows: [
+        { tier: 'balance', remainingValue: 42, unit: 'cny', balanceKind: 'recharge' },
+        { tier: 'balance', remainingValue: 5, unit: 'cny', balanceKind: 'bonus' },
+      ],
+    })
+    expect(fetchFn).not.toHaveBeenCalled()
+    await service.snapshot()
+    expect(readAccountBalance).toHaveBeenCalledTimes(1)
+  })
+
   it('keeps the plain display name for a catalog route the adapter owns', async () => {
     const { service } = serviceOf({
       provider: 'zai-coding-cn',

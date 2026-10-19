@@ -6,8 +6,9 @@
  * reads them from where the adapters themselves read them:
  * 1. the provider directory (`ctx.llm.listConfigurableProviders()`) maps a
  *    route to its settings namespace + path — with a built-in fallback for
- *    the two known shapes (pi-ai routes → `llm-pi-ai` `providers.<route>`;
- *    `deepseek-official` → the whole `llm-deepseek` section);
+ *    the known shapes (pi-ai routes → `llm-pi-ai` `providers.<route>`;
+ *    `deepseek-official` → the whole `llm-deepseek` section;
+ *    `deepseek-account` → the whole `llm-deepseek-account` section);
  * 2. the settings section at that path carries the profile
  *    (`{ apiKeyEnv, baseURL, … }`) — `apiKeyEnv` is a credential
  *    REFERENCE (an environment-variable name), never a value;
@@ -58,9 +59,10 @@ export type CredentialResolver = (ref: string) => Promise<string | undefined>
  * `scope/provider` record key → its api-key material, if stored. */
 export type CredentialRecordReader = (key: string) => Promise<{ key?: string } | undefined>
 
-/** The built-in directory fallback for the two known settings shapes. */
+/** The built-in directory fallback for the known non-pi-ai settings shapes. */
 const BUILTIN_DIRECTORY: Record<string, ProviderDirectoryEntry> = {
   'deepseek-official': { settingsNs: 'llm-deepseek', settingsPath: [] },
+  'deepseek-account': { settingsNs: 'llm-deepseek-account', settingsPath: [], displayName: 'DeepSeek Account' },
 }
 
 /** pi-ai route → default credential record key (`llm-pi-ai/<route>`). */

@@ -8,6 +8,9 @@ Status: implemented
 
 ## Decision
 
+> [!NOTE]
+> 本决策中「配额查询一律走 API Key」不覆盖 DeepSeek 账号路由。该路由已于 2026-10-19 由 [DR: DeepSeek 账号余额走账号服务](./2026-10-19-deepseek-account-balance.md) 规定：`deepseek-account` 不解析密钥，改读宿主 `deepseekAccount.getBalance()`。
+
 1. **一条适配器接口**（`src/quota/types.ts`）：
 
    ```ts

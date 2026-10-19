@@ -60,6 +60,7 @@ import {
   resolveQuotaCredentials, withCatalogBaseUrl,
   type CredentialRecordReader, type CredentialResolver, type ProviderDirectory, type SettingsReader,
 } from './quota/credentials.ts'
+import type { AccountBalanceReader, AccountPurseBalance } from './quota/types.ts'
 
 /**
  * Read through the volatile wrapper the dsh 0.1.7 loader places over
@@ -632,6 +633,34 @@ export function apply(ctx: Context, config: Config = {}) {
       return () => { defaultProviderSelection = undefined }
     }, 'token-usage: default model selection seam')
   })
+  // The signed-in DeepSeek account's wallets. The account route has no API
+  // key; `getBalance` is the host's own Platform read. A host without the
+  // account service leaves the reader unset, and the adapter reports
+  // signed-out rather than hiding the button.
+  let readAccountBalance: AccountBalanceReader | undefined
+  ctx.inject(['deepseekAccount'], (accountCtx) => {
+    accountCtx.effect(() => {
+      const account = (accountCtx as unknown as {
+        deepseekAccount?: {
+          getBalance?: (client: {
+            version: string
+            locale: string
+            timezoneOffsetSeconds: number
+          }) => Promise<AccountPurseBalance | null>
+        }
+      }).deepseekAccount
+      const getBalance = account?.getBalance
+      if (typeof getBalance !== 'function') return () => {}
+      readAccountBalance = () => getBalance.call(account, {
+        version: process.env.DSH_CLIENT_VERSION !== undefined && process.env.DSH_CLIENT_VERSION !== ''
+          ? process.env.DSH_CLIENT_VERSION
+          : '0.0.0',
+        locale: Intl.DateTimeFormat().resolvedOptions().locale || 'zh-CN',
+        timezoneOffsetSeconds: -new Date().getTimezoneOffset() * 60,
+      })
+      return () => { readAccountBalance = undefined }
+    }, 'token-usage: deepseek account balance')
+  })
   ctx.inject(['credentials'], (credentialsCtx) => {
     credentialsCtx.effect(() => {
       quotaResolveCredential = async ref =>
@@ -682,6 +711,7 @@ export function apply(ctx: Context, config: Config = {}) {
       ...(quotaResolveCredential !== undefined ? { resolveCredential: quotaResolveCredential } : {}),
       ...(quotaReadRecord !== undefined ? { readRecord: quotaReadRecord } : {}),
     })),
+    readAccountBalance: () => readAccountBalance?.() ?? Promise.resolve(null),
     intervalSec: quotaIntervalSec,
   })
 

@@ -27,18 +27,39 @@ export interface QuotaMatchInput {
   baseUrl?: string
 }
 
+/** One DeepSeek account purse the host account service reports. Structural
+ * on purpose: the plugin does not import the account package. */
+export interface AccountPurseWallet {
+  currency: string
+  balance: string
+}
+
+/** The host account service's balance projection, or the failed variant. */
+export interface AccountPurseBalance {
+  status: 'ready' | 'failed'
+  value?: readonly AccountPurseWallet[]
+  bonusWallets?: readonly AccountPurseWallet[]
+}
+
+/** Reads the signed-in DeepSeek account's wallets. `null` means signed out
+ * or the grant changed mid-query — the same signal `getBalance` returns. */
+export type AccountBalanceReader = () => Promise<AccountPurseBalance | null>
+
 /** Everything one adapter query needs; the service resolves and injects. */
 export interface QuotaQueryContext {
   /** Provider route key (for diagnostics and per-provider behavior). */
   provider: string
   /** Resolved inference base URL (may influence host/station choice). */
   baseUrl?: string
-  /** The provider's API key, resolved through the credentials seam. */
+  /** The provider's API key, resolved through the credentials seam.
+   * Empty when the adapter does not use an API key. */
   apiKey: string
   /** Deadline signal; the service stamps one per query. */
   signal?: AbortSignal
   /** Transport to use — global fetch in production, a stub in tests. */
   fetchFn: typeof fetch
+  /** Present for the DeepSeek account route: the host's `getBalance`. */
+  readAccountBalance?: AccountBalanceReader
 }
 
 /** What one adapter query returns; the service layers identity metadata. */
@@ -61,6 +82,10 @@ export interface QuotaAdapter {
    * with {@link QuotaAdapter.label} so an alias cannot claim another
    * family's windows. Absent means the adapter claims every match. */
   routes?: readonly string[]
+  /** When false, the route authenticates outside the API-key chain (the
+   * DeepSeek account grant). The service still calls {@link query}.
+   * Absent means the adapter needs an API key. */
+  usesApiKey?: boolean
   /**
    * Whether this adapter handles the route. The base-URL host is the
    * stronger signal: a user-declared pi-ai route can carry any name while
