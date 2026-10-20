@@ -73,6 +73,7 @@ The input-bar button follows the currently selected provider and opens a panel w
 | Kimi For Coding | 5-hour, weekly |
 | MiniMax Coding Plan (CN / international) | 5-hour, weekly |
 | OpenCode Go | 5-hour, weekly, monthly |
+| Command Code | 5-hour, weekly, monthly |
 | DeepSeek (official API key) | ¥ account balance |
 | DeepSeek account | topped-up balance, granted balance |
 | OpenRouter | $ remaining credits |

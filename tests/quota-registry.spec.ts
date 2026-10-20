@@ -22,6 +22,7 @@ describe('resolveQuotaAdapter', () => {
     expect(resolveQuotaAdapter({ provider: 'my-gateway', baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4' })?.id).toBe('zhipu-coding-plan')
     expect(resolveQuotaAdapter({ provider: 'my-gateway', baseUrl: 'https://openrouter.ai/api/v1' })?.id).toBe('openrouter-credits')
     expect(resolveQuotaAdapter({ provider: 'my-gateway', baseUrl: 'https://opencode.ai/zen/go/v1' })?.id).toBe('opencode-go')
+    expect(resolveQuotaAdapter({ provider: 'my-gateway', baseUrl: 'https://api.commandcode.ai/provider/v1' })?.id).toBe('command-code')
     expect(resolveQuotaAdapter({
       provider: 'deepseek-account',
       baseUrl: 'https://api.deepseek.com/anthropic',
@@ -31,6 +32,9 @@ describe('resolveQuotaAdapter', () => {
   it('returns undefined for providers no adapter handles', () => {
     expect(resolveQuotaAdapter({ provider: 'anthropic', baseUrl: 'https://api.anthropic.com' })).toBeUndefined()
     expect(resolveQuotaAdapter({ provider: 'my-relay' })).toBeUndefined()
+    // Command Code owns no catalog route: a bare name claims nothing,
+    // the commandcode.ai host does.
+    expect(resolveQuotaAdapter({ provider: 'command-code' })).toBeUndefined()
   })
 
   it('registers every adapter with a distinct id', () => {

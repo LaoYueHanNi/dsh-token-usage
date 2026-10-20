@@ -73,6 +73,7 @@ plugins:
 | Kimi For Coding | 5 小时、每周 |
 | MiniMax Coding Plan（国内 / 国际） | 5 小时、每周 |
 | OpenCode Go | 5 小时、每周、每月 |
+| Command Code | 5 小时、每周、每月 |
 | DeepSeek（官方 API Key） | ¥ 账户余额 |
 | DeepSeek 账号 | 充值余额、赠金余额 |
 | OpenRouter | $ 剩余额度 |

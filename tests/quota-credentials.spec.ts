@@ -115,6 +115,16 @@ describe('resolveQuotaCredentials', () => {
     expect(resolved.apiKey).toBe('sk-generic')
     expect(resolved.apiKeyEnv).toBe('MY_GATEWAY_API_KEY')
   })
+
+  it('derives the command-code env name from the generic convention', async () => {
+    vi.stubEnv('COMMAND_CODE_API_KEY', 'sk-cc')
+    const resolved = await resolveQuotaCredentials({
+      provider: 'command-code',
+      readSettings: settingsOf({}),
+    })
+    expect(resolved.apiKey).toBe('sk-cc')
+    expect(resolved.apiKeyEnv).toBe('COMMAND_CODE_API_KEY')
+  })
 })
 
 describe('withCatalogBaseUrl', () => {
