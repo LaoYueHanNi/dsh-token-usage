@@ -8,6 +8,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { QuotaQueryContext } from '../src/quota/types.ts'
 import { QuotaQueryError } from '../src/quota/types.ts'
+import { commandCodeAdapter } from '../src/quota/adapters/command-code.ts'
 import { deepseekAccountAdapter } from '../src/quota/adapters/deepseek-account.ts'
 import { deepseekBalanceAdapter } from '../src/quota/adapters/deepseek-balance.ts'
 import { kimiAdapter } from '../src/quota/adapters/kimi.ts'
@@ -26,6 +27,27 @@ function contextOf(
   const fetchFn = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
     calls.push({ url: String(url), headers: (init?.headers ?? {}) as Record<string, string> })
     return new Response(status === 204 ? null : JSON.stringify(body), {
+      status,
+      headers: { 'content-type': 'application/json' },
+    })
+  })
+  return { ctx: { provider: 'test', apiKey: 'sk-test', fetchFn }, calls }
+}
+
+/** Build a query context whose stub transport answers by URL substring —
+ * the multi-endpoint adapters (Command Code) fan out over four paths. An
+ * entry without a body answers the given status with `null`. */
+function contextOfRoutes(routes: Array<{ match: string; status?: number; body?: unknown }>): {
+  ctx: QuotaQueryContext
+  calls: Array<{ url: string; headers: Record<string, string> }>
+} {
+  const calls: Array<{ url: string; headers: Record<string, string> }> = []
+  const fetchFn = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+    const href = String(url)
+    calls.push({ url: href, headers: (init?.headers ?? {}) as Record<string, string> })
+    const route = routes.find(entry => href.includes(entry.match))
+    const status = route?.status ?? 200
+    return new Response(route?.body === undefined ? null : JSON.stringify(route.body), {
       status,
       headers: { 'content-type': 'application/json' },
     })
@@ -630,5 +652,144 @@ describe('opencodeGoAdapter', () => {
     expect(opencodeGoAdapter.matches({ provider: 'relay', baseUrl: 'https://opencode.ai/zen/go/v1' })).toBe(true)
     expect(opencodeGoAdapter.matches({ provider: 'opencode', baseUrl: 'https://opencode.ai/zen/v1' })).toBe(false)
     expect(opencodeGoAdapter.matches({ provider: 'opencode' })).toBe(false)
+  })
+})
+
+describe('commandCodeAdapter', () => {
+  /** The four live endpoints of a limited GOAT account (shapes from the
+   * cc-switch implementation; figures are synthetic). */
+  const goatRoutes = [
+    { match: '/alpha/whoami', body: { org: { id: 'org_9f3k' } } },
+    {
+      match: '/alpha/billing/credits',
+      body: {
+        credits: { monthlyCredits: 30, purchasedCredits: 5, freeCredits: 0 },
+        windowLimits: {
+          limited: true,
+          fiveHour: { used: 7, cap: 14, resetAt: 1_791_800_000_000 },
+          weekly: { used: 3.5, cap: 35, resetAt: 1_792_300_000_000 },
+        },
+      },
+    },
+    {
+      match: '/alpha/billing/subscriptions',
+      body: {
+        success: true,
+        data: {
+          planId: 'individual-goat',
+          status: 'active',
+          currentPeriodStart: '2026-10-01T00:00:00.000Z',
+          currentPeriodEnd: '2026-11-01T00:00:00.000Z',
+        },
+      },
+    },
+    { match: '/alpha/usage/summary', body: { totalCost: 15 } },
+  ]
+
+  it('maps the window lanes and derives the monthly pool from credits + spend', async () => {
+    const { ctx, calls } = contextOfRoutes(goatRoutes)
+    const result = await commandCodeAdapter.query(ctx)
+    // 7/14 = 50%, 3.5/35 = 10%, and 15 / (15 + 30 + 5 + 0) = 30%.
+    expect(result.windows).toEqual([
+      { tier: 'five_hour', usedPercent: 50, resetAt: 1_791_800_000_000 },
+      { tier: 'weekly', usedPercent: 10, resetAt: 1_792_300_000_000 },
+      { tier: 'monthly', usedPercent: 30, resetAt: Date.parse('2026-11-01T00:00:00.000Z') },
+    ])
+    expect(result.planTier).toBe('GOAT')
+    expect(calls).toHaveLength(4)
+    expect(calls[0]?.url).toBe('https://api.commandcode.ai/alpha/whoami?limits=1')
+    expect(calls[0]?.headers.authorization).toBe('Bearer sk-test')
+    expect(calls[1]?.url).toBe('https://api.commandcode.ai/alpha/billing/credits?orgId=org_9f3k')
+    expect(calls[2]?.url).toBe('https://api.commandcode.ai/alpha/billing/subscriptions?orgId=org_9f3k')
+    expect(calls[3]?.url).toBe(`https://api.commandcode.ai/alpha/usage/summary?since=${encodeURIComponent('2026-10-01T00:00:00.000Z')}&orgId=org_9f3k`)
+  })
+
+  it('keeps querying account-scoped when whoami fails, and surfaces a dead key as auth', async () => {
+    const scoped = contextOfRoutes([{ match: '/alpha/whoami', status: 500 }, ...goatRoutes.slice(1)])
+    const result = await commandCodeAdapter.query(scoped.ctx)
+    expect(result.windows).toHaveLength(3)
+    expect(scoped.calls[1]?.url).toBe('https://api.commandcode.ai/alpha/billing/credits')
+
+    const dead = contextOfRoutes([{ match: '/alpha/whoami', status: 401, body: { message: 'unauthorized' } }])
+    await expect(commandCodeAdapter.query(dead.ctx)).rejects.toMatchObject({ kind: 'auth' })
+  })
+
+  it('paints only the monthly window when the plan is not window-limited', async () => {
+    const { ctx } = contextOfRoutes([
+      goatRoutes[0]!,
+      { match: '/alpha/billing/credits', body: { credits: { monthlyCredits: 70, purchasedCredits: 0, freeCredits: 0 } } },
+      goatRoutes[2]!,
+      { match: '/alpha/usage/summary', body: { totalCost: 70 } },
+    ])
+    const result = await commandCodeAdapter.query(ctx)
+    // No `windowLimits` at all — 70 / (70 + 70) = 50% of the period pool.
+    expect(result.windows).toEqual([{ tier: 'monthly', usedPercent: 50, resetAt: Date.parse('2026-11-01T00:00:00.000Z') }])
+  })
+
+  it('accepts the nested windowLimits spelling and ignores lanes while unlimited', async () => {
+    const { ctx } = contextOfRoutes([
+      goatRoutes[0]!,
+      {
+        match: '/alpha/billing/credits',
+        body: {
+          credits: {
+            monthlyCredits: 10,
+            windowLimits: { limited: false, fiveHour: { used: 1, cap: 10, resetAt: 1_791_800_000_000 } },
+          },
+        },
+      },
+      goatRoutes[2]!,
+      { match: '/alpha/usage/summary', body: { totalCost: 5 } },
+    ])
+    const result = await commandCodeAdapter.query(ctx)
+    // limited: false — the fiveHour lane must NOT paint; 5 / (5 + 10) = 33.3%.
+    expect(result.windows).toEqual([{ tier: 'monthly', usedPercent: (5 / 15) * 100, resetAt: Date.parse('2026-11-01T00:00:00.000Z') }])
+  })
+
+  it('falls back to credits.planId and shows an unknown plan id verbatim', async () => {
+    const { ctx } = contextOfRoutes([
+      goatRoutes[0]!,
+      { match: '/alpha/billing/credits', body: { credits: { monthlyCredits: 10, planId: 'individual-future' } } },
+      { match: '/alpha/billing/subscriptions', body: { success: true, data: { status: 'active' } } },
+      { match: '/alpha/usage/summary', body: { totalCost: 0 } },
+    ])
+    const result = await commandCodeAdapter.query(ctx)
+    expect(result.planTier).toBe('individual-future')
+    // 0 / (0 + 10) — a fresh period paints 0%; no period end, no reset.
+    expect(result.windows).toEqual([{ tier: 'monthly', usedPercent: 0 }])
+  })
+
+  it('rejects bodies without the credits object or the spend total, and normalizes 401', async () => {
+    const creditless = contextOfRoutes([{ match: '/alpha/billing/credits', body: { windowLimits: { limited: true } } }])
+    await expect(commandCodeAdapter.query(creditless.ctx)).rejects.toMatchObject({
+      kind: 'parse',
+      message: 'missing "credits" object',
+    })
+
+    const spendless = contextOfRoutes([
+      goatRoutes[0]!,
+      { match: '/alpha/billing/credits', body: { credits: { monthlyCredits: 10 } } },
+      goatRoutes[2]!,
+      { match: '/alpha/usage/summary', body: { totals: {} } },
+    ])
+    await expect(commandCodeAdapter.query(spendless.ctx)).rejects.toMatchObject({
+      kind: 'parse',
+      message: 'missing "totalCost" number',
+    })
+
+    const authed = contextOfRoutes([{ match: '/alpha/billing/credits', status: 401, body: { message: 'unauthorized' } }])
+    await expect(commandCodeAdapter.query(authed.ctx)).rejects.toMatchObject({ kind: 'auth' })
+  })
+
+  it('matches commandcode hosts only — the route key carries no catalog identity', () => {
+    expect(commandCodeAdapter.matches({ provider: 'my-gateway', baseUrl: 'https://api.commandcode.ai/provider/v1' })).toBe(true)
+    expect(commandCodeAdapter.matches({ provider: 'my-gateway', baseUrl: 'https://api.commandcode.ai/provider' })).toBe(true)
+    // pi-ai's catalog ships no Command Code route, so a bare name claims
+    // nothing (even the issue's suggested "command-code") — the base URL
+    // host is the only stable signal on a user-declared route.
+    expect(commandCodeAdapter.matches({ provider: 'command-code' })).toBe(false)
+    expect(commandCodeAdapter.matches({ provider: 'commandcode' })).toBe(false)
+    expect(commandCodeAdapter.matches({ provider: 'command', baseUrl: 'https://api.example.com/v1' })).toBe(false)
+    expect(commandCodeAdapter.matches({ provider: 'relay', baseUrl: 'https://opencode.ai/zen/go/v1' })).toBe(false)
   })
 })
