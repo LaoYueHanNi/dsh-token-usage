@@ -14,9 +14,9 @@
 import { readFile, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { consoleLogger, type LoggerLike } from './log.ts'
-import { coerceRecord } from './usage-record.ts'
-import type { UsageRecord } from './usage-record.ts'
-import type { RateKey, UsageDayRow, UsageHourRow, UsageModelRow, UsageRateRow, UsageSessionRow, UsageTotals } from './wire.ts'
+import { coerceRecord, AUX_KINDS } from './usage-record.ts'
+import type { AuxKind, UsageRecord } from './usage-record.ts'
+import type { RateKey, UsageAuxRow, UsageDayRow, UsageHourRow, UsageModelRow, UsageRateRow, UsageSessionRow, UsageTotals } from './wire.ts'
 
 const ROLLUP_FILE = 'rollup.json'
 const TMP_FILE = 'rollup.json.tmp'
@@ -50,6 +50,12 @@ export interface RollupFile {
    * identities, never prices; a changed pricing fingerprint rebuilds them
    * from raw records before repricing the absorbed history. */
   rateRows: UsageRateRow[]
+  /** Per-(kind, day, model, rate identity) rows of the absorbed auxiliary
+   * (bypass) requests — the settings page's runtime-overhead dimension. A
+   * legacy rollup predating the dimension reads as an empty list: the
+   * version that wrote it could not have recorded an auxiliary row, so no
+   * absorbed usage is lost. */
+  auxRows: UsageAuxRow[]
   /** Per-(session, day, model, rate identity) rows of the absorbed records
    * — the session dimension the settings page's session table folds from.
    * A legacy rollup missing this dimension retains usable totals but
@@ -112,7 +118,26 @@ function isSessionRow(value: unknown): value is UsageSessionRow {
     && isTotals(row.totals)
 }
 
-function isRollupFile(value: unknown): value is RollupFile {
+const AUX_KIND_SET = new Set<string>(AUX_KINDS)
+
+function isAuxKind(value: unknown): value is AuxKind {
+  return typeof value === 'string' && AUX_KIND_SET.has(value)
+}
+
+function isAuxRow(value: unknown): value is UsageAuxRow {
+  if (typeof value !== 'object' || value === null) return false
+  const row = value as Record<string, unknown>
+  return isAuxKind(row.auxKind)
+    && typeof row.day === 'string' && DAY_KEY.test(row.day)
+    && typeof row.model === 'string' && isRateKey(row.rate) && isTotals(row.totals)
+}
+
+/** The stored shape: a rollup written before the auxiliary dimension existed
+ * omits `auxRows`. It still reads as valid — the writing version could not
+ * have recorded an auxiliary row, so the empty dimension loses no usage. */
+type StoredRollupFile = Omit<RollupFile, 'auxRows'> & { auxRows?: UsageAuxRow[] }
+
+function isRollupFile(value: unknown): value is StoredRollupFile {
   if (typeof value !== 'object' || value === null) return false
   const rollup = value as Record<string, unknown>
   return typeof rollup.upto === 'string' && DAY_KEY.test(rollup.upto)
@@ -124,6 +149,7 @@ function isRollupFile(value: unknown): value is RollupFile {
     && Array.isArray(rollup.byHour) && rollup.byHour.every(isHourRow)
     && Array.isArray(rollup.byModel) && rollup.byModel.every(isModelRow)
     && Array.isArray(rollup.rateRows) && rollup.rateRows.every(isRateRow)
+    && (rollup.auxRows === undefined || (Array.isArray(rollup.auxRows) && rollup.auxRows.every(isAuxRow)))
     // A missing legacy dimension requires a rebuild, but usable totals
     // must survive when the raw history needed for that rebuild is lost.
     && (rollup.bySession === undefined || (Array.isArray(rollup.bySession) && rollup.bySession.every(isSessionRow)))
@@ -158,7 +184,12 @@ export async function readRollup(dir: string, logger: LoggerLike = consoleLogger
   const recent = (value.recent as unknown[])
     .map(coerceRecord)
     .filter((record): record is UsageRecord => record !== null)
-  return { ...value, recent, ...(value.bySession === undefined ? { bySession: [], requiresRebuild: true as const } : {}) }
+  return {
+    ...value,
+    recent,
+    auxRows: value.auxRows ?? [],
+    ...(value.bySession === undefined ? { bySession: [], requiresRebuild: true as const } : {}),
+  }
 }
 
 /**

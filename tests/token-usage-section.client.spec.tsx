@@ -196,6 +196,46 @@ describe('totalTokens / formatHitRate', () => {
 })
 
 describe('TokenUsageSection', () => {
+  it('offers the runtime-overhead dimension in the detail switch and renders its empty hint', async () => {
+    stubFetch(async () => Response.json(SUMMARY))
+    render(<TokenUsageSection close={() => {}} t={t} />)
+    await screen.findByRole('table', { name: t('byModel.title') })
+    fireEvent.click(screen.getByRole('button', { name: t('aux.tab') }))
+    expect(await screen.findByText(t('aux.empty'))).toBeTruthy()
+    // The dimension switch swaps the table, never the page.
+    expect(screen.queryByRole('table', { name: t('byModel.title') })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: t('byModel.title') }))
+    expect(screen.getByRole('table', { name: t('byModel.title') })).toBeTruthy()
+  })
+
+  it('renders the auxiliary breakdown when the summary carries runtime overhead', async () => {
+    const kindTotals = { requests: 2, inputTokens: 300, outputTokens: 30, cacheReadTokens: 0, cacheWriteTokens: 0 }
+    const aux = {
+      total: kindTotals,
+      cost: 0.02,
+      byKind: [{
+        auxKind: 'auto-review' as const,
+        totals: kindTotals,
+        cost: 0.02,
+        byModel: [{ model: 'deepseek-flash', totals: kindTotals, cost: 0.02 }],
+      }],
+    }
+    stubFetch(async () => Response.json({ ...SUMMARY, aux }))
+    render(<TokenUsageSection close={() => {}} t={t} />)
+    await screen.findByRole('table', { name: t('byModel.title') })
+    fireEvent.click(screen.getByRole('button', { name: t('aux.tab') }))
+    const table = await screen.findByRole('table', { name: t('aux.tab') })
+    // Collapsed by default: header + the auto-review kind row + the total row.
+    expect(within(table).getAllByRole('row')).toHaveLength(3)
+    expect(within(table).getByText('自动审查')).toBeTruthy()
+    expect(within(table).queryByText('deepseek-flash')).toBeNull()
+    // Expanding the kind's disclosure reveals its per-model line.
+    fireEvent.click(within(table).getByRole('button', { name: '自动审查' }))
+    expect(within(table).getAllByRole('row')).toHaveLength(4)
+    expect(within(table).getByText('deepseek-flash')).toBeTruthy()
+    expect(within(table).getByText(t('aux.total'))).toBeTruthy()
+  })
+
   it('saves from an unpriced row, retains filters, marks origins and updates overview usage', async () => {
     const rawName = 'p/unknown', targetModelId = 'deepseek-reasoner'
     let saved = false

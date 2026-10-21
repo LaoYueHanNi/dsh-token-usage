@@ -7,9 +7,9 @@
  * @module token-usage/wire
  */
 
-import type { UsageRecord } from './usage-record.ts'
+import type { AuxKind, UsageRecord } from './usage-record.ts'
 
-export type { UsageFields, UsageRecord } from './usage-record.ts'
+export type { AuxKind, UsageFields, UsageRecord } from './usage-record.ts'
 
 /** The stats endpoint path, served by the host half's webServer route. */
 export const STATS_PATH = '/token-usage/stats'
@@ -447,6 +447,60 @@ export interface UsageRateRow {
 }
 
 /**
+ * One per-(kind, day, model, rate) aggregation row of the auxiliary (bypass)
+ * model requests: Auto review, session-title generation, and translation.
+ * These calls are not part of any conversation turn, so they carry no session
+ * dimension — but they are provider-billed requests of a concrete model, so
+ * they fold into `rateRows` / `byModel` / the totals while this separate
+ * dimension keeps the settings page's "runtime overhead" breakdown (and its
+ * own cost) independent of the conversation filters that produce the
+ * per-session table.
+ */
+export interface UsageAuxRow {
+  /** Which bypass call produced the rows folded into this cell. */
+  auxKind: AuxKind
+  day: string
+  model: string
+  rate: RateKey
+  totals: UsageTotals
+}
+
+/** One per-model row nested under an auxiliary kind: the model's share of one
+ * bypass-request kind. The runtime-overhead tab renders these one line each
+ * beneath their kind's aggregate row. */
+export interface UsageAuxModelRow {
+  model: string
+  totals: UsageTotals
+  /** Billed cost (¥) of this model's requests of the kind; 0 when unpriced. */
+  cost: number
+}
+
+/** One per-kind aggregate of the auxiliary requests, priced at the rate
+ * identities its cells resolved through. */
+export interface UsageAuxKindRow {
+  auxKind: AuxKind
+  totals: UsageTotals
+  /** Billed cost (¥) of this kind; 0 when its model is unpriced. */
+  cost: number
+  /** Per-model rows of this kind, request-count descending then model name. */
+  byModel: UsageAuxModelRow[]
+}
+
+/**
+ * The auxiliary-request layer of the stats payload: the settings page's
+ * "runtime overhead" block renders the per-kind rows, and the total reconciles
+ * with the share of the top-line totals those bypass calls contributed.
+ */
+export interface AuxSummary {
+  /** Totals over every recorded auxiliary request. */
+  total: UsageTotals
+  /** Billed cost (¥) of the auxiliary requests under the current table. */
+  cost: number
+  /** Per-kind rows in the fixed display order, kinds without data omitted. */
+  byKind: UsageAuxKindRow[]
+}
+
+/**
  * One per-session × per-day × per-model × per-rate aggregation row: the
  * session dimension the settings page's cross-session table folds from.
  * Every granule pulls its weight — a session usually spans days (the day
@@ -517,6 +571,12 @@ export interface TokenSummary {
    * lets the route re-aggregate any day range × model filter without
    * rereading files, and re-price history under the current table. */
   rateRows: UsageRateRow[]
+  /** Per-(kind, day, model, rate) rows of the auxiliary bypass requests
+   * (Auto review / session title / translation / other). Their usage also
+   * folds into the totals, byDay, byHour, byModel, rateRows, and recent
+   * window; this dimension only backs the runtime-overhead breakdown.
+   * A summary read without raw history carries an empty list. */
+  auxRows: UsageAuxRow[]
   /** Per-session × per-day × per-model × per-rate rows, session then day
    * then model then rate ascending; the settings page's session table folds
    * from these (see {@link UsageSessionRow}). */
@@ -573,6 +633,10 @@ export interface CostedSummary extends TokenSummary {
    * {@link CostedSessionCell}); the route folds these into
    * {@link SessionUsageRow}s for the session table. */
   bySession: CostedSessionCell[]
+  /** The auxiliary (bypass) request layer: the settings page's runtime-overhead
+   * block. Its usage is already included in the totals above; this field only
+   * splits it out by kind and prices it for display. */
+  aux: AuxSummary
 }
 
 /** The full stats payload served at {@link STATS_PATH}. A discriminated

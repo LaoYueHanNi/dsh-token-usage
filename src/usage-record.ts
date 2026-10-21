@@ -34,21 +34,48 @@ export interface UsageFields {
 
 /**
  * Where a record came from: a plain model request (the default), a
- * compaction summarize request (a provider-billed call of its own), or a
+ * compaction summarize request (a provider-billed call of its own), a
  * failed model request (a turn that ended in an LLM error, or a provider
  * attempt that `dsh-llm-retry` scheduled a retry for — counted in its own
- * `failures` dimension, never in `requests`).
+ * `failures` dimension, never in `requests`), or an auxiliary request (a
+ * bypass model call that is not part of the conversation turn: the Auto
+ * review authorization gate, session-title generation, or reasoning
+ * translation).
  */
-export type UsageRecordKind = 'request' | 'compaction' | 'failure'
+export type UsageRecordKind = 'request' | 'compaction' | 'failure' | 'aux'
+
+/**
+ * The origin of one auxiliary (bypass) model request. These calls are
+ * issued by host packages directly through `ctx.llm.stream()` and never
+ * produce a conversation event, so the recorder captures them on the
+ * `llm/stream` waterfall instead:
+ *
+ * - `auto-review` — the per-tool-call authorization reviewer of
+ *   `@deepseek-ai/dsh-experimental-auto-review`.
+ * - `session-title` — the logged `session/title-llm-request` generation
+ *   (`purpose: 'session-title'` on the request).
+ * - `translation` — the reasoning/CoT translator
+ *   (`@deepseek-ai/dsh-experimental-translator`).
+ * - `other` — any other unmarked bypass request. A defensive bucket: DSH
+ *   gives Auto review and the translator no purpose marker, so their
+ *   identification is prompt-text based and a host upgrade can move them
+ *   here without dropping the usage data.
+ */
+export type AuxKind = 'auto-review' | 'session-title' | 'translation' | 'other'
+
+/** Every auxiliary kind, in the fixed display order the tables use. */
+export const AUX_KINDS: readonly AuxKind[] = ['auto-review', 'session-title', 'translation', 'other']
 
 /** One JSONL row: one provider model call (successful or failed). */
 export interface UsageRecord {
-  /** Stable request identity: the assistant message id (dedupe key), or a
-   * synthesized `failure:<session>:<seq>` for a failed-request row. */
+  /** Stable request identity: the assistant message id (dedupe key), a
+   * synthesized `failure:<session>:<seq>` for a failed-request row, or
+   * `aux:<kind>:<startedAt>:<seq>` for an auxiliary row. */
   requestId: string
   /** Session-event wall time, epoch milliseconds. */
   time: number
-  /** Owning session id. */
+  /** Owning session id; '' for an auxiliary row (no conversation owns a
+   * bypass call — see the kind field). */
   sessionId: string
   /** Provider model id that produced the message; a failure row carries the
    * session's last-known route model ('' when none was ever observed). */
@@ -58,6 +85,9 @@ export interface UsageRecord {
   /** Record origin; absent means a plain request (legacy rows predate the
    * key, so the on-disk default is omission, never `'request'`). */
   kind?: UsageRecordKind
+  /** Auxiliary row only: which bypass call produced it. Absent on every
+   * other kind; a future unknown value normalizes to `'other'` on read. */
+  auxKind?: AuxKind
   /** Failure row only: the provider-neutral `LlmFailure.code` the attempt
    * failed with (RATE_LIMIT, TRANSPORT, QUOTA, …). Absent on every other
    * kind; a future code renders verbatim. */
@@ -332,6 +362,16 @@ function normalizeCount(value: unknown): number | undefined {
   return isCount(value) ? value : undefined
 }
 
+/** Whether a raw value names a known auxiliary kind. */
+function isAuxKind(value: unknown): value is AuxKind {
+  return typeof value === 'string' && (AUX_KINDS as readonly string[]).includes(value)
+}
+
+/** Read one stored auxiliary kind, falling back to the defensive bucket. */
+function normalizeAuxKind(value: unknown): AuxKind {
+  return isAuxKind(value) ? value : 'other'
+}
+
 function isUsageFields(value: unknown): value is UsageFields {
   if (typeof value !== 'object' || value === null) return false
   const fields = value as Record<string, unknown>
@@ -358,13 +398,17 @@ export function coerceRecord(value: unknown): UsageRecord | null {
   if (!isRecord(value)) return null
   // The guard already validated the structure; this cast only enables field access.
   const record = value as unknown as Record<string, unknown>
-  // Kind normalization: only a compaction or failure row keeps the key —
-  // plain rows (and unknown future kinds) read as requests, so a newer row
-  // set never drops.
+  // Kind normalization: only a compaction, failure, or auxiliary row keeps
+  // the key — plain rows (and unknown future kinds) read as requests, so a
+  // newer row set never drops. A stored auxiliary row without a recognized
+  // `auxKind` normalizes to `other` instead of losing the row.
   const isFailure = record.kind === 'failure'
+  const isAux = !isFailure && record.kind === 'aux'
   const kind = record.kind === 'compaction' ? { kind: 'compaction' as const }
     : isFailure ? { kind: 'failure' as const }
-      : {}
+      : isAux ? { kind: 'aux' as const }
+        : {}
+  const auxKind = isAux ? { auxKind: normalizeAuxKind(record.auxKind) } : {}
   // Failure classification survives the round trip on failure rows only
   // (a non-string or foreign-kind code normalizes to omission).
   const failureCode = isFailure && typeof record.failureCode === 'string' && record.failureCode !== ''
@@ -378,6 +422,7 @@ export function coerceRecord(value: unknown): UsageRecord | null {
       sessionId: record.sessionId as string,
       model: record.model as string,
       ...kind,
+      ...auxKind,
       ...failureCode,
       ...latency,
       ...firstToken,
@@ -392,6 +437,7 @@ export function coerceRecord(value: unknown): UsageRecord | null {
     sessionId: record.sessionId as string,
     model: record.model as string,
     ...kind,
+    ...auxKind,
     ...failureCode,
     ...latency,
     ...firstToken,

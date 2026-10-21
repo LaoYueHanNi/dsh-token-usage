@@ -18,10 +18,12 @@ import { unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fileDay, listDayFiles, readDayFile, readDayFileChecked } from './record-cache.ts'
 import { consoleLogger, type LoggerLike } from './log.ts'
-import type { UsageRecord } from './usage-record.ts'
+import type { AuxKind, UsageRecord } from './usage-record.ts'
+import { AUX_KINDS } from './usage-record.ts'
 import { readRollup, writeRollup, ROLLUP_FILE_NAME, ROLLUP_TMP_FILE_NAME } from './rollup.ts'
 import type { RollupFile } from './rollup.ts'
 import type {
+  AuxSummary,
   CostedModelRow,
   CostedSessionCell,
   CostedSummary,
@@ -32,6 +34,7 @@ import type {
   RequestPoint,
   SessionUsageRow,
   TokenSummary,
+  UsageAuxRow,
   UsageDayRow,
   UsageHourRow,
   UsageModelRow,
@@ -53,7 +56,7 @@ export type RateResolver = (record: UsageRecord) => RateKey
 
 /** Empty rollup used as the merge base when no rollup exists on disk yet. */
 function emptyRollup(): RollupFile {
-  return { upto: '', total: emptyTotals(), byDay: [], byHour: [], byModel: [], rateRows: [], bySession: [], recent: [] }
+  return { upto: '', total: emptyTotals(), byDay: [], byHour: [], byModel: [], rateRows: [], auxRows: [], bySession: [], recent: [] }
 }
 
 /** Zeroed totals; requests counts rows, the token buckets sum reported usage. */
@@ -141,6 +144,28 @@ function sessionRowKey(row: UsageSessionRow): string {
   return `${row.sessionId}\n${row.day}\n${row.model}\n${row.rate.ruleStart}-${row.rate.ruleEnd}-${row.rate.tier}-${row.rate.slot}`
 }
 
+/** Fixed display order of the auxiliary kinds (the recorder vocabulary). */
+const AUX_ORDER = new Map<AuxKind, number>(AUX_KINDS.map((kind, index) => [kind, index]))
+
+/** Deterministic auxiliary-cell order: kind, day, model, rate identity. */
+function auxRowsSorted(rows: Iterable<UsageAuxRow>): UsageAuxRow[] {
+  return [...rows].sort((left, right) =>
+    (AUX_ORDER.get(left.auxKind) ?? 0) - (AUX_ORDER.get(right.auxKind) ?? 0)
+      || (left.day < right.day ? -1 : left.day > right.day ? 1
+        : left.model < right.model ? -1 : left.model > right.model ? 1
+          : compareKeys(left.rate, right.rate)))
+}
+
+/** Map key of one (kind, day, model, rate) auxiliary cell. */
+function auxRowKey(auxKind: AuxKind, day: string, model: string, rate: RateKey): string {
+  return `${auxKind}\n${day}\n${model}\n${rate.ruleStart}-${rate.ruleEnd}-${rate.tier}-${rate.slot}`
+}
+
+/** The auxiliary kind of one record; a hand-built aux row may omit it. */
+function auxKindOfRecord(record: UsageRecord): AuxKind {
+  return record.auxKind ?? 'other'
+}
+
 /**
  * Fold one record into totals; a record without provider usage still counts a
  * request, and a compaction record additionally counts the `compactions`
@@ -219,6 +244,7 @@ export function summarizeRecords(records: readonly UsageRecord[], resolve: RateR
   const hours = new Map<string, UsageTotals>()
   const models = new Map<string, UsageTotals>()
   const rated = new Map<string, UsageRateRow>()
+  const aux = new Map<string, UsageAuxRow>()
   const sessions = new Map<string, UsageSessionRow>()
   const recent: UsageRecord[] = []
   for (const record of records) {
@@ -248,19 +274,32 @@ export function summarizeRecords(records: readonly UsageRecord[], resolve: RateR
       ?? { day, model: record.model, rate, totals: emptyTotals() }
     addUsage(cell.totals, record)
     rated.set(rowKey, cell)
-    const sessionCell: UsageSessionRow = {
-      sessionId: record.sessionId,
-      day,
-      model: record.model,
-      rate,
-      lastTime: record.time,
-      totals: emptyTotals(),
+    // An auxiliary (bypass) request has no owning conversation: it folds
+    // into every model-scoped dimension above (it bills a real model) but
+    // never into the per-session cells or the session table. Its own
+    // (kind, day, model, rate) dimension backs the runtime-overhead block.
+    if (record.kind === 'aux') {
+      const auxKind = auxKindOfRecord(record)
+      const key = auxRowKey(auxKind, day, record.model, rate)
+      const auxCell = aux.get(key)
+        ?? { auxKind, day, model: record.model, rate, totals: emptyTotals() }
+      addUsage(auxCell.totals, record)
+      aux.set(key, auxCell)
+    } else {
+      const sessionCell: UsageSessionRow = {
+        sessionId: record.sessionId,
+        day,
+        model: record.model,
+        rate,
+        lastTime: record.time,
+        totals: emptyTotals(),
+      }
+      const sessionKey = sessionRowKey(sessionCell)
+      const folded = sessions.get(sessionKey) ?? sessionCell
+      addUsage(folded.totals, record)
+      sessions.set(sessionKey, folded)
+      if (record.time > folded.lastTime) folded.lastTime = record.time
     }
-    const sessionKey = sessionRowKey(sessionCell)
-    const folded = sessions.get(sessionKey) ?? sessionCell
-    addUsage(folded.totals, record)
-    sessions.set(sessionKey, folded)
-    if (record.time > folded.lastTime) folded.lastTime = record.time
     if (recent.length === RECENT_LIMIT) recent.shift()
     recent.push(record)
   }
@@ -274,6 +313,7 @@ export function summarizeRecords(records: readonly UsageRecord[], resolve: RateR
     byHour,
     byModel,
     rateRows: rateRowsSorted(rated.values()),
+    auxRows: auxRowsSorted(aux.values()),
     bySession: sessionRowsSorted(sessions.values()),
     recent,
   }
@@ -424,6 +464,7 @@ export function mergeSummaries(
   const hours = new Map<string, UsageTotals>()
   const models = new Map<string, UsageTotals>()
   const rated = new Map<string, UsageRateRow>()
+  const aux = new Map<string, UsageAuxRow>()
   const sessions = new Map<string, UsageSessionRow>()
   for (const row of [...left.byDay, ...right.byDay]) {
     const day = days.get(row.day) ?? emptyTotals()
@@ -448,6 +489,16 @@ export function mergeSummaries(
     addTotals(cell.totals, row.totals)
     rated.set(key, cell)
   }
+  // `?? []`: a hand-built or legacy-shaped summary without the auxiliary
+  // dimension folds as if it had none (on-disk rollups are normalized when
+  // read, so only in-memory shapes need the leniency).
+  for (const row of [...(left.auxRows ?? []), ...(right.auxRows ?? [])]) {
+    const key = auxRowKey(row.auxKind, row.day, row.model, row.rate)
+    const cell = aux.get(key)
+      ?? { auxKind: row.auxKind, day: row.day, model: row.model, rate: row.rate, totals: emptyTotals() }
+    addTotals(cell.totals, row.totals)
+    aux.set(key, cell)
+  }
   // `?? []`: a hand-built or legacy-shaped summary without the session
   // dimension folds as if it had none — on-disk rollups fail validation
   // instead (isRollupFile), so this leniency only serves in-memory shapes.
@@ -468,6 +519,7 @@ export function mergeSummaries(
     byHour: hourRows(hours),
     byModel: modelRows(models),
     rateRows: rateRowsSorted(rated.values()),
+    auxRows: auxRowsSorted(aux.values()),
     bySession: sessionRowsSorted(sessions.values()),
     recent,
   }
@@ -518,6 +570,13 @@ export function filterSummary(
     (from === undefined || row.day >= from)
     && (to === undefined || row.day <= to)
     && matchesModel(row.model, model, canonical))
+  // The auxiliary cells follow the same date/model filter as the rate rows:
+  // a model filter selects the bypass calls that ran on that model too, so
+  // the runtime-overhead block reconciles with the filtered totals.
+  const auxRows = summary.auxRows.filter(row =>
+    (from === undefined || row.day >= from)
+    && (to === undefined || row.day <= to)
+    && matchesModel(row.model, model, canonical))
   const total = emptyTotals()
   const days = new Map<string, UsageTotals>()
   const models = new Map<string, UsageTotals>()
@@ -533,7 +592,7 @@ export function filterSummary(
     }
   }
   const recent = filterRecordsByRange(summary.recent, undefined, dayRangeFilter(from, to, model, canonical))
-  return { dataDir: summary.dataDir, total, byDay: dayRows(days), byHour, byModel: modelRows(models), rateRows: rateRowsSorted(rows), bySession, recent }
+  return { dataDir: summary.dataDir, total, byDay: dayRows(days), byHour, byModel: modelRows(models), rateRows: rateRowsSorted(rows), auxRows: auxRowsSorted(auxRows), bySession, recent }
 }
 
 /** Available cached session cells retain usage even if raw history is lost.
@@ -557,7 +616,7 @@ export function summaryForSessions(summary: TokenSummary, sessionIds: readonly s
     const cell = rated.get(key) ?? { day: row.day, model: row.model, rate: row.rate, totals: emptyTotals() }
     addTotals(cell.totals, row.totals); rated.set(key, cell)
   }
-  return { total, byDay: dayRows(days), byHour: [], byModel: modelRows(models), rateRows: rateRowsSorted(rated.values()), bySession,
+  return { total, byDay: dayRows(days), byHour: [], byModel: modelRows(models), rateRows: rateRowsSorted(rated.values()), auxRows: [], bySession,
     recent: summary.recent.filter(row => wanted.has(row.sessionId)) }
 }
 
@@ -608,6 +667,47 @@ export function attachCosts(
       cost: rules === undefined ? 0 : costOf(row.totals, ratesForKey(rules, row.rate)),
     }
   })
+  // The auxiliary layer: the same rate identity pricing as the model rows,
+  // folded per kind for the settings page's runtime-overhead tab, and per
+  // model inside each kind (the tab renders one detail line per model). Its
+  // token totals are already inside the rate rows (so totalCost/cost-per-model
+  // include it); this split must never be added to `totalCost` again.
+  const auxTotals = emptyTotals()
+  let auxTotalCost = 0
+  const auxByKind = new Map<AuxKind, {
+    totals: UsageTotals
+    cost: number
+    byModel: Map<string, { totals: UsageTotals, cost: number }>
+  }>()
+  for (const row of summary.auxRows ?? []) {
+    addTotals(auxTotals, row.totals)
+    const rules = rulesOf(row.model)
+    const cost = rules === undefined ? 0 : costOf(row.totals, ratesForKey(rules, row.rate))
+    auxTotalCost += cost
+    const kindCell = auxByKind.get(row.auxKind)
+      ?? { totals: emptyTotals(), cost: 0, byModel: new Map() }
+    addTotals(kindCell.totals, row.totals)
+    kindCell.cost += cost
+    const modelCell = kindCell.byModel.get(row.model) ?? { totals: emptyTotals(), cost: 0 }
+    addTotals(modelCell.totals, row.totals)
+    modelCell.cost += cost
+    kindCell.byModel.set(row.model, modelCell)
+    auxByKind.set(row.auxKind, kindCell)
+  }
+  const aux: AuxSummary = {
+    total: auxTotals,
+    cost: auxTotalCost,
+    byKind: AUX_KINDS
+      .filter(kind => auxByKind.has(kind))
+      .map(kind => {
+        const cell = auxByKind.get(kind)!
+        const byModel = [...cell.byModel.entries()]
+          .map(([model, value]) => ({ model, totals: value.totals, cost: value.cost }))
+          .sort((left, right) =>
+            right.totals.requests - left.totals.requests || left.model.localeCompare(right.model))
+        return { auxKind: kind, totals: cell.totals, cost: cell.cost, byModel }
+      }),
+  }
   const folded = new Map<string, { model: string, totals: UsageTotals, cost: number }>()
   for (const row of summary.byModel) {
     const name = canonicalName(row.model, canonical)
@@ -644,6 +744,8 @@ export function attachCosts(
     byModel,
     bySession,
     rateRows: summary.rateRows,
+    auxRows: summary.auxRows,
+    aux,
     recent: summary.recent,
   }
 }

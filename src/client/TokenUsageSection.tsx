@@ -14,16 +14,17 @@
  * @module token-usage/client/TokenUsageSection
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SettingsSectionOwnerProps } from '@deepseek-ai/dsh-client-ui-settings/client'
 import { IconWarningOutlineRegular, Toast } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { UsageSummary } from '../wire.ts'
+import type { AuxSummary, CostState, UsageSummary, UsageTotals } from '../wire.ts'
 import { STATS_PATH } from '../wire.ts'
 import { useAsyncResource } from './async-resource.ts'
 import { DateRangePicker } from './DateRangePicker.tsx'
 import { shiftedDayKey, totalTokens } from './day.ts'
+import type { CurrencyView } from './format.ts'
 import { currencyViewOf, formatCost, formatTokens } from './format.ts'
 import { HitRateText } from './HitRateText.tsx'
 import { MenuSelect } from './MenuSelect.tsx'
@@ -163,6 +164,123 @@ function FilterBar({ filters, models, onChange, onPricingTable, t }: {
 }
 
 /**
+ * The runtime-overhead tab content: the auxiliary (bypass) model requests —
+ * Auto review, session-title generation, translation, and the defensive
+ * "other" bucket — split by kind. Those calls are provider-billed requests of
+ * a concrete model, so their usage is already folded into the totals above
+ * and into the by-model table; this content is a read-only breakdown of that
+ * share, never an additional total. Each kind row is a collapsed-by-default
+ * disclosure: its per-model detail lines appear only while the kind's toggle
+ * is activated. A summary without auxiliary requests
+ * renders its empty hint inside the tab, so the dimension switch keeps a
+ * stable set of tabs. The aux layer is read defensively: a host that predates
+ * the field sends no `aux` at all, and that shape renders the same empty hint.
+ * @param props - the aux layer of the summary (possibly absent on an older
+ * host payload), the cost state, the display currency view, and the locale
+ * translator.
+ * @returns the tab content: an empty hint, or the per-kind table (kinds
+ * collapsed, expanding to their per-model lines) with its total row.
+ */
+export function AuxOverheadSection({ aux, costState, view, t }: {
+  aux: AuxSummary | undefined
+  costState: CostState
+  view: CurrencyView
+  t: TranslateNS<'token-usage'>
+}): ReactNode {
+  // Which kinds are expanded. Collapsed by default — the kind row itself
+  // carries the aggregate; the per-model lines are the drill-in. Each kind
+  // toggles independently; switching tabs unmounts the section, which is
+  // the natural reset.
+  const [expandedKinds, setExpandedKinds] = useState<ReadonlySet<AuxSummary['byKind'][number]['auxKind']>>(() => new Set())
+  const toggleKind = useCallback((auxKind: AuxSummary['byKind'][number]['auxKind']) => {
+    setExpandedKinds(previous => {
+      const next = new Set(previous)
+      if (next.has(auxKind)) next.delete(auxKind)
+      else next.add(auxKind)
+      return next
+    })
+  }, [])
+  if (aux === undefined || aux.total.requests === 0) {
+    return <p className={styles['muted']}>{t('aux.empty')}</p>
+  }
+  // The numeric cells are shared by the per-kind rows and the total row so
+  // both keep the same column set; zero buckets dim exactly like the
+  // per-model table's cells.
+  const numericCells = (totals: UsageTotals, cost: number): ReactNode => (
+    <>
+      <td>{totals.requests.toLocaleString()}</td>
+      <td className={styles['costCol']}>{costsAvailable(costState) ? formatCost(cost, view) : '—'}</td>
+      <td>{formatTokens(totalTokens(totals))}</td>
+      <td className={totals.inputTokens === 0 ? styles['zeroDim'] : undefined}>{formatTokens(totals.inputTokens)}</td>
+      <td className={totals.outputTokens === 0 ? styles['zeroDim'] : undefined}>{formatTokens(totals.outputTokens)}</td>
+      <td className={totals.cacheReadTokens === 0 ? styles['zeroDim'] : undefined}>{formatTokens(totals.cacheReadTokens)}</td>
+      <td className={totals.cacheWriteTokens === 0 ? styles['zeroDim'] : undefined}>{formatTokens(totals.cacheWriteTokens)}</td>
+    </>
+  )
+  return (
+    <>
+      <div className={styles['tableWrap']}>
+        <table className={styles['table']} aria-label={t('aux.tab')}>
+          <thead>
+            <tr>
+              <th className={styles['modelHead']}>{t('aux.kind')}</th>
+              <th>{t('aux.requests')}</th>
+              <th>{t('stat.cost')}</th>
+              <th>{t('stat.totalTokens')}</th>
+              <th>{t('stat.input')}</th>
+              <th>{t('stat.output')}</th>
+              <th>{t('stat.cacheRead')}</th>
+              <th>{t('stat.cacheWrite')}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(aux.byKind ?? []).map(kindRow => {
+              const expanded = expandedKinds.has(kindRow.auxKind)
+              return (
+                  <Fragment key={kindRow.auxKind}>
+                    {/* The kind row is the parent aggregate AND its own
+                     * disclosure toggle: chevron + category name in one
+                     * button (`aria-expanded` carries the state); the
+                     * per-model lines render only while expanded. */}
+                    <tr>
+                      <td className={styles['modelCol']}>
+                        <button
+                          type="button"
+                          className={styles['auxKindToggle']}
+                          aria-expanded={expanded}
+                          onClick={() => toggleKind(kindRow.auxKind)}
+                        >
+                          <span className={styles['auxChevron']} aria-hidden="true">▸</span>
+                          {t(`aux.kind.${kindRow.auxKind}`)}
+                        </button>
+                      </td>
+                      {numericCells(kindRow.totals, kindRow.cost)}
+                    </tr>
+                    {expanded && (kindRow.byModel ?? []).map(modelRow => (
+                      <tr key={`${kindRow.auxKind}:${modelRow.model}`}>
+                        <td className={`${styles['modelCol']} ${styles['auxModelCell']}`}>
+                          <span className={styles['modelCell']}>
+                            <span className={styles['modelName']}>{modelRow.model}</span>
+                          </span>
+                        </td>
+                        {numericCells(modelRow.totals, modelRow.cost)}
+                      </tr>
+                    ))}
+                  </Fragment>
+              )
+            })}
+            <tr>
+              <td className={styles['modelCol']}>{t('aux.total')}</td>
+              {numericCells(aux.total, aux.cost)}
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </>
+  )
+}
+
+/**
  * Render the Token Usage section content column. The `t` seat arrives from
  * the registration's `locale:` declaration and follows the active locale.
  * The session jump seats (`sessionListed` / `openSession`) come from the
@@ -209,11 +327,11 @@ export function TokenUsageSection({ t, close, sessionListed, openSession }: Sett
   // Entering the page starts on today's window (the 1d quick range).
   const [filters, setFilters] = useState<Filters>(() => ({ model: '', ...quickRange(1) }))
   // The detail-table block's mode: by model (default, the historical table,
-  // byte-identical behavior) or by session. Pure presentation state — both
-  // row sets arrive on the SAME summary response, so switching never
-  // refetches (session-local, not persisted, the usage tab's scope-switch
-  // tradeoff).
-  const [detailMode, setDetailMode] = useState<'model' | 'session'>('model')
+  // byte-identical behavior), by session, or the runtime-overhead breakdown of
+  // the auxiliary (bypass) model requests. Pure presentation state — every row
+  // set arrives on the SAME summary response, so switching never refetches
+  // (session-local, not persisted, the usage tab's scope-switch tradeoff).
+  const [detailMode, setDetailMode] = useState<'model' | 'session' | 'aux'>('model')
   const [models, setModels] = useState<string[]>([])
   // The model whose pricing dialog is open (null = none). Refetched
   // summaries keep the dialog's rules in sync with the latest pricing.
@@ -288,6 +406,11 @@ export function TokenUsageSection({ t, close, sessionListed, openSession }: Sett
 
   const { total } = state.value
   const view = currencyViewOf(state.value)
+  // The auxiliary (bypass) request count: the runtime-overhead tab is part of
+  // the detail switch whenever any dimension has rows, and the tab content
+  // renders its own empty hint when this stays 0 (or an older host payload
+  // carries no auxiliary layer at all).
+  const auxRequests = state.value.aux?.total.requests ?? 0
   return (
     <div ref={rootRef} className={styles['section']}>
     <PricingAssociationProvider resolutions={state.value.modelResolutions} feedVersion={state.value.feedVersion} view={view} t={t}>
@@ -343,13 +466,13 @@ export function TokenUsageSection({ t, close, sessionListed, openSession }: Sett
               // selection) plots the day's 24 hours instead of one point.
               {...filters.from !== '' && filters.from === filters.to ? { hours: state.value.byHour } : {}}
             />
-            {state.value.byModel.length > 0 || (state.value.sessionRows?.length ?? 0) > 0
+            {state.value.byModel.length > 0 || (state.value.sessionRows?.length ?? 0) > 0 || auxRequests > 0
               ? (
                 <>
                   {/* The block's dimension switch IS the block title: the
                    * selected segment names the table below, so a separate
-                   * heading would only repeat it. Presentation only — both
-                   * row sets come from the same summary response. */}
+                   * heading would only repeat it. Presentation only — every
+                   * row set comes from the same summary response. */}
                   <div className={styles['segmented']} role="group" aria-label={t('detail.switch.label')}>
                     <button
                       type="button"
@@ -366,6 +489,14 @@ export function TokenUsageSection({ t, close, sessionListed, openSession }: Sett
                       onClick={() => setDetailMode('session')}
                     >
                       {t('bySession.title')}
+                    </button>
+                    <button
+                      type="button"
+                      className={detailMode === 'aux' ? `${styles['segBtn']} ${styles['segActive']}` : styles['segBtn']}
+                      aria-pressed={detailMode === 'aux'}
+                      onClick={() => setDetailMode('aux')}
+                    >
+                      {t('aux.tab')}
                     </button>
                   </div>
                   {detailMode === 'model'
@@ -442,21 +573,23 @@ export function TokenUsageSection({ t, close, sessionListed, openSession }: Sett
                         </table>
                       </div>
                     )
-                    : (
-                      (state.value.sessionRows?.length ?? 0) > 0
-                        ? (
-                          <SessionTable
-                            rows={state.value.sessionRows ?? []}
-                            costState={state.value.costState}
-                            view={view}
-                            t={t}
-                            {...sessionListed !== undefined && openSession !== undefined
-                              ? { sessionListed, openSession: handleOpenSession }
-                              : {}}
-                          />
-                        )
-                        : <p className={styles['muted']}>{t('chart.empty')}</p>
-                    )}
+                    : detailMode === 'session'
+                      ? (
+                        (state.value.sessionRows?.length ?? 0) > 0
+                          ? (
+                            <SessionTable
+                              rows={state.value.sessionRows ?? []}
+                              costState={state.value.costState}
+                              view={view}
+                              t={t}
+                              {...sessionListed !== undefined && openSession !== undefined
+                                ? { sessionListed, openSession: handleOpenSession }
+                                : {}}
+                            />
+                          )
+                          : <p className={styles['muted']}>{t('chart.empty')}</p>
+                      )
+                      : <AuxOverheadSection aux={state.value.aux} costState={state.value.costState} view={view} t={t} />}
                 </>
               )
               : null}

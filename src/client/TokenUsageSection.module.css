@@ -129,6 +129,49 @@
   max-width: 150px;
 }
 
+/* A per-model detail line nested under its auxiliary kind row: indented one
+ * level inside the same 150px model column and slightly dimmed, so the kind
+ * row above it reads as the parent aggregate. */
+.table td.auxModelCell {
+  padding-left: 18px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+/* The kind row's disclosure toggle: chevron + category name as one button.
+ * The per-model detail lines stay hidden until it is activated; the name
+ * doubles as the accessible name, `aria-expanded` carries the state. */
+.auxKindToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.auxKindToggle:focus-visible {
+  outline: 2px solid var(--dsw-alias-border-l2);
+  outline-offset: 1px;
+}
+
+.auxChevron {
+  flex: none;
+  font-size: 9px;
+  line-height: 1;
+  color: var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary));
+  transition: transform 0.12s ease;
+}
+
+.auxKindToggle[aria-expanded='true'] .auxChevron {
+  transform: rotate(90deg);
+}
+
 .table th {
   font-weight: 600;
   color: var(--dsw-alias-label-secondary);

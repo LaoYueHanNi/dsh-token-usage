@@ -37,8 +37,9 @@ import type {} from '@deepseek-ai/dsh-compaction/types'
 import type {} from '@deepseek-ai/dsh-llm-retry/types'
 // Type-only: pulls the ctx.webServer declaration merge into the program.
 import type {} from '@deepseek-ai/dsh-host-webserver'
-// Type-only: pulls the ctx.llm declaration merge (the provider directory).
-import type {} from '@deepseek-ai/dsh-llm'
+// Type-only: pulls the ctx.llm declaration merge (the provider directory) and
+// the `llm/stream` event payload types into this program.
+import type { TokenUsage } from '@deepseek-ai/dsh-llm'
 import { UsageLog } from './usage-log.ts'
 import { SessionMetaStore } from './session-meta.ts'
 import { cleanSource, copyData, type MigrationProgress } from './migrate.ts'
@@ -47,6 +48,7 @@ import { PricingAssociationService } from './pricing-association-service.ts'
 import { createPricingAssociationsRoute } from './pricing-associations-route.ts'
 import { withPricingDirectoryMigration } from './pricing-associations.ts'
 import { extractFirstTokenTimeFromStream, modelOfEvent, recordOfEvent, type RequestTiming } from './usage-record.ts'
+import { classifyAuxRequest, recordFromAuxRequest } from './aux-request.ts'
 import { markTimingSynced, readSyncState } from './sync-state.ts'
 import { autoSyncIfNeeded, syncHistory, titleOfEvent } from './sync.ts'
 import { clearRecordCache, warmRecordCache } from './record-cache.ts'
@@ -101,6 +103,12 @@ export interface Config {
    * are recorded and billed like plain requests (default `true`). `false`
    * skips them in both the live hook and the history sync. Composition-only. */
   recordCompaction?: boolean
+  /** Whether auxiliary (bypass) model requests — Auto review authorization,
+   * session-title generation, reasoning translation — are recorded and billed
+   * like plain requests (default `true`). Those calls never produce a
+   * conversation event, so they are captured on the `llm/stream` waterfall;
+   * `false` skips the capture. Composition-only. */
+  recordAux?: boolean
 }
 
 /** Composition knobs of the quota feature (cordis.yml level). */
@@ -133,6 +141,7 @@ export const Config: z<any> = z.object({
   pricingUrlOverseas: z.string(),
   pricingRegion: z.union([z.const('domestic'), z.const('overseas')]).volatile(),
   recordCompaction: z.boolean(),
+  recordAux: z.boolean(),
   quota: z.object({
     enabled: z.boolean(),
     intervalSec: z.number().min(15).max(3600),
@@ -144,7 +153,7 @@ export function validateConfig(config: Config): void {
   const unknown = Object.keys(config).find(key =>
     key !== 'path' && key !== 'pricingUrl' && key !== 'pricingUrlDomestic'
     && key !== 'pricingUrlOverseas' && key !== 'pricingRegion'
-    && key !== 'recordCompaction'
+    && key !== 'recordCompaction' && key !== 'recordAux'
     && key !== 'quota')
   if (unknown !== undefined) {
     throw new Error(`TokenUsageConfig: unknown key "${unknown}"`)
@@ -171,6 +180,9 @@ export function validateConfig(config: Config): void {
   }
   if (config.recordCompaction !== undefined && typeof config.recordCompaction !== 'boolean') {
     throw new Error('TokenUsageConfig: "recordCompaction" must be a boolean')
+  }
+  if (config.recordAux !== undefined && typeof config.recordAux !== 'boolean') {
+    throw new Error('TokenUsageConfig: "recordAux" must be a boolean')
   }
   if (config.quota !== undefined) {
     if (typeof config.quota !== 'object' || config.quota === null) {
@@ -685,6 +697,81 @@ export function apply(ctx: Context, config: Config = {}) {
   // Whether compaction summarize requests join the billing chain. Resolved
   // once at apply: the composition config is immutable for the runtime.
   const recordCompaction = config.recordCompaction !== false
+  // Whether auxiliary (bypass) model requests join the billing chain. Same
+  // resolution rule; see the llm/stream recorder below.
+  const recordAux = config.recordAux !== false
+  // Monotonic suffix of the auxiliary request ids. It only has to keep ids
+  // unique inside one process: the stream start time (millisecond) plus this
+  // counter cannot collide, and a restarted process starts at a new time.
+  let auxSeq = 0
+  // One diagnostic per process for the defensive bucket: a new host feature
+  // that issues a bypass call lands in "other" instead of disappearing, and
+  // the first occurrence tells the maintainer to name it.
+  let auxUnknownSeen = false
+
+  /**
+   * Record auxiliary (bypass) model requests: the Auto review authorization
+   * gate, session-title generation, and reasoning translation. Those calls
+   * are issued through `ctx.llm.stream()` by their owning host packages and
+   * never produce a session event, so the conversation recorder above cannot
+   * see them — the `llm/stream` waterfall every streaming call passes through
+   * is the one capture point.
+   *
+   * The listener is a pass-through wrapper: it yields every chunk unchanged,
+   * remembers the `usage` chunk and the terminal `finish`, and appends one
+   * JSONL row after a successful finish. The wording intentionally avoids
+   * blocking the stream: the append is fire-and-forget on the log's own
+   * queue. A failed or aborted stream billed no usage, so it is logged (with
+   * its failure code) and never recorded. Requests the conversation loop or
+   * the compaction summary already log are classified out untouched.
+   */
+  ctx.inject(['llm'], (llmCtx) => {
+    llmCtx.effect(() => llmCtx.on('llm/stream', (options, next) => {
+      if (!recordAux) return next()
+      const auxKind = classifyAuxRequest(options)
+      if (auxKind === undefined) return next()
+      if (auxKind === 'other' && !auxUnknownSeen) {
+        auxUnknownSeen = true
+        logger.warn('[token-usage] unrecognized bypass model request recorded as "other"; the host may have added an auxiliary call site')
+      }
+      const startedAt = Date.now()
+      const model = options.model
+      const upstream = next()
+      // A synchronous waterfall: the listener hands back the AsyncIterable
+      // itself, so the wrapper must be a plain generator object.
+      return (async function* () {
+        let usage: TokenUsage | undefined
+        let settled = false
+        let failure: { code: string, message: string } | undefined
+        try {
+          for await (const chunk of upstream) {
+            if (chunk.type === 'usage') usage = chunk.usage
+            else if (chunk.type === 'finish') {
+              settled = true
+              if (chunk.reason.kind === 'error' || chunk.reason.kind === 'aborted') failure = chunk.reason.failure
+            }
+            yield chunk
+          }
+        } finally {
+          if (failure !== undefined) {
+            logger.warn(`[token-usage] auxiliary ${auxKind} request failed (${failure.code}); usage not recorded: ${failure.message}`)
+          } else if (settled) {
+            const target = current
+            if (target !== undefined) {
+              auxSeq += 1
+              void target.log.record(recordFromAuxRequest({
+                auxKind,
+                requestId: `aux:${auxKind}:${String(startedAt)}:${String(auxSeq)}`,
+                time: startedAt,
+                model,
+                ...(usage !== undefined ? { usage } : {}),
+              }))
+            }
+          }
+        }
+      })()
+    }), 'token-usage: auxiliary request recorder')
+  })
 
   /**
    * Drop the derived stats state after a sync appended rows or a refile
