@@ -466,8 +466,9 @@ export interface UsageAuxRow {
 }
 
 /** One per-model row nested under an auxiliary kind: the model's share of one
- * bypass-request kind. The runtime-overhead tab renders these one line each
- * beneath their kind's aggregate row. */
+ * bypass-request kind, keyed by the canonical id (a priced alias family folds
+ * onto its modelId, unpriced names keep their spelling). The runtime-overhead
+ * tab renders these one line each beneath their kind's aggregate row. */
 export interface UsageAuxModelRow {
   model: string
   totals: UsageTotals

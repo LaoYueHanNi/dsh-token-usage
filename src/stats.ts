@@ -628,10 +628,11 @@ export function summaryForSessions(summary: TokenSummary, sessionIds: readonly s
  * returned untouched, so the token aggregation (and the rollup format)
  * never carries currency. Stored identities must match the current context.
  *
- * With a canonical map, byModel rows that hit the same feed model (the
- * modelId or any of its aliases) fold onto that modelId; unpriced names
- * group by their complete case-insensitive name, retaining display spelling. rateRows / byHour / bySession
- * keep the raw name so a later pricing update can regroup without rebuild.
+ * With a canonical map, byModel rows and the aux per-kind detail lines that
+ * hit the same feed model (the modelId or any of its aliases) fold onto that
+ * modelId; unpriced names group by their complete case-insensitive name,
+ * retaining display spelling. rateRows / byHour / bySession keep the raw
+ * name so a later pricing update can regroup without rebuild.
  * @param summary - the aggregated summary (build or filtered).
  * @param pricing - the active pricing table.
  * @param canonical - alias → modelId map; empty / omitted leaves raw names.
@@ -669,7 +670,9 @@ export function attachCosts(
   })
   // The auxiliary layer: the same rate identity pricing as the model rows,
   // folded per kind for the settings page's runtime-overhead tab, and per
-  // model inside each kind (the tab renders one detail line per model). Its
+  // model inside each kind (the tab renders one detail line per model,
+  // keyed by the canonical id exactly like the byModel table — a priced
+  // alias family renders as one row, not one line per raw route name). Its
   // token totals are already inside the rate rows (so totalCost/cost-per-model
   // include it); this split must never be added to `totalCost` again.
   const auxTotals = emptyTotals()
@@ -688,10 +691,11 @@ export function attachCosts(
       ?? { totals: emptyTotals(), cost: 0, byModel: new Map() }
     addTotals(kindCell.totals, row.totals)
     kindCell.cost += cost
-    const modelCell = kindCell.byModel.get(row.model) ?? { totals: emptyTotals(), cost: 0 }
+    const name = canonicalName(row.model, canonical)
+    const modelCell = kindCell.byModel.get(name) ?? { totals: emptyTotals(), cost: 0 }
     addTotals(modelCell.totals, row.totals)
     modelCell.cost += cost
-    kindCell.byModel.set(row.model, modelCell)
+    kindCell.byModel.set(name, modelCell)
     auxByKind.set(row.auxKind, kindCell)
   }
   const aux: AuxSummary = {

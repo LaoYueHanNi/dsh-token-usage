@@ -196,6 +196,47 @@ describe('attachCosts auxiliary layer', () => {
     expect(kind.cost).toBeCloseTo(0.1)
   })
 
+  it('folds priced alias families onto the canonical id like the by-model table', () => {
+    const rates = {
+      base: { inputPerMillion: 1, outputPerMillion: 2 },
+      contextTiers: [],
+      dailySlots: [],
+      timeRules: [],
+    }
+    const pricing: PricingTable = {
+      'glm-5.3-flash': rates,
+      'auto/glm-5.3-flash': rates,
+      'zcode/glm-5.3-flash': rates,
+    }
+    const canonical = new Map([
+      ['glm-5.3-flash', 'glm-5.3-flash'],
+      ['auto/glm-5.3-flash', 'glm-5.3-flash'],
+      ['zcode/glm-5.3-flash', 'glm-5.3-flash'],
+    ])
+    const at = day(1, 15, 10)
+    const costed = attachCosts(summaryOf([
+      aux(at, 'session-title', 'auto/glm-5.3-flash', { input: 100_000 }),
+      aux(at + 1_000, 'session-title', 'zcode/glm-5.3-flash', { input: 200_000 }),
+    ]), pricing, canonical)
+    // One feed family renders as one detail line under the model id.
+    expect(costed.aux.byKind).toHaveLength(1)
+    expect(costed.aux.byKind[0]!.byModel).toHaveLength(1)
+    expect(costed.aux.byKind[0]!.byModel[0]).toEqual({
+      model: 'glm-5.3-flash',
+      totals: expect.objectContaining({ requests: 2, inputTokens: 300_000 }),
+      cost: expect.closeTo(0.3),
+    })
+    // Unpriced names stay unmerged and keep their spelling.
+    const mixed = attachCosts(summaryOf([
+      aux(at, 'other', 'auto/glm-5.3-flash', { input: 100_000 }),
+      aux(at + 1_000, 'other', 'unrouted-model', { input: 100_000 }),
+    ]), pricing, canonical)
+    expect(mixed.aux.byKind[0]!.byModel.map(row => row.model).sort()).toEqual([
+      'glm-5.3-flash',
+      'unrouted-model',
+    ])
+  })
+
   it('leaves the auxiliary cost at zero when pricing is unavailable', () => {
     const costed = attachCosts({ ...summaryOf([
       aux(day(1, 15, 10), 'auto-review', 'deepseek-flash', { input: 100_000 }),
