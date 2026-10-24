@@ -47,7 +47,7 @@ import { resolvePricingUrl, syncCloudPricing, type CloudSyncResult, type Pricing
 import { PricingAssociationService } from './pricing-association-service.ts'
 import { createPricingAssociationsRoute } from './pricing-associations-route.ts'
 import { withPricingDirectoryMigration } from './pricing-associations.ts'
-import { extractFirstTokenTimeFromStream, modelOfEvent, recordOfEvent, type RequestTiming } from './usage-record.ts'
+import { extractFirstTokenTimeFromStream, modelOfEvent, recordOfEvent, responseModelOfReplay, type RequestTiming } from './usage-record.ts'
 import { classifyAuxRequest, recordFromAuxRequest } from './aux-request.ts'
 import { markTimingSynced, readSyncState } from './sync-state.ts'
 import { autoSyncIfNeeded, syncHistory, titleOfEvent } from './sync.ts'
@@ -741,6 +741,7 @@ export function apply(ctx: Context, config: Config = {}) {
       // itself, so the wrapper must be a plain generator object.
       return (async function* () {
         let usage: TokenUsage | undefined
+        let responseModel: string | undefined
         let settled = false
         let failure: { code: string, message: string } | undefined
         try {
@@ -748,6 +749,9 @@ export function apply(ctx: Context, config: Config = {}) {
             if (chunk.type === 'usage') usage = chunk.usage
             else if (chunk.type === 'finish') {
               settled = true
+              // The provider-reported model rides the successful finish's
+              // adapter-private replay envelope; an error finish has none.
+              if (chunk.replayState !== undefined) responseModel = responseModelOfReplay(chunk.replayState)
               if (chunk.reason.kind === 'error' || chunk.reason.kind === 'aborted') failure = chunk.reason.failure
             }
             yield chunk
@@ -764,6 +768,7 @@ export function apply(ctx: Context, config: Config = {}) {
                 requestId: `aux:${auxKind}:${String(startedAt)}:${String(auxSeq)}`,
                 time: startedAt,
                 model,
+                ...(responseModel !== undefined ? { responseModel } : {}),
                 ...(usage !== undefined ? { usage } : {}),
               }))
             }

@@ -69,6 +69,10 @@ export interface AuxRequestRecordInput {
   time: number
   /** Provider model id the bypass call routed to. */
   model: string
+  /** Provider-reported model id of the response body, when the adapter's
+   * replay envelope named one (see {@link responseModelOfReplay}); the
+   * routed `model` stays the billing identity either way. */
+  responseModel?: string
   /** Provider-reported usage, when the stream delivered a usage chunk. */
   usage?: TokenUsage
 }
@@ -87,6 +91,7 @@ export function recordFromAuxRequest(input: AuxRequestRecordInput): UsageRecord 
     time: input.time,
     sessionId: '',
     model: input.model,
+    ...(input.responseModel !== undefined ? { responseModel: input.responseModel } : {}),
     ...(usage !== undefined ? { usage } : {}),
     kind: 'aux',
     auxKind: input.auxKind,

@@ -104,6 +104,25 @@ describe('syncHistory', () => {
     expect(log.rows[0].firstTokenLatencyMs).toBe(550)
   })
 
+  it('carries the provider-reported response model from the durable replay envelope', async () => {
+    const log = new FakeLog()
+    const routed = messageEvent({
+      messageId: 'm1', seq: 1, model: 'zcode/GLM-5.3-Flash-Trial',
+      replayState: {
+        response: { kind: 'pi-ai', version: 2, api: 'openai-completions', provider: 'p', model: 'zcode/GLM-5.3-Flash-Trial', responseModel: 'glm-5.3-flash', stopReason: 'stop' },
+        blocks: [{ type: 'text' }],
+      },
+    })
+    const unrouted = messageEventWith('m2', 2)
+    const persistence = fakePersistence([{ id: 's1', events: [routed, unrouted] }])
+    const result = await syncHistory({ persistence, log })
+    expect(result).toEqual({ added: 2, skipped: 0, removed: 0, failedSessions: 0 })
+    expect(log.rows[0].model).toBe('zcode/GLM-5.3-Flash-Trial')
+    expect(log.rows[0].responseModel).toBe('glm-5.3-flash')
+    // A source without a replay envelope keeps the row field-free.
+    expect('responseModel' in log.rows[1]!).toBe(false)
+  })
+
   it('dedupes rows already written this process', async () => {
     const log = new FakeLog()
     await log.recordRow('m1')

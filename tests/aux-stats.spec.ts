@@ -237,6 +237,19 @@ describe('attachCosts auxiliary layer', () => {
     ])
   })
 
+  it('keys the auxiliary detail lines on the reported response model first', () => {
+    const at = day(1, 15, 10)
+    // Two different routed aliases whose responses were served by the same
+    // reported model fold into one detail line under that name.
+    const records: UsageRecord[] = [
+      { ...aux(at, 'session-title', 'group/glm-5.3-flashx', { input: 100_000 }), responseModel: 'glm-5.3-flashx' },
+      { ...aux(at + 1_000, 'session-title', 'zcode/GLM-5.3-Flash', { input: 200_000 }), responseModel: 'glm-5.3-flashx' },
+    ]
+    const costed = attachCosts(summaryOf(records), pricing)
+    expect(costed.aux.byKind[0]!.byModel.map(row => row.model)).toEqual(['glm-5.3-flashx'])
+    expect(costed.aux.byKind[0]!.byModel[0]!.totals.requests).toBe(2)
+  })
+
   it('leaves the auxiliary cost at zero when pricing is unavailable', () => {
     const costed = attachCosts({ ...summaryOf([
       aux(day(1, 15, 10), 'auto-review', 'deepseek-flash', { input: 100_000 }),

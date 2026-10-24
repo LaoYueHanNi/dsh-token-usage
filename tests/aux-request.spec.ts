@@ -88,6 +88,25 @@ describe('recordFromAuxRequest', () => {
     expect(row.usage).toBeUndefined()
     expect(row).toMatchObject({ kind: 'aux', auxKind: 'translation', sessionId: '' })
   })
+
+  it('carries the routed and provider-reported models side by side', () => {
+    const row = recordFromAuxRequest({
+      auxKind: 'session-title',
+      requestId: 'aux:session-title:1:4',
+      time: 1,
+      model: 'auto/GLM-5.3-Flash',
+      responseModel: 'glm-5.3-flash',
+    })
+    expect(row.model).toBe('auto/GLM-5.3-Flash')
+    expect(row.responseModel).toBe('glm-5.3-flash')
+    // An unknown reported model stays omitted, never null.
+    expect('responseModel' in recordFromAuxRequest({
+      auxKind: 'other',
+      requestId: 'aux:other:1:5',
+      time: 1,
+      model: 'deepseek-flash',
+    })).toBe(false)
+  })
 })
 
 describe('aux row parsing', () => {

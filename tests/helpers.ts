@@ -13,6 +13,8 @@ export function messageEvent(overrides: {
   messageId?: string
   provider?: string
   model?: string
+  /** Adapter-private replay envelope on the message source; omitted by default. */
+  replayState?: unknown
   usage?: SessionEvent<'assistant/message'>['data']['usage']
 } = {}): SessionEvent<'assistant/message'> {
   return {
@@ -30,6 +32,7 @@ export function messageEvent(overrides: {
           kind: 'model',
           provider: overrides.provider ?? 'deepseek',
           model: overrides.model ?? 'deepseek-chat',
+          ...(overrides.replayState === undefined ? {} : { replayState: overrides.replayState }),
         },
       },
       usage: 'usage' in overrides

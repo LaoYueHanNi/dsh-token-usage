@@ -11,6 +11,7 @@ import {
   recordFromRetry,
   recordFromTurnEnd,
   recordOfEvent,
+  responseModelOfReplay,
   serializeRecord,
 } from '../src/usage-record.ts'
 import { compactionEvent, messageEvent, retryEvent, turnEndEvent } from './helpers.ts'
@@ -88,6 +89,72 @@ describe('recordFromEvent', () => {
     })
     expect('latencyMs' in record).toBe(false)
     expect('firstTokenLatencyMs' in record).toBe(false)
+  })
+
+  it('carries the provider-reported response model from the replay envelope', () => {
+    const record = recordFromEvent(messageEvent({
+      model: 'auto/GLM-5.3-Flash',
+      replayState: {
+        response: { kind: 'pi-ai', version: 2, api: 'openai-completions', provider: 'magpie', model: 'auto/GLM-5.3-Flash', responseModel: 'glm-5.3-flash', stopReason: 'stop' },
+        blocks: [],
+      },
+    }), 'session-1')
+    expect(record.model).toBe('auto/GLM-5.3-Flash')
+    expect(record.responseModel).toBe('glm-5.3-flash')
+  })
+
+  it('omits responseModel when the envelope names none or is unrecognized', () => {
+    const noField = recordFromEvent(messageEvent({
+      replayState: { response: { kind: 'pi-ai', version: 2, api: 'openai-completions', provider: 'p', model: 'm', stopReason: 'stop' }, blocks: [] },
+    }), 's')
+    expect('responseModel' in noField).toBe(false)
+    const official = recordFromEvent(messageEvent({
+      replayState: { response: { kind: 'deepseek-messages', version: 1, model: 'm' }, blocks: [] },
+    }), 's')
+    expect('responseModel' in official).toBe(false)
+    const opaque = recordFromEvent(messageEvent({ replayState: { unexpected: true } }), 's')
+    expect('responseModel' in opaque).toBe(false)
+    const absent = recordFromEvent(messageEvent(), 's')
+    expect('responseModel' in absent).toBe(false)
+  })
+
+  it('round-trips the response model through serialize/parse', () => {
+    const record = recordFromEvent(messageEvent({
+      model: 'zcode/GLM-5.3-Flash-Trial',
+      replayState: { response: { kind: 'pi-ai', version: 2, api: 'openai-completions', provider: 'p', model: 'zcode/GLM-5.3-Flash-Trial', responseModel: 'glm-5.3-flash', stopReason: 'stop' }, blocks: [] },
+    }), 'session-1')
+    expect(parseRecord(serializeRecord(record))).toEqual(record)
+  })
+})
+
+describe('responseModelOfReplay', () => {
+  it('reads the pi-ai v2 envelope response model', () => {
+    expect(responseModelOfReplay({
+      response: { kind: 'pi-ai', version: 2, api: 'openai-completions', provider: 'p', model: 'auto/m', responseModel: 'real-m', stopReason: 'stop' },
+      blocks: [],
+    })).toBe('real-m')
+  })
+
+  it('reads absence as undefined without guessing', () => {
+    expect(responseModelOfReplay(undefined)).toBeUndefined()
+    expect(responseModelOfReplay('x')).toBeUndefined()
+    expect(responseModelOfReplay({})).toBeUndefined()
+    expect(responseModelOfReplay({ response: null })).toBeUndefined()
+    expect(responseModelOfReplay({ response: { kind: 'pi-ai' } })).toBeUndefined()
+    expect(responseModelOfReplay({
+      response: { kind: 'pi-ai', version: 2, api: 'a', provider: 'p', model: 'm', stopReason: 'stop' },
+    })).toBeUndefined()
+    // The official adapter's envelope carries no response model by design.
+    expect(responseModelOfReplay({ response: { kind: 'deepseek-messages', version: 1, model: 'm' } })).toBeUndefined()
+  })
+
+  it('rejects non-string or empty reported models', () => {
+    expect(responseModelOfReplay({
+      response: { kind: 'pi-ai', version: 2, api: 'a', provider: 'p', model: 'm', responseModel: 7, stopReason: 'stop' },
+    })).toBeUndefined()
+    expect(responseModelOfReplay({
+      response: { kind: 'pi-ai', version: 2, api: 'a', provider: 'p', model: 'm', responseModel: '', stopReason: 'stop' },
+    })).toBeUndefined()
   })
 })
 

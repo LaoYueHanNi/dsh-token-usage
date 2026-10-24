@@ -19,7 +19,7 @@ import { join } from 'node:path'
 import { fileDay, listDayFiles, readDayFile, readDayFileChecked } from './record-cache.ts'
 import { consoleLogger, type LoggerLike } from './log.ts'
 import type { AuxKind, UsageRecord } from './usage-record.ts'
-import { AUX_KINDS } from './usage-record.ts'
+import { AUX_KINDS, effectiveModelOf } from './usage-record.ts'
 import { readRollup, writeRollup, ROLLUP_FILE_NAME, ROLLUP_TMP_FILE_NAME } from './rollup.ts'
 import type { RollupFile } from './rollup.ts'
 import type {
@@ -231,9 +231,13 @@ function hourRows(hours: Map<string, UsageTotals>): UsageHourRow[] {
 
 /**
  * Fold records into the token summary shape, one rate row per (day, model,
- * rate identity) the resolver assigns. The recent window keeps the last
- * {@link RECENT_LIMIT} records in input order (day files are chronological)
- * and then sorts them by time descending.
+ * rate identity) the resolver assigns. Every model-scoped dimension keys on
+ * the record's effective model name ({@link effectiveModelOf}: the
+ * provider-reported response model when present, the routed name otherwise),
+ * so pricing resolution and canonical folding see the name the provider
+ * itself reported. The recent window keeps the last {@link RECENT_LIMIT}
+ * records in input order (day files are chronological) and then sorts them
+ * by time descending.
  * @param records - parsed records in day-file order.
  * @param resolve - the rate resolver; defaults to leaving every record unpriced.
  * @returns totals, day rows, model rows, rate rows, and the recent window.
@@ -248,6 +252,7 @@ export function summarizeRecords(records: readonly UsageRecord[], resolve: RateR
   const sessions = new Map<string, UsageSessionRow>()
   const recent: UsageRecord[] = []
   for (const record of records) {
+    const model = effectiveModelOf(record)
     addUsage(total, record)
     const day = dayKey(record.time)
     const dayTotals = days.get(day) ?? emptyTotals()
@@ -259,19 +264,19 @@ export function summarizeRecords(records: readonly UsageRecord[], resolve: RateR
     // we know the route. The session dimension keeps it too: request
     // counts must reconcile per session, and a failure belongs to its
     // session even when no model was ever observed.
-    if (record.model !== '') {
+    if (model !== '') {
       const hour = hourKey(record.time)
-      const hourTotals = hours.get(hourRowKey(hour, record.model)) ?? emptyTotals()
+      const hourTotals = hours.get(hourRowKey(hour, model)) ?? emptyTotals()
       addUsage(hourTotals, record)
-      hours.set(hourRowKey(hour, record.model), hourTotals)
-      const modelTotals = models.get(record.model) ?? emptyTotals()
+      hours.set(hourRowKey(hour, model), hourTotals)
+      const modelTotals = models.get(model) ?? emptyTotals()
       addUsage(modelTotals, record)
-      models.set(record.model, modelTotals)
+      models.set(model, modelTotals)
     }
     const rate = resolve(record)
-    const rowKey = rateRowKey(day, record.model, rate)
+    const rowKey = rateRowKey(day, model, rate)
     const cell = rated.get(rowKey)
-      ?? { day, model: record.model, rate, totals: emptyTotals() }
+      ?? { day, model, rate, totals: emptyTotals() }
     addUsage(cell.totals, record)
     rated.set(rowKey, cell)
     // An auxiliary (bypass) request has no owning conversation: it folds
@@ -280,16 +285,16 @@ export function summarizeRecords(records: readonly UsageRecord[], resolve: RateR
     // (kind, day, model, rate) dimension backs the runtime-overhead block.
     if (record.kind === 'aux') {
       const auxKind = auxKindOfRecord(record)
-      const key = auxRowKey(auxKind, day, record.model, rate)
+      const key = auxRowKey(auxKind, day, model, rate)
       const auxCell = aux.get(key)
-        ?? { auxKind, day, model: record.model, rate, totals: emptyTotals() }
+        ?? { auxKind, day, model, rate, totals: emptyTotals() }
       addUsage(auxCell.totals, record)
       aux.set(key, auxCell)
     } else {
       const sessionCell: UsageSessionRow = {
         sessionId: record.sessionId,
         day,
-        model: record.model,
+        model,
         rate,
         lastTime: record.time,
         totals: emptyTotals(),
@@ -408,7 +413,9 @@ export function filterRecordsByRange(
     (wanted === undefined || wanted.has(record.sessionId))
     && (start === undefined || record.time >= start)
     && (end === undefined || record.time <= end)
-    && matchesModel(record.model, model, canonical))
+    // The model filter matches the effective name (response model first),
+    // the same key every aggregated dimension groups under.
+    && matchesModel(effectiveModelOf(record), model, canonical))
 }
 
 /**
@@ -538,7 +545,9 @@ function dayStart(day: string): number {
  * ([from 00:00, to 23:59:59.999] local). No filters returns the input as-is.
  * With a canonical map, `model` matches the priced family (the modelId and
  * every identified name of the same feed row); unpriced full names ignore case.
- * byModel rows stay keyed by the raw name — {@link attachCosts} folds them.
+ * byModel rows stay keyed by the effective name (response model when the
+ * adapter reported one, the routed name otherwise) — {@link attachCosts}
+ * folds them.
  * @param summary - the unfiltered summary.
  * @param from - first day key (`YYYY-MM-DD`), inclusive.
  * @param to - last day key (`YYYY-MM-DD`), inclusive.
@@ -631,8 +640,9 @@ export function summaryForSessions(summary: TokenSummary, sessionIds: readonly s
  * With a canonical map, byModel rows and the aux per-kind detail lines that
  * hit the same feed model (the modelId or any of its aliases) fold onto that
  * modelId; unpriced names group by their complete case-insensitive name,
- * retaining display spelling. rateRows / byHour / bySession keep the raw
- * name so a later pricing update can regroup without rebuild.
+ * retaining display spelling. rateRows / byHour / bySession keep the
+ * effective name (response model when the adapter reported one, the routed
+ * name otherwise) so a later pricing update can regroup without rebuild.
  * @param summary - the aggregated summary (build or filtered).
  * @param pricing - the active pricing table.
  * @param canonical - alias → modelId map; empty / omitted leaves raw names.

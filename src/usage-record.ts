@@ -80,6 +80,13 @@ export interface UsageRecord {
   /** Provider model id that produced the message; a failure row carries the
    * session's last-known route model ('' when none was ever observed). */
   model: string
+  /** Provider-reported model id of the response body — the model that
+   * actually served the request, which a routed alias may differ from
+   * (e.g. `auto/GLM-5.3-Flash` → `glm-5.3-flash`). Parsed defensively from
+   * the adapter's private replay envelope, so it is absent whenever the
+   * adapter reports none or its shape is unrecognized; the routed `model`
+   * stays the billing identity either way. */
+  responseModel?: string
   /** Token buckets; omitted when the provider reported no usage at all. */
   usage?: UsageFields
   /** Record origin; absent means a plain request (legacy rows predate the
@@ -191,6 +198,43 @@ export function projectUsage(usage: TokenUsage | undefined): UsageFields | undef
   }
 }
 
+/**
+ * The provider-reported model of one settled response, read defensively from
+ * the adapter's private replay envelope (`finish` chunk / assistant source).
+ * Only the known pi-ai shape (`kind: 'pi-ai'`, `version: 2`) is interpreted:
+ * its optional `responseModel` is the model id the provider's own response
+ * named, which a routed alias may differ from. Every other envelope —
+ * including the official deepseek-messages shape, which carries no response
+ * model — reads as absent rather than guessed.
+ * @param replayState - the opaque `ReplayEnvelope`, straight off the wire.
+ * @returns the reported model id, or undefined when absent/unrecognized.
+ */
+export function responseModelOfReplay(replayState: unknown): string | undefined {
+  if (typeof replayState !== 'object' || replayState === null) return undefined
+  const envelope = replayState as Record<string, unknown>
+  const response = envelope['response']
+  if (typeof response !== 'object' || response === null) return undefined
+  const body = response as Record<string, unknown>
+  if (body['kind'] !== 'pi-ai' || body['version'] !== 2) return undefined
+  const model = body['responseModel']
+  return typeof model === 'string' && model !== '' ? model : undefined
+}
+
+/**
+ * The model name every consumer side (pricing resolution, canonical folding,
+ * display grouping) reads off a record: the provider-reported response model
+ * when the adapter named one, the routed request name otherwise. The response
+ * id usually matches the pricing feed directly, so the alias chain resolves
+ * fewer guesses; rows without the field (older logs, adapters without a
+ * reported model) behave exactly as before.
+ * @param record - one usage record.
+ * @returns the name to resolve, fold, and display under ('' stays '' — an
+ * unattributed failure row keeps staying out of the model dimensions).
+ */
+export function effectiveModelOf(record: Pick<UsageRecord, 'model' | 'responseModel'>): string {
+  return record.responseModel ?? record.model
+}
+
 /** Build the log row for one assistant/message session event. */
 export function recordFromEvent(
   event: SessionEvent<'assistant/message'>,
@@ -200,12 +244,14 @@ export function recordFromEvent(
   const usage = projectUsage(event.data.usage)
   const latency = isCount(timing?.latencyMs) ? { latencyMs: timing.latencyMs } : {}
   const firstToken = isCount(timing?.firstTokenLatencyMs) ? { firstTokenLatencyMs: timing.firstTokenLatencyMs } : {}
+  const responseModel = responseModelOfReplay(event.data.message.source.replayState)
   return {
     requestId: event.data.message.id,
     time: event.time,
     sessionId,
     model: event.data.message.source.model,
     ...(usage !== undefined ? { usage } : {}),
+    ...(responseModel !== undefined ? { responseModel } : {}),
     ...latency,
     ...firstToken,
   }
@@ -385,6 +431,7 @@ function isRecord(value: unknown): value is UsageRecord {
     && isCount(record.time)
     && typeof record.sessionId === 'string'
     && typeof record.model === 'string'
+    && (record.responseModel === undefined || record.responseModel === null || typeof record.responseModel === 'string')
     && (record.usage === undefined || record.usage === null || isUsageFields(record.usage))
 }
 
@@ -415,6 +462,10 @@ export function coerceRecord(value: unknown): UsageRecord | null {
     ? { failureCode: record.failureCode } : {}
   const latency = isCount(record.latencyMs) ? { latencyMs: record.latencyMs } : {}
   const firstToken = isCount(record.firstTokenLatencyMs) ? { firstTokenLatencyMs: record.firstTokenLatencyMs } : {}
+  // The response model survives the round trip on any row kind: it is
+  // display-side metadata only, never part of the dedupe or billing identity.
+  const responseModel = typeof record.responseModel === 'string' && record.responseModel !== ''
+    ? { responseModel: record.responseModel } : {}
   if (record.usage === undefined || record.usage === null) {
     return {
       requestId: record.requestId as string,
@@ -426,6 +477,7 @@ export function coerceRecord(value: unknown): UsageRecord | null {
       ...failureCode,
       ...latency,
       ...firstToken,
+      ...responseModel,
     }
   }
   const fields = record.usage as Record<string, unknown>
@@ -441,6 +493,7 @@ export function coerceRecord(value: unknown): UsageRecord | null {
     ...failureCode,
     ...latency,
     ...firstToken,
+    ...responseModel,
     usage: {
       inputTokens: fields.inputTokens as number,
       outputTokens: fields.outputTokens as number,

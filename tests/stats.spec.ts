@@ -33,6 +33,45 @@ function record(time: number, model: string, usage?: { input?: number; output?: 
 }
 
 describe('summarizeRecords', () => {
+  it('groups every model dimension under the provider-reported response model first', () => {
+    const at = new Date(2026, 0, 15, 12).getTime()
+    const summary = summarizeRecords([
+      { ...record(at, 'auto/GLM-5.3-Flash', { input: 10, output: 5 }), responseModel: 'glm-5.3-flash' },
+      { ...record(at + 1, 'zcode/GLM-5.3-Flash', { input: 1, output: 1 }), responseModel: 'glm-5.3-flash' },
+    ])
+    // Both routed aliases fold onto one row under the reported name — no
+    // provider-prefix stripping or alias regex needed for the grouping key.
+    expect(summary.byModel.map(row => row.model)).toEqual(['glm-5.3-flash'])
+    expect(summary.byModel[0]!.totals.requests).toBe(2)
+    expect(summary.byHour[0]!.model).toBe('glm-5.3-flash')
+    expect(summary.rateRows[0]!.model).toBe('glm-5.3-flash')
+    expect(summary.bySession[0]!.model).toBe('glm-5.3-flash')
+    // The recent window keeps the raw record untouched (both names present).
+    expect(summary.recent[0]).toMatchObject({ model: 'zcode/GLM-5.3-Flash', responseModel: 'glm-5.3-flash' })
+  })
+
+  it('falls back to the routed name when the adapter reported no response model', () => {
+    const at = new Date(2026, 0, 15, 12).getTime()
+    const summary = summarizeRecords([
+      record(at, 'auto/GLM-5.3-Flash', { input: 10, output: 5 }),
+    ])
+    expect(summary.byModel.map(row => row.model)).toEqual(['auto/GLM-5.3-Flash'])
+  })
+
+  it('matches the model filter against the effective name on record-filtered reads', () => {
+    const at = new Date(2026, 0, 15, 12).getTime()
+    const records: UsageRecord[] = [
+      { ...record(at, 'auto/GLM-5.3-Flash', { input: 10, output: 5 }), responseModel: 'glm-5.3-flash' },
+      record(at + 1, 'deepseek-chat', { input: 1, output: 1 }),
+    ]
+    const summary = summarizeRecords(records)
+    const filtered = filterSummary({ dataDir: '/x', ...summary }, undefined, undefined, 'glm-5.3-flash')
+    expect(filtered.byModel.map(row => row.model)).toEqual(['glm-5.3-flash'])
+    expect(filtered.total.requests).toBe(1)
+    // The recent window's record-level filter walks the same effective name.
+    expect(requestSeriesOf(records, undefined, undefined, 'glm-5.3-flash')).toHaveLength(1)
+  })
+
   it('folds a failure record into the failures dimension only, never requests', () => {
     const summary = summarizeRecords([
       record(1_700_000_000_000, 'deepseek-chat', { input: 10, output: 5 }),
@@ -736,6 +775,30 @@ describe('attachCosts', () => {
       'deepseek-v4-flash',
       'deepseek-v4-flash-0731',
     ])
+  })
+
+  it('bills through the reported response model without any alias pattern', () => {
+    // The feed only names the canonical id; the routed alias resolves only
+    // because the record carries the provider-reported response model.
+    const table: PricingTable = {
+      'glm-5.3-flash': {
+        base: { inputPerMillion: 1, outputPerMillion: 2 },
+        contextTiers: [],
+        dailySlots: [],
+        timeRules: [],
+      },
+    }
+    const summary = attachCosts({
+      dataDir: 'C:/data',
+      ...summarizeRecords([
+        { ...record(1, 'zcode/GLM-5.3-Flash-Trial', { input: 1_000_000 }), responseModel: 'glm-5.3-flash' },
+      ]),
+    }, table)
+    expect(summary.byModel).toEqual([
+      { model: 'glm-5.3-flash', totals: expect.objectContaining({ requests: 1 }), cost: 1 },
+    ])
+    expect(summary.totalCost).toBe(1)
+    expect(summary.unpricedModels).toEqual([])
   })
 
   it('leaves unpriced names unmerged', () => {

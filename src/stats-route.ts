@@ -20,7 +20,7 @@ import { SessionMetaStore } from './session-meta.ts'
 import { bucketSeries, pointsOfBuckets } from './trend-bucket.ts'
 import { decodeChildGroups, decodeSessionScope, DIR_GUARD_PATH, FULL_SYNC_PATH, MIGRATION_PATH, PRICING_PATH, STATS_PATH, UNPRICED_KEY } from './wire.ts'
 import type { ChildGroup, ChildUsageSummary, CostedSummary, DirectoryGuardView, DisplayCurrency, FullSyncView, PricingOverviewPayload, PricingTable, RequestPoint, SessionUsageRow, StatsFields, StatsPayload, TokenSummary } from './wire.ts'
-import type { UsageRecord } from './usage-record.ts'
+import { effectiveModelOf, type UsageRecord } from './usage-record.ts'
 import { AssociationError } from './pricing-associations.ts'
 import { PRICING_SYNC_PATH, type PricingSyncResult } from './wire.ts'
 
@@ -449,8 +449,11 @@ export function createStatsRoute(dir: () => string, options: StatsRouteOptions =
         const { table: pricing, canonical, usdExchangeRate } = context
         // Per-record pricing: each record resolves through the rule chain at
         // its own timestamp (tier approximated by its input-side tokens).
+        // The name resolved under is the record's effective model — the
+        // provider-reported response model when present, the routed name
+        // otherwise — the same key every aggregated dimension groups under.
         const resolve: RateResolver = record => {
-          const rules = context.ratesForModel(record.model)
+          const rules = context.ratesForModel(effectiveModelOf(record))
           if (rules === undefined) return UNPRICED_KEY
           const tokens = record.usage
           const contextSize = tokens === undefined ? 0
