@@ -103,6 +103,28 @@ export interface UsageRecord {
   latencyMs?: number
   /** Wall time in milliseconds from request dispatch (`step/start`) to the first non-empty token delta chunk. */
   firstTokenLatencyMs?: number
+  /** Provider route key the message's own provenance named
+   * (`assistant/message` source.provider). Optional route metadata for
+   * switch detection and documented minimum-input rules. Legacy rows may
+   * omit it without disabling cache hints. Never part of the
+   * dedupe or billing identity. */
+  provider?: string
+  /** Settled-with-partial-output cancellation: the assistant message was
+   * finalized from a mid-stream abort (`assistant/message` `interrupted: true`
+   * — the host marks a turn the user cancelled AFTER content was delivered,
+   * an acknowledged cancellation, not an unknown interruption). The row
+   * keeps its kind/usage (billing facts unchanged); this only lets the
+   * request pool show 已取消 instead of 已完成. Absent on legacy rows and
+   * on ordinary completions. */
+  interrupted?: true
+  /** Absolute epoch ms when the request was dispatched (`step/start`), on
+   * rows recorded with timing. The start-order anchor for the request pool;
+   * absent on legacy rows, failure and compaction rows (they order by
+   * `time`). */
+  startedAt?: number
+  /** Exact waterfall attempt clock, when observed live. Kept separately
+   * from the legacy step-level timing so aggregate statistics do not change. */
+  attemptTiming?: { startedAt: number; settledAt: number; firstTokenAt?: number }
 }
 
 /** Optional timing figures for one model request. */
@@ -111,6 +133,10 @@ export interface RequestTiming {
   latencyMs?: number
   /** Wall time in milliseconds from request dispatch (`step/start`) to the first non-empty token delta chunk. */
   firstTokenLatencyMs?: number
+  /** Absolute epoch ms of the request dispatch (`step/start`): the row's
+   * start-order anchor, so the pool sorts by when requests BEGAN even after
+   * a reload (the row's `time` alone would sort by settlement order). */
+  startedAt: number
 }
 
 /** Whether a stream chunk carries a non-empty first-token delta. */
@@ -245,6 +271,10 @@ export function recordFromEvent(
   const latency = isCount(timing?.latencyMs) ? { latencyMs: timing.latencyMs } : {}
   const firstToken = isCount(timing?.firstTokenLatencyMs) ? { firstTokenLatencyMs: timing.firstTokenLatencyMs } : {}
   const responseModel = responseModelOfReplay(event.data.message.source.replayState)
+  const provider = event.data.message.source.provider !== ''
+    ? { provider: event.data.message.source.provider } : {}
+  const interrupted = event.data.interrupted === true ? { interrupted: true as const } : {}
+  const started = isCount(timing?.startedAt) ? { startedAt: timing.startedAt } : {}
   return {
     requestId: event.data.message.id,
     time: event.time,
@@ -254,6 +284,9 @@ export function recordFromEvent(
     ...(responseModel !== undefined ? { responseModel } : {}),
     ...latency,
     ...firstToken,
+    ...started,
+    ...provider,
+    ...interrupted,
   }
 }
 
@@ -466,6 +499,24 @@ export function coerceRecord(value: unknown): UsageRecord | null {
   // display-side metadata only, never part of the dedupe or billing identity.
   const responseModel = typeof record.responseModel === 'string' && record.responseModel !== ''
     ? { responseModel: record.responseModel } : {}
+  // The request-pool evidence fields round-trip the same way (display-side
+  // only): the provider route key and the interrupted-cancellation hint.
+  // The cache-read evidence needs no extra flag — the bucket's own presence
+  // inside `usage` IS the report (a 0 survives projection as 0).
+  const provider = typeof record.provider === 'string' && record.provider !== ''
+    ? { provider: record.provider } : {}
+  const interrupted = record.interrupted === true ? { interrupted: true as const } : {}
+  const startedAt = isCount(record.startedAt) ? { startedAt: record.startedAt } : {}
+  const clock = record.attemptTiming as Record<string, unknown> | undefined
+  const attemptTiming = typeof clock === 'object' && clock !== null
+    && isCount(clock.startedAt) && isCount(clock.settledAt) && clock.settledAt >= clock.startedAt
+    ? { attemptTiming: {
+        startedAt: clock.startedAt,
+        settledAt: clock.settledAt,
+        ...(isCount(clock.firstTokenAt) && clock.firstTokenAt >= clock.startedAt && clock.firstTokenAt <= clock.settledAt
+          ? { firstTokenAt: clock.firstTokenAt } : {}),
+      } }
+    : {}
   if (record.usage === undefined || record.usage === null) {
     return {
       requestId: record.requestId as string,
@@ -477,7 +528,11 @@ export function coerceRecord(value: unknown): UsageRecord | null {
       ...failureCode,
       ...latency,
       ...firstToken,
+      ...startedAt,
+      ...attemptTiming,
       ...responseModel,
+      ...provider,
+      ...interrupted,
     }
   }
   const fields = record.usage as Record<string, unknown>
@@ -493,7 +548,11 @@ export function coerceRecord(value: unknown): UsageRecord | null {
     ...failureCode,
     ...latency,
     ...firstToken,
+    ...startedAt,
+    ...attemptTiming,
     ...responseModel,
+    ...provider,
+    ...interrupted,
     usage: {
       inputTokens: fields.inputTokens as number,
       outputTokens: fields.outputTokens as number,

@@ -119,13 +119,14 @@ function tipOf(t: TranslateNS<'token-usage'>, point: PlottedPoint, mode: TrendCh
  * the `t` seat for the empty hint and chart aria-label.
  * @returns the SVG chart, or a placeholder for an empty range.
  */
-export function TrendChart({ rows, hours, requests, from, to, mode = 'interval', t }: {
+export function TrendChart({ rows, hours, requests, from, to, mode = 'interval', height = HEIGHT, t }: {
   rows: readonly UsageDayRow[]
   hours?: readonly UsageHourRow[]
   requests?: readonly RequestPoint[]
   from?: string
   to?: string
   mode?: TrendChartMode
+  height?: number
   t: TranslateNS<'token-usage'>
 }): ReactNode {
   const isLight = useIsLightMode()
@@ -165,7 +166,7 @@ export function TrendChart({ rows, hours, requests, from, to, mode = 'interval',
     count: 'count' in point ? point.count : undefined,
   }))
   const { top, ticks } = tickValues(Math.max(...points.map(p => p.tokens)))
-  const innerHeight = HEIGHT - TOP - BOTTOM - X_LABELS
+  const innerHeight = height - TOP - BOTTOM - X_LABELS
   // scaleSeries returns absolute canvas coordinates already offset by LEFT,
   // so the dots / path / x-axis labels can plug xs[i] straight into the
   // SVG `cx`/`x` attributes without re-adding the y-axis margin.
@@ -232,7 +233,7 @@ export function TrendChart({ rows, hours, requests, from, to, mode = 'interval',
     <svg
       role="img"
       aria-label={chartAria}
-      viewBox={`0 0 ${width} ${HEIGHT}`}
+      viewBox={`0 0 ${width} ${height}`}
       ref={svgRef}
       className={`${styles.chart} ${isLight ? styles.chartLight : ''}`.trim()}
       data-theme={isLight ? 'light' : 'dark'}
@@ -347,7 +348,7 @@ export function TrendChart({ rows, hours, requests, from, to, mode = 'interval',
         <text
           key={index}
           x={xs[index]}
-          y={HEIGHT - 6}
+          y={height - 6}
           textAnchor={index === 0 ? 'start' : index === points.length - 1 ? 'end' : 'middle'}
           className={styles.tick}
         >

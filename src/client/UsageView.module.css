@@ -10,6 +10,8 @@
  * band is not covered. ConversationRoot publishes --dsh-composer-height. */
 
 .root {
+  container: usage / inline-size;
+  color: var(--dsw-alias-label-primary);
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -23,6 +25,8 @@
   min-height: 0;
   overflow-y: auto;
 }
+
+.root > * { flex-shrink: 0; }
 
 .head {
   display: flex;
@@ -161,8 +165,8 @@
 /* Band 2: chart (left, wider) + per-model table (right) on a wide pane. */
 .mid {
   display: grid;
-  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
-  gap: 14px;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  gap: 24px;
   align-items: start;
 }
 
@@ -288,8 +292,302 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* Band 3: the live request pool — the latest-request panel above, the
+ * history table below. The panel is one request, not a session mean; the
+ * table's eleven columns never reorder. */
+
+.poolSection {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  margin-top: 4px;
+}
+
+.poolHead {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px 12px;
+  flex-wrap: wrap;
+}
+
+.poolContext {
+  font-size: 11px;
+  color: var(--dsw-alias-label-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.poolEmpty {
+  padding: 12px 0;
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.latestPanel {
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 9px;
+  background: var(--dsw-alias-fill-container, transparent);
+  padding: 14px 16px;
+  min-width: 0;
+}
+
+/* Identity row: origin badge, state pill, model + cache label (one
+ * non-breaking group), time. Wrapping between GROUPS is fine; the model
+ * and its label never split. */
+.requestIdentity {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  min-width: 0;
+}
+
+.poolBadge {
+  flex: none;
+  font-size: 11px;
+  padding: 1px 7px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 5px;
+  color: var(--dsw-alias-label-secondary);
+  white-space: nowrap;
+}
+
+.poolState {
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.requestIdentity .poolState { display: inline-flex; align-items: center; gap: 5px; }
+.statusDot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; flex: none; }
+.latestPanel .modelName { font-size: 13px; font-weight: 500; }
+
+.stateDone { color: var(--dsw-alias-state-success-primary, #16a34a); }
+.stateFailed { color: var(--dsw-alias-state-error-primary, #dc2626); }
+.statePending { color: light-dark(#b45309, #d9ac64); }
+.stateStreaming { color: var(--dsw-alias-link-primary, var(--dsw-alias-label-primary)); }
+
+/* The 「缓存过低」 label: amber on a light amber wash, always glued to the
+ * model name's right (the group is nowrap; the name compresses first). */
+.modelInline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  white-space: nowrap;
+}
+
+.cacheLoss {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: light-dark(#b45309, #d9ac64);
+  background: light-dark(#fff1d8, #352b1d);
+  border-radius: 4px;
+  padding: 2px 6px;
+  white-space: nowrap;
+}
+
+.cacheLoss svg { width: 12px; height: 12px; flex: none; }
+
+/* The six fixed metrics of the latest panel, in frozen order. */
+.requestMetrics {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 12px;
+  padding: 13px 0;
+}
+
+.metricValue {
+  font-size: 23px;
+  font-weight: 500;
+  letter-spacing: -0.25px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.metricUnit { margin-left: 4px; font-size: 11px; color: var(--dsw-alias-label-tertiary); letter-spacing: 0; }
+
+.metricLabel {
+  font-size: 11px;
+  color: var(--dsw-alias-label-tertiary);
+  margin-top: 2px;
+}
+
+.requestFooter {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px 18px;
+  flex-wrap: wrap;
+  border-top: 1px solid var(--dsw-alias-border-l1);
+  padding-top: 8px;
+  font-size: 11px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.requestBuckets { display: flex; gap: 8px 15px; flex-wrap: wrap; }
+
+.requestFooter b {
+  color: var(--dsw-alias-label-primary);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+
+.poolNotice {
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: light-dark(#b45309, #d9ac64);
+}
+
+.poolNoticeError { color: var(--dsw-alias-state-error-primary); }
+.poolNoticeNeutral { color: var(--dsw-alias-label-tertiary); }
+
+/* History table: eleven columns, horizontal scroll when the pane is too
+ * narrow (columns are never hidden). */
+.poolTableWrap {
+  max-height: 196px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+.poolTableWrap:focus-visible { outline: 2px solid var(--dsw-alias-border-l2); outline-offset: 2px; }
+
+.poolTable {
+  width: 100%;
+  min-width: 880px;
+  border-collapse: collapse;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.poolTable th,
+.poolTable td {
+  padding: 8px 6px;
+  text-align: right;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+  white-space: nowrap;
+}
+
+.poolTable th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 6px;
+  background: var(--dsw-alias-bg-base, var(--dsw-alias-bg-layer-1));
+  font-weight: 400;
+  color: var(--dsw-alias-label-secondary);
+  border-bottom: 1.5px solid var(--dsw-alias-border-l2);
+}
+
+/* Origin, state, time, model read left; the metrics read right. */
+.poolTable th:nth-child(-n + 4),
+.poolTable td:nth-child(-n + 4) {
+  text-align: left;
+}
+
+.poolOrigin,
+.poolTime {
+  color: var(--dsw-alias-label-secondary);
+}
+
+.poolModel {
+  max-width: 200px;
+}
+
+.poolModel .modelInline {
+  max-width: 200px;
+}
+
+.poolModel .modelName {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.poolModelHead {
+  text-align: left;
+}
+
+.poolTable tbody tr:hover {
+  background-color: var(--dsw-interactive-bg-hover);
+}
+
+/* A new arrival lifts in gently; reduced-motion users get the plain swap.
+ * The table itself never re-renders as a whole-flash. */
+@media (prefers-reduced-motion: no-preference) {
+  .latestPanel {
+    animation: pool-arrive 0.25s ease-out;
+  }
+
+  @keyframes pool-arrive {
+    from { opacity: 0.4; }
+    to { opacity: 1; }
+  }
+}
+
+/* Narrow panes: the metrics fold to two rows of three; the history table
+ * keeps all eleven columns behind its own horizontal scroll. */
+@container usage (max-width: 900px) {
+  .requestMetrics {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .poolTableWrap { max-height: 230px; }
+}
+
+/* Phone-width panes: each history row becomes a card — origin/state/time on
+ * the first line, model + label on its own line, then the metrics in the
+ * same column order (label-prefixed). The label never leaves the model. */
+@container usage (max-width: 480px) {
+  .poolTableWrap { max-height: 240px; }
+  .poolTable thead {
+    display: none;
+  }
+
+  .poolTable,
+  .poolTable tbody {
+    display: block;
+    min-width: 0;
+  }
+
+  .poolTable tbody tr {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 4px 9px;
+    padding: 9px 0;
+    border-bottom: 1px solid var(--dsw-alias-border-l1);
+  }
+
+  .poolTable td {
+    border-bottom: none;
+    text-align: left !important;
+    padding: 0 !important;
+  }
+
+  .poolTable td:nth-child(4) {
+    grid-column: 1 / -1;
+  }
+
+  .poolTable td::before {
+    content: attr(data-label) ' ';
+    color: var(--dsw-alias-label-tertiary);
+  }
+
+  .poolModel,
+  .poolModel .modelInline {
+    max-width: 100%;
+  }
+
+  .metricValue {
+    font-size: 21px;
+  }
+}
+
 /* Narrow panes fall back to stacked bands. */
-@media (max-width: 900px) {
+@container usage (max-width: 900px) {
   .cards {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
@@ -297,4 +595,8 @@
   .mid {
     grid-template-columns: 1fr;
   }
+}
+
+@media (max-width: 600px) {
+  .root { padding-left: 12px; padding-right: 12px; }
 }

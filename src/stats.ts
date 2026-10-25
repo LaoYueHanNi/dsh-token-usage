@@ -185,8 +185,10 @@ function auxKindOfRecord(record: UsageRecord): AuxKind {
 /** Smallest generation span (latency − first token) a request must show to
  * count as a streaming sample for the performance accumulators: a shorter
  * span means the response landed in one shot (non-streaming), and its
- * "speed" — thousands of tokens over a few ms — is pure noise. */
-const PERF_STREAM_MIN_GEN_MS = 500
+ * "speed" — thousands of tokens over a few ms — is pure noise. The request
+ * pool's settled-speed gate shares the gate (request-details.ts), so one
+ * threshold cannot drift between the model table and the request rows. */
+export const PERF_STREAM_MIN_GEN_MS = 500
 
 /**
  * Fold one record into totals; a record without provider usage still counts a

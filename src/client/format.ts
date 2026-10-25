@@ -231,6 +231,37 @@ export function formatSpeed(tokensPerSecond: number): string {
 }
 
 /**
+ * One request's cache-hit rate as display text, for the usage tab's request
+ * pool ONLY: at most one decimal (`49.96%` → `50%` — the rounding that the
+ * raw-value-first policy must see through). Undefined renders `—` (unknown,
+ * never 0%). The global `hitRateDisplay` keeps summarizing whole sessions.
+ * @param rate - the raw [0,1] rate, or undefined when unknown.
+ */
+export function formatRequestRate(rate: number | undefined): string {
+  if (rate === undefined || !Number.isFinite(rate)) return '—'
+  return `${percent(rate * 100)}%`
+}
+
+/**
+ * A full-precision rate text for tooltips: two decimals (`49.96%`), so a
+ * displayed `50%` that is actually below the threshold can explain itself.
+ */
+export function formatRequestRateExact(rate: number): string {
+  return `${(rate * 100).toFixed(2)}%`
+}
+
+/**
+ * Time-of-day text for a request-pool row (`15:45:08`, locale-independent
+ * zero-padded) — the compact column form the 11-column table needs.
+ * @param ms - epoch milliseconds.
+ */
+export function formatTimeOfDay(ms: number): string {
+  const date = new Date(ms)
+  const pad = (value: number): string => String(value).padStart(2, '0')
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+}
+
+/**
  * The failure pill's hover tooltip text: one `label ×count` line per failure
  * class, largest count first (code name ascending breaks ties), newline-joined —
  * the shell Tooltip renders `pre-line`, so each line lands on its own row.

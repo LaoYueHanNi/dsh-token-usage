@@ -64,6 +64,7 @@ describe('recordFromEvent', () => {
       time: 1_700_000_000_000,
       sessionId: 'session-1',
       model: 'deepseek-chat',
+      provider: 'deepseek',
       usage: { inputTokens: 10, outputTokens: 5, cacheReadTokens: 3 },
     })
   })
@@ -73,22 +74,28 @@ describe('recordFromEvent', () => {
     expect('usage' in record).toBe(false)
   })
 
-  it('attaches latencyMs and firstTokenLatencyMs when provided', () => {
+  it('attaches latencyMs, firstTokenLatencyMs, and the start anchor when provided', () => {
     const record = recordFromEvent(messageEvent(), 'session-1', {
+      startedAt: 1_700_000_000_000 - 3200,
       latencyMs: 3200,
       firstTokenLatencyMs: 420,
     })
     expect(record.latencyMs).toBe(3200)
     expect(record.firstTokenLatencyMs).toBe(420)
+    // The start anchor rides along: the pool's start-order key survives the
+    // log (a reload sorts by when requests BEGAN, not when they settled).
+    expect(record.startedAt).toBe(1_700_000_000_000 - 3200)
   })
 
   it('omits invalid or negative timing figures', () => {
     const record = recordFromEvent(messageEvent(), 'session-1', {
+      startedAt: 1_700_000_000_000,
       latencyMs: -10,
       firstTokenLatencyMs: NaN,
     })
     expect('latencyMs' in record).toBe(false)
     expect('firstTokenLatencyMs' in record).toBe(false)
+    expect(record.startedAt).toBe(1_700_000_000_000)
   })
 
   it('carries the provider-reported response model from the replay envelope', () => {
@@ -124,6 +131,33 @@ describe('recordFromEvent', () => {
       replayState: { response: { kind: 'pi-ai', version: 2, api: 'openai-completions', provider: 'p', model: 'zcode/GLM-5.3-Flash-Trial', responseModel: 'glm-5.3-flash', stopReason: 'stop' }, blocks: [] },
     }), 'session-1')
     expect(parseRecord(serializeRecord(record))).toEqual(record)
+  })
+
+  it('carries the request-pool evidence fields: provider key and the interrupted hint', () => {
+    const record = recordFromEvent(messageEvent({ provider: 'deepseek-official' }), 'session-1')
+    expect(record.provider).toBe('deepseek-official')
+    expect('interrupted' in record).toBe(false)
+    // An interrupted settlement keeps its kind/usage (billing facts) and
+    // adds only the display hint.
+    const interrupted = messageEvent({ provider: 'deepseek-official' }) as SessionEvent<'assistant/message'> & { data: { interrupted?: true } }
+    interrupted.data.interrupted = true
+    const row = recordFromEvent(interrupted, 'session-1')
+    expect(row.interrupted).toBe(true)
+    expect(row.usage).toEqual({ inputTokens: 10, outputTokens: 5, cacheReadTokens: 3 })
+    expect(parseRecord(serializeRecord(row)).interrupted).toBe(true)
+    expect(parseRecord(serializeRecord(record)).provider).toBe('deepseek-official')
+  })
+
+  it('round-trips the start anchor through serialize/parse and omits it on legacy rows', () => {
+    const started = recordFromEvent(messageEvent(), 'session-1', { startedAt: 1_700_123_456_789, latencyMs: 900 })
+    const parsed = parseRecord(serializeRecord(started))
+    expect(parsed?.startedAt).toBe(1_700_123_456_789)
+    // A legacy row (or any row without one) reads back without the field.
+    const bare = parseRecord(serializeRecord(recordFromEvent(messageEvent(), 'session-1')))
+    expect('startedAt' in bare!).toBe(false)
+    // A corrupted anchor normalizes to omission, never to a bogus time.
+    const corrupt = parseRecord(JSON.stringify({ ...JSON.parse(serializeRecord(started)), startedAt: 'yesterday' }))
+    expect('startedAt' in corrupt!).toBe(false)
   })
 })
 
@@ -357,7 +391,7 @@ describe('parseRecord', () => {
       sessionId: 's1',
       turn: 3,
       step: 1,
-      provider: 'deepseek',
+      providerHint: 'deepseek',
       model: 'deepseek-chat',
       origin: 'live',
       usage: {

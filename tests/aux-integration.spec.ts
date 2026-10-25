@@ -13,6 +13,8 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Context, Service } from '@deepseek-ai/cordis'
 import * as plugin from '../src/index.ts'
+import { messageEvent } from './helpers.ts'
+import type { SessionEvent } from '@deepseek-ai/dsh-session'
 
 /** Minimal host service stubs: the plugin only needs their presence. */
 class MockSessions extends Service {
@@ -155,6 +157,22 @@ describe('auxiliary request recording', () => {
     }
     vi.unstubAllEnvs()
     vi.unstubAllGlobals()
+  })
+
+  it('persists linked attempt timing through the real plugin event listener and day log', async () => {
+    const dir = await mount({ recordAux: false })
+    ctx!.emit('session/event', { id: 's1' }, { type: 'step/start', seq: 1, time: 1_000, data: { turn: 1, step: 2 } } as SessionEvent)
+    const before = Date.now()
+    await streamWaterfall(ctx!, { sessionId: 's1', provider: 'deepseek-account', model: 'deepseek-chat' }, [
+      { type: 'text-delta', index: 0, text: 'hello' }, ...SUCCESS_CHUNKS,
+    ])
+    ctx!.emit('session/event', { id: 's1' }, messageEvent({ messageId: 'timed', time: Date.now() }))
+    const rows = await pollRows(dir, 1)
+    const clock = rows[0]!.attemptTiming as { startedAt: number; settledAt: number; firstTokenAt: number }
+    expect(clock.startedAt).toBeGreaterThanOrEqual(before)
+    expect(clock.settledAt).toBeGreaterThanOrEqual(clock.startedAt)
+    expect(clock.firstTokenAt).toBeGreaterThanOrEqual(clock.startedAt)
+    expect(rows[0]!.startedAt).toBe(1_000)
   })
 
   it('records one aux row per successful bypass stream and passes chunks through', async () => {

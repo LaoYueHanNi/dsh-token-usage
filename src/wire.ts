@@ -737,6 +737,120 @@ export type StatsPayload = (CostedSummaryWire & {
 })
 
 /**
+ * 会话用量页「最新请求 / 实时请求」区的请求池上限。池包含顶部最新一条与
+ * 下方最多 19 条历史；上限只约束展示，从不截断日志、汇总或趋势。
+ */
+export const REQUEST_POOL_LIMIT = 20
+
+/** 一次 provider 请求尝试的生命周期状态。`interrupted` 是取消时已交付部分
+ * 用量的结算（宿主 `assistant/message` 的 `interrupted` 事实）；`cancelled`
+ * 是未结算任何用量的取消。 */
+export type RequestDetailState = 'waiting' | 'streaming' | 'completed' | 'failed' | 'cancelled' | 'interrupted'
+
+/**
+ * 「缓存过低」标签的低命中启发式为何不适用于该请求。稳定枚举值，客户端
+ * 本地化；绝不携带 prompt 或正文。优先级即评估顺序：状态排除 → 数据有效性
+ * → 序列排除 → 输入资格。
+ * - `cold-start`：该会话的首条请求（全量记录序列判定，不看 20 条窗口行号）。
+ * - `model-switch`：同会话相邻前一条请求的模型不同（切回旧模型同样保守排除）。
+ * - `in-flight`：等待首 token 或生成中，尚未完成。
+ * - `not-success`：失败 / 取消 / 中断，终态并非成功完成。
+ * - `compaction`：压缩 summarize 请求，输入特征特殊，不做性能诊断。
+ * - `cache-unreported`：provider 未显式报告缓存读（缺失不当 0%）。
+ * - `insufficient-input`：输入不满足该路由的缓存条件（按适配语义推导）。
+ * - `invalid-data`：分母为零、负值、NaN/Infinity 或计数矛盾。
+ */
+export type RequestCacheExclusion =
+  | 'cold-start'
+  | 'model-switch'
+  | 'in-flight'
+  | 'not-success'
+  | 'compaction'
+  | 'cache-unreported'
+  | 'insufficient-input'
+  | 'invalid-data'
+
+/** 单次请求的缓存命中评估。`rate` 是原始精度 [0,1]（绝不传格式化字符串）；
+ * band 是请求区域专用的三档策略（<50% loss / <80% low / 其余 normal），
+ * 排除与未知分别落 `excluded` / `unknown`，不改全局色阶。 */
+export interface RequestDetailCache {
+  rate?: number
+  /** Whether valid reported data is available, not a provider allowlist. */
+  eligibility: 'eligible' | 'ineligible' | 'unknown'
+  band: 'normal' | 'low' | 'loss' | 'excluded' | 'unknown'
+  reason?: RequestCacheExclusion
+}
+
+/** 一次真实 provider 请求尝试的展示明细：会话用量页请求池的一行。列表单位
+ * 是「一次尝试」，不是一条消息或一个 turn；自动重试的失败尝试与重试成功的
+ * 尝试各自成行。运行态与持久化记录原位合并（`durableRequestId` 关联），
+ * 终态不被迟到的进度降级。 */
+export interface RequestDetailView {
+  /** 一次真实尝试的稳定 UI 身份（process epoch + session + turn/step +
+   * attempt，或持久化 request id），从不用数组下标。 */
+  id: string
+  /** 对应持久化 UsageRecord 的 request id；合并锚点，缺失时该行只存在于
+   * 运行态。 */
+  durableRequestId?: string
+  sessionId: string
+  state: RequestDetailState
+  kind: 'request' | 'compaction' | 'failure'
+  /** 请求路由的模型（计费身份）。 */
+  requestedModel: string
+  /** provider 实际响应的模型（别名路由可不同）；缺失时以请求模型展示。 */
+  responseModel?: string
+  /** 实时观察到的尝试开始时刻（epoch ms）；历史行缺失。 */
+  startedAt?: number
+  /** 实时观察到的结算时刻（epoch ms）；历史行缺失。 */
+  settledAt?: number
+  /** 持久化记录的会话事件时间；旧记录只有它时保留其原义（非启动时刻）。 */
+  recordTime?: number
+  /** 展示排序锚点：实时行取 startedAt，历史行取 recordTime。 */
+  orderAt: number
+  orderBasis: 'start' | 'record'
+  /** 未缓存输入 token；绝不改写成总 prompt。 */
+  inputTokens?: number
+  outputTokens?: number
+  /** 缓存读；显式 0 保留为 0，未报告时缺失（与 0 严格区分）。 */
+  cacheReadTokens?: number
+  cacheWriteTokens?: number
+  /** 请求发出至结算的耗时（成功/失败尝试的独立计时；step 级历史计时时为
+   * 该记录的原口径）。 */
+  latencyMs?: number
+  /** 首个非空模型增量（含推理/工具参数）距开始的毫秒；整包返回或缺失时无。 */
+  firstTokenLatencyMs?: number
+  /** 运行中请求的已耗时，锚定服务端快照（asOf - startedAt），客户端不跑秒表。 */
+  elapsedMs?: number
+  /** 结算后的单次解码速度（tokens/s，服务端按生成时长 ≥500ms 的可信流式
+   * 样本门计算）；整包返回、output 为 0、计时无效或缺失时缺失——客户端
+   * 绝不用会话均值、字符数或 chunk 数补位。 */
+  speed?: number
+  /** 失败行 provider 中立的失败码（LlmFailure.code）。 */
+  failureCode?: string
+  /** 本请求计费（¥，wire 币种不变）；未定价时缺失。 */
+  cost?: number
+  pricingStatus: 'priced' | 'unpriced' | 'unknown'
+  cache: RequestDetailCache
+}
+
+/** 会话用量页请求池快照：已按范围过滤、去重后选取的最多 20 条请求。
+ * `items[0]` 优先取当前范围最新发起的活动请求（waiting / streaming），
+ * 无活动请求时取最新发起的一条；选取在截断前完成。
+ * `items.slice(1)` 按开始时间倒序，且不重复顶部请求。
+ * `activeCount` 是当前范围全部进行中的请求数，可能超过展示窗。 */
+export interface SessionRequestDetails {
+  items: readonly RequestDetailView[]
+  limit: number
+  /** 本次快照的服务端时间（epoch ms），不是请求发起时间。 */
+  asOf: number
+  activeCount: number
+  /** 实时能力档位：`lifecycle` = 可见等待/生成中生命周期与完成后可信单次
+   * 速度；`token-progress` = 另有生成中可信累计 token 计数（当前协议无此
+   * 路由，运行中行恒无 token/速度）；`settled-only` = 仅结算记录。 */
+  liveCapability: 'lifecycle' | 'token-progress' | 'settled-only'
+}
+
+/**
  * Default shape for code that doesn't need to discriminate the scope —
  * mostly test fixtures and the `chip` and `section` summary readers.
  * Adds `requestSeries?` as an optional field so legacy callers can read
@@ -754,6 +868,10 @@ export interface UsageSummary extends Omit<CostedSummary, 'bySession'> {
   requestSeries?: readonly RequestPoint[]
   children?: Readonly<Record<string, ChildUsageSummary>>
   sessionIds?: readonly string[]
+  /** Session-scoped `fields=session` reads only: the live request pool
+   * (最新请求 / 实时请求). Absent on `chip` and whole-log `full` reads —
+   * the pool is the usage tab's view, never a settings-page concern. */
+  requestDetails?: SessionRequestDetails
 }
 
 /** One normalized quota window tier, mirroring the tier vocabulary the

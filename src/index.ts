@@ -48,6 +48,7 @@ import { PricingAssociationService } from './pricing-association-service.ts'
 import { createPricingAssociationsRoute } from './pricing-associations-route.ts'
 import { withPricingDirectoryMigration } from './pricing-associations.ts'
 import { extractFirstTokenTimeFromStream, modelOfEvent, recordOfEvent, responseModelOfReplay, type RequestTiming } from './usage-record.ts'
+import { RequestObserver } from './request-observe.ts'
 import { classifyAuxRequest, recordFromAuxRequest } from './aux-request.ts'
 import { markTimingSynced, readSyncState } from './sync-state.ts'
 import { autoSyncIfNeeded, syncHistory, titleOfEvent } from './sync.ts'
@@ -706,6 +707,27 @@ export function apply(ctx: Context, config: Config = {}) {
 
   const quotaEnabled = config.quota?.enabled !== false
   const quotaIntervalSec = Math.min(3600, Math.max(15, Math.round(config.quota?.intervalSec ?? 60)))
+
+  /**
+   * Live request observation for the conversation usage tab's request pool
+   * (最新请求 / 实时请求). Registered independently of `recordAux` — the
+   * pool is a display feature, not an auxiliary-billing one, so turning
+   * auxiliary recording off must not silently disable it. Without the llm
+   * service the observer stays empty and the pool degrades to settled-only
+   * (persisted records alone), which the route reports honestly.
+   */
+  const requestObserver = new RequestObserver(Date.now())
+  let liveCapability: 'lifecycle' | 'settled-only' = 'settled-only'
+  ctx.inject(['llm'], (llmCtx) => {
+    llmCtx.effect(() => {
+      const detach = requestObserver.attachLlm(llmCtx)
+      liveCapability = 'lifecycle'
+      return () => { detach(); liveCapability = 'settled-only' }
+    }, 'token-usage: live request observer')
+  })
+  requestObserver.attachSessions(ctx)
+  ctx.effect(() => () => requestObserver.dispose(), 'token-usage: live request observer dispose')
+
   // Whether compaction summarize requests join the billing chain. Resolved
   // once at apply: the composition config is immutable for the runtime.
   const recordCompaction = config.recordCompaction !== false
@@ -906,6 +928,7 @@ export function apply(ctx: Context, config: Config = {}) {
             ? Math.max(0, firstTokenTime - currentStep.startTime)
             : undefined
           timing = {
+            startedAt: currentStep.startTime,
             latencyMs,
             ...(firstTokenLatencyMs !== undefined ? { firstTokenLatencyMs } : {}),
           }
@@ -921,7 +944,7 @@ export function apply(ctx: Context, config: Config = {}) {
       )
       if (record === null) return
       // Fire-and-forget: the log serializes appends and reports its own failures.
-      void current?.log.record(record)
+      void current?.log.record(requestObserver.decorateRecord(record))
     })
 
     // Refile rows that an older build parked in the sync-day file, then the
@@ -975,7 +998,17 @@ export function apply(ctx: Context, config: Config = {}) {
       // settings-resolved section at request time, so a saved region switch
       // re-prices the page's currency on the next fetch without a restart.
       webCtx.effect(() => webCtx.webServer.register(
-        createStatsRoute(currentDir, { currency: () => currencyOfRegion(effectiveInput().pricingRegion), logger }),
+        createStatsRoute(currentDir, {
+          currency: () => currencyOfRegion(effectiveInput().pricingRegion),
+          logger,
+          live: () => ({
+            snapshot: (sessionIds) => {
+              requestObserver.cleanup()
+              return requestObserver.snapshot(sessionIds)
+            },
+            capability: liveCapability,
+          }),
+        }),
       ), 'token-usage: stats route')
       webCtx.effect(() => webCtx.webServer.register(
         createMigrationRoute(() => migration),

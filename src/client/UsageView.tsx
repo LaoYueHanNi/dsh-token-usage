@@ -42,6 +42,7 @@ import { PricingStatus, costsAvailable } from './PricingStatus.tsx'
 import { ModelAssociationBadge, PricingAssociationProvider, UnpricedModelTag } from './PricingAssociations.tsx'
 import { usePricingAssociationRefresh } from './pricing-associations.ts'
 import { HitRateText } from './HitRateText.tsx'
+import { RequestPoolSections } from './RequestPool.tsx'
 import { aggregateProjections, buildChildIndex, directSubagentIds, subagentParentOf, subtreeIds, buildStatsFreshnessKey } from './session-stats.ts'
 import { RequestsCell, RequestsSplitHead, RequestsStatCard, StatCard } from './StatCard.tsx'
 import { TrendChart } from './TrendChart.tsx'
@@ -143,16 +144,87 @@ export function UsageView({ useSessions, useProjection, sessionId, t }: UsageVie
   )
   const requestKey = `${scopeIds.join('\n')}\n\t${childGroups.map(group => group.join(',')).join(';')}\n\t${freshnessKey}`
   const debouncedKey = useDebouncedValue(requestKey, REFRESH_DEBOUNCE_MS)
+
+  // Visibility fallback polling for the request pool: the event-driven
+  // freshness key already refreshes on settled requests, but a WAITING row
+  // produces no events between dispatch and first token. The poll is
+  // SERIALIZED — the next tick is scheduled only after the previous fetch
+  // settles — so a slow response is never cancelled mid-flight by the next
+  // interval: with an active request the next poll runs 1s after the last
+  // one finished, 5s idle, and a hidden tab schedules nothing (returning to
+  // visibility refreshes once immediately).
+  const [pollTick, setPollTick] = useState(0)
+  const [pollSettle, setPollSettle] = useState(0)
+  const [staleAt, setStaleAt] = useState<number | undefined>(undefined)
+  const lastOkAtRef = useRef<number | undefined>(undefined)
+  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const fetchingRef = useRef(false)
+  const fetchVersionRef = useRef(0)
+  // Scope changes are immediate; only event freshness is debounced. The
+  // request and its cache identity must always describe the same range.
+  const scopeKey = `${scopeIds.join('\n')}\n\t${childGroups.map(group => group.join(',')).join(';')}`
+
   const [summaryState] = useAsyncResource<UsageSummary>(
     signal => {
-      const [idsPart, groupsPart] = debouncedKey.split('\n\t')
+      clearTimeout(pollTimerRef.current)
+      fetchingRef.current = true
+      const version = ++fetchVersionRef.current
+      const [idsPart, groupsPart] = scopeKey.split('\n\t')
       const sessionIds = (idsPart ?? '').split('\n').filter(id => id !== '')
       const childGroups = (groupsPart ?? '').split(';').filter(group => group !== '').map(group => group.split(','))
+      // Stale-snapshot honesty: a failed refresh keeps the previous
+      // snapshot on screen (silentAfterFirst) and stamps the failure so the
+      // pool shows "数据截至 …" instead of pretending to be live. A new
+      // scope's first failure still lands in `error` (no snapshot to keep —
+      // the scopeKey switch resets both the kept value and this stamp).
       return fetchSessionSummary(sessionIds, childGroups, signal)
+        .then(value => {
+          if (!signal.aborted) {
+            lastOkAtRef.current = Date.now()
+            setStaleAt(undefined)
+          }
+          return value
+        })
+        .catch((error: unknown) => {
+          if (!signal.aborted && lastOkAtRef.current !== undefined) setStaleAt(lastOkAtRef.current)
+          throw error
+        })
+        .finally(() => {
+          // The scheduler's heartbeat: only a SETTLED fetch schedules the
+          // next one (an aborted superseded attempt stays silent).
+          if (version === fetchVersionRef.current) {
+            fetchingRef.current = false
+            if (!signal.aborted) setPollSettle(value => value + 1)
+          }
+        })
     },
-    [debouncedKey, retryToken],
-    { silentAfterFirst: true, retryToken },
+    [debouncedKey.split('\n\t')[2], retryToken, pollTick],
+    { silentAfterFirst: true, retryToken, scopeKey },
   )
+  // A range switch also drops the freshness stamp — it belonged to the
+  // previous range's last successful fetch, not to what is on screen now.
+  useEffect(() => {
+    lastOkAtRef.current = undefined
+    setStaleAt(undefined)
+  }, [scopeKey])
+
+  const activeCount = summaryState.status === 'ready' ? summaryState.value.requestDetails?.activeCount ?? 0 : 0
+  const hasActive = activeCount > 0
+  useEffect(() => {
+    if (document.visibilityState !== 'visible' || fetchingRef.current) return
+    const timer = setTimeout(() => {
+      if (document.visibilityState === 'visible') setPollTick(value => value + 1)
+    }, hasActive ? 1_000 : 5_000)
+    pollTimerRef.current = timer
+    return () => { clearTimeout(timer) }
+  }, [pollSettle, hasActive])
+  useEffect(() => {
+    const onVisibility = (): void => {
+      if (document.visibilityState === 'visible' && !fetchingRef.current) setPollTick(value => value + 1)
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => { document.removeEventListener('visibilitychange', onVisibility) }
+  }, [])
 
   const stats = useMemo(() => {
     const values: Array<SessionStatsProjection | undefined> = scopeIds.map((id) => {
@@ -288,6 +360,7 @@ export function UsageView({ useSessions, useProjection, sessionId, t }: UsageVie
                     trend plots one point per request. The whole-log settings
                     read has no series and falls back to the day/hour rows. */}
                 <TrendChart
+                  height={150}
                   rows={summary.byDay}
                   mode={chartMode}
                   t={t}
@@ -347,6 +420,15 @@ export function UsageView({ useSessions, useProjection, sessionId, t }: UsageVie
             </div>
           </>
         )}
+      {summary.requestDetails !== undefined && (
+        <RequestPoolSections
+          details={summary.requestDetails}
+          focusId={focusId}
+          view={view}
+          {...staleAt !== undefined ? { staleAt } : {}}
+          t={t}
+        />
+      )}
       <section className={styles['subagents']}>
         <div className={styles['subagentsHead']}>
           <h3 className={styles['subtitle']}>

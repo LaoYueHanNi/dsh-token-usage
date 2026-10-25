@@ -327,6 +327,7 @@ export async function syncHistory(
           ? Math.max(0, firstTokenTime - openStep.startTime)
           : undefined
         timing = {
+          startedAt: openStep.startTime,
           latencyMs,
           ...(firstTokenLatencyMs !== undefined ? { firstTokenLatencyMs } : {}),
         }

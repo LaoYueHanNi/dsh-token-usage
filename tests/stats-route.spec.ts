@@ -15,7 +15,7 @@ import { DEFAULT_PRICING_URL_OVERSEAS } from '../src/pricing.ts'
 import type { UsageRecord } from '../src/usage-record.ts'
 import { messageEvent } from './helpers.ts'
 import { SESSION_ROW_LIMIT } from '../src/stats.ts'
-import type { ProjectUsageRow, SessionUsageRow } from '../src/wire.ts'
+import type { ProjectUsageRow, SessionRequestDetails, SessionUsageRow } from '../src/wire.ts'
 
 /** Captures registrations instead of serving HTTP. */
 class MockWebServer extends Service {
@@ -159,6 +159,105 @@ describe('createStatsRoute', () => {
         children: { child: { costState: 'history-incomplete', totalCost: 0, total: { requests: 1 } } } })
     }
   })
+
+  // R11 / R14: the request pool rides ONLY the `session` read; legacy rows
+  // use their reported cache data and retain sequence exclusions.
+  it('carries requestDetails on session reads only, merging live rows over durable ones', async () => {
+    const dir = await sessionDataDir()
+    await writeFile(join(dir, 'pricing.ccsa.json'), JSON.stringify({ currency: 'RMB', models: [{ modelId: 'deepseek-chat', inputCostPerMillion: 2, outputCostPerMillion: 3 }, { modelId: 'deepseek-reasoner', inputCostPerMillion: 2, outputCostPerMillion: 3 }] }))
+    const seen: string[][] = []
+    const route = createStatsRoute(() => dir, {
+      live: () => ({
+        snapshot: (sessionIds: readonly string[]) => {
+          seen.push([...sessionIds])
+          return {
+            attempts: [{
+              id: '42:alpha:t1:s2:a1',
+              sessionId: 'alpha',
+              kind: 'request',
+              state: 'waiting',
+              provider: 'deepseek-official',
+              requestedModel: 'deepseek-chat',
+              startedAt: new Date(2026, 0, 13, 12).getTime() + 5_000,
+              turn: 1,
+              step: 2,
+            }],
+            activeCount: 1,
+          }
+        },
+        capability: 'lifecycle',
+      }),
+    })
+    const query = async (search: string): Promise<Record<string, unknown>> => {
+      const { res, captured } = fakeResponse(); await route.handler(fakeRequest({ url: STATS_PATH + search }), res)
+      expect(captured.status).toBe(200); return JSON.parse(captured.body)
+    }
+    const scope = '?sessionId=alpha&sessionId=child'
+    const chip = await query(scope + '&fields=chip')
+    expect('requestDetails' in chip).toBe(false)
+    const full = await query(scope + '&fields=full')
+    expect('requestDetails' in full).toBe(false)
+    const session = await query(scope + '&fields=session') as { requestDetails?: { items: Array<{ id: string; state: string; cache: { band: string; reason?: string } }>; limit: number; activeCount: number; liveCapability: string } }
+    expect(session.requestDetails).toBeDefined()
+    const details = session.requestDetails!
+    expect(details.liveCapability).toBe('lifecycle')
+    expect(details.activeCount).toBe(1)
+    expect(details.limit).toBe(20)
+    // The live waiting row tops the pool; the two durable alpha rows follow.
+    expect(details.items[0]).toMatchObject({ state: 'waiting', sessionId: 'alpha' })
+    expect(details.items.some(item => item.durableRequestId === 'alpha-chat')).toBe(true)
+    // The snapshot covered exactly the requested scope.
+    expect(seen.at(-1)).toEqual(['alpha', 'child'])
+    // Provider metadata is not required; the session's first row stays excluded.
+    const legacyRow = details.items.find(item => item.durableRequestId === 'alpha-chat')!
+    expect(legacyRow.cache).toMatchObject({ band: 'excluded', reason: 'cold-start', rate: 3 / 13 })
+    // Without an observer the pool degrades honestly to settled-only.
+    const plain = createStatsRoute(() => dir)
+    const { res, captured } = fakeResponse()
+    await plain.handler(fakeRequest({ url: STATS_PATH + scope + '&fields=session' }), res)
+    const degraded = JSON.parse(captured.body) as { requestDetails: { liveCapability: string; activeCount: number } }
+    expect(degraded.requestDetails.liveCapability).toBe('settled-only')
+    expect(degraded.requestDetails.activeCount).toBe(0)
+  })
+
+  it('promotes an older active child only in tree scope, including when the parent has no requests', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'token-usage-active-child-'))
+    const route = createStatsRoute(() => dir, {
+      live: () => ({
+        capability: 'lifecycle',
+        snapshot: (sessionIds: readonly string[]) => {
+          const included = sessionIds.includes('child')
+          return {
+            attempts: included ? [{
+              id: 'active-child', sessionId: 'child', kind: 'request' as const,
+              state: 'streaming' as const, provider: 'deepseek-official',
+              requestedModel: 'deepseek-chat', startedAt: 1_000, turn: 1, step: 1,
+            }] : [],
+            activeCount: included ? 1 : 0,
+          }
+        },
+      }),
+    })
+    const query = async (tree: boolean): Promise<SessionRequestDetails> => {
+      const { res, captured } = fakeResponse()
+      await route.handler(fakeRequest({ url: `${STATS_PATH}?fields=session&sessionId=alpha${tree ? '&sessionId=child&childId=child' : ''}` }), res)
+      expect(captured.status).toBe(200)
+      return JSON.parse(captured.body).requestDetails
+    }
+    expect(await query(false)).toMatchObject({ items: [], activeCount: 0 })
+    expect(await query(true)).toMatchObject({ items: [{ id: 'active-child', state: 'streaming' }], activeCount: 1 })
+
+    await writeFile(join(dir, 'usage-2026-01-15.jsonl'), JSON.stringify({
+      ...fixtureRecord(5_000), sessionId: 'alpha', requestId: 'parent-done', startedAt: 4_000,
+    }) + '\n')
+    const tree = await query(true)
+    expect(tree.items.map(item => item.id)).toEqual(['active-child', 'parent-done'])
+    expect(tree.activeCount).toBe(1)
+    const root = await query(false)
+    expect(root.items.map(item => item.id)).toEqual(['parent-done'])
+    expect(root.activeCount).toBe(0)
+  })
+
   it('serves the JSON summary on GET', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'token-usage-route-'))
     await writeFile(join(dir, 'usage-2026-01-15.jsonl'), `${JSON.stringify(fixtureRecord(100))}\n`)

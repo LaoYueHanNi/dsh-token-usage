@@ -15,12 +15,14 @@ import { readPricingContext, resolveRate } from './pricing.ts'
 import type { PricingContext } from './pricing.ts'
 import { attachCosts, buildSessionRows, buildSummary, filterRecordsBySessions, filterSummary, requestSeriesOf, SESSION_ROW_LIMIT, summarizeRecords, summaryForSessions } from './stats.ts'
 import type { RateResolver, SessionMetaEntry } from './stats.ts'
+import { buildSessionRequestDetails } from './session-request-details.ts'
+import type { LiveSnapshot } from './request-observe.ts'
 import { readCachedRecords } from './record-cache.ts'
 import { SessionMetaStore } from './session-meta.ts'
 import { projectRowsOf } from './project-rows.ts'
 import { bucketSeries, pointsOfBuckets } from './trend-bucket.ts'
 import { decodeChildGroups, decodeSessionScope, DIR_GUARD_PATH, FULL_SYNC_PATH, MIGRATION_PATH, PRICING_PATH, STATS_PATH, UNPRICED_KEY } from './wire.ts'
-import type { ChildGroup, ChildUsageSummary, CostedSummary, DirectoryGuardView, DisplayCurrency, FullSyncView, PricingOverviewPayload, PricingTable, RequestPoint, SessionUsageRow, StatsFields, StatsPayload, TokenSummary } from './wire.ts'
+import type { ChildGroup, ChildUsageSummary, CostedSummary, DirectoryGuardView, DisplayCurrency, FullSyncView, PricingOverviewPayload, PricingTable, RequestPoint, SessionRequestDetails, SessionUsageRow, StatsFields, StatsPayload, TokenSummary } from './wire.ts'
 import { effectiveModelOf, type UsageRecord } from './usage-record.ts'
 import { AssociationError } from './pricing-associations.ts'
 import { PRICING_SYNC_PATH, type PricingSyncResult } from './wire.ts'
@@ -106,6 +108,13 @@ export interface StatsRouteOptions {
   currency?: () => DisplayCurrency
   /** Diagnostic sink for data reads; defaults to console. */
   logger?: LoggerLike
+  /** The live request observer backing the usage tab's request pool. A host
+   * without an observer (headless, or attached before this seam existed)
+   * omits it and `fields=session` reads degrade to settled-only details. */
+  live?: () => {
+    snapshot: (sessionIds: readonly string[]) => LiveSnapshot
+    capability: SessionRequestDetails['liveCapability']
+  }
 }
 
 /** Live progress of a data-directory relocation; undefined when none runs. */
@@ -350,7 +359,8 @@ function childBreakdown(
 /** Session-scoped wire shape: `full` keeps the CostedSummary (minus the
  * granular bySession cells — the fold happened server-side); `session` /
  * `chip` drop the unused pricing / rate / recent / hour layers, and
- * `session` sends a pre-bucketed request series (≤ 60 points). */
+ * `session` sends a pre-bucketed request series (≤ 60 points) plus the
+ * live request pool (`requestDetails`). */
 function slimSessionPayload(input: {
   summary: CostedSummary
   sessionIds: readonly string[]
@@ -359,8 +369,9 @@ function slimSessionPayload(input: {
   usdExchangeRate: number
   fields: StatsFields
   children: Record<string, ChildUsageSummary> | undefined
+  requestDetails: SessionRequestDetails | undefined
 }): unknown {
-  const { summary, sessionIds, series, currency, usdExchangeRate, fields, children } = input
+  const { summary, sessionIds, series, currency, usdExchangeRate, fields, children, requestDetails } = input
   // The granular per-session cells stay behind the route: session-scoped
   // consumers read totals / byModel / requestSeries, never the cells.
   const { bySession: _cells, ...summaryRest } = summary
@@ -396,6 +407,9 @@ function slimSessionPayload(input: {
     modelResolutions: summary.modelResolutions,
     byDay: summary.byDay,
     requestSeries,
+    // The request pool rides ONLY the `session` read: chip stays slim, and
+    // the whole-log `full` read never grows runtime-state payloads.
+    ...(requestDetails !== undefined ? { requestDetails } : {}),
   }
 }
 
@@ -506,6 +520,25 @@ export function createStatsRoute(dir: () => string, options: StatsRouteOptions =
         const children = allRecords !== undefined && filter.childGroups.length > 0
           ? childBreakdown(allRecords, filter, dataDir, resolve, pricing, canonical, context, summary.costState, whole)
           : undefined
+        // The live request pool (fields=session only): merge the scoped
+        // persisted records with the observer's runtime state — scope filter
+        // and dedupe happen before the 20-item cut inside the builder. A
+        // host without the observer seam still gets the pool, honestly
+        // capped at `settled-only` (persisted records alone).
+        const liveObserver = scoped !== undefined && filter.fields === 'session' ? options.live?.() : undefined
+        const requestDetails = scoped !== undefined && filter.fields === 'session'
+          ? buildSessionRequestDetails({
+            records: scoped,
+            live: liveObserver?.snapshot(filter.sessionIds) ?? { attempts: [], activeCount: 0 },
+            pricing: {
+              resolve,
+              rulesOf: name => context.ratesForModel(name),
+              ready: summary.costState === 'ready',
+            },
+            asOf: Date.now(),
+            liveCapability: liveObserver?.capability ?? 'settled-only',
+          })
+          : undefined
         const payload = scoped !== undefined
           ? slimSessionPayload({
             summary,
@@ -515,6 +548,7 @@ export function createStatsRoute(dir: () => string, options: StatsRouteOptions =
             usdExchangeRate,
             fields: filter.fields,
             children,
+            requestDetails,
           })
           : {
             ...summaryRest,

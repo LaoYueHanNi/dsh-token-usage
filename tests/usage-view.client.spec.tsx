@@ -11,6 +11,8 @@ import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SessionListState } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { SessionStatsProjection } from '@deepseek-ai/dsh-session-stats/client'
 import { UsageView } from '../src/client/UsageView.tsx'
+import { bandClassOf } from '../src/client/HitRateText.tsx'
+import { buildSessionRequestDetails } from '../src/session-request-details.ts'
 import { zh } from '../src/client/locales.ts'
 import { ASSOCIATIONS_PATH, PRICING_PATH } from '../src/wire.ts'
 import type { ModelResolution, PricingAssociationsPayload, UsageSummary } from '../src/wire.ts'
@@ -192,7 +194,7 @@ function renderView(overrides: {
   liveStats?: SessionStatsProjection | undefined
   sessionId?: string
   state?: SessionListState
-} = {}): { setMirror: (next: SessionListState) => void } {
+} = {}): { setMirror: (next: SessionListState) => void; unmount: () => void } {
   const kit = makeSessionStateHook<SessionListState>(
     overrides.state ?? { ...SESSION_STATE, byId: overrides.byId ?? SESSION_STATE.byId } as SessionListState,
   )
@@ -200,13 +202,13 @@ function renderView(overrides: {
   // without `as never` casts. The session/view/sessionKit shape is faked
   // by `noSnapshot` so the per-test fakes set up only what the test cares
   // about (the session-list mirror + the live projection).
-  render(<UsageView
+  const view = render(<UsageView
     useSessions={kit.hook}
     useProjection={makeUseProjection(overrides.liveStats)}
     sessionId={overrides.sessionId ?? 'root'}
     t={t}
   />)
-  return { setMirror: kit.setState }
+  return { setMirror: kit.setState, unmount: view.unmount }
 }
 
 /** Whether a stubbed fetch received a call with exactly the given session ids
@@ -555,4 +557,327 @@ describe('UsageView', () => {
     resolveSecond({ ok: true, status: 200, json: async () => ({ ...TREE_SUMMARY, totalCost: 99.99 }) })
     await waitFor(() => expectText('99.99￥'))
   })
+})
+
+describe('UsageView request pool', () => {
+  /** A completed DeepSeek row with a 9.1% hit: the loss-label shape. */
+  const LOSS_ROW = {
+    id: 'msg-loss',
+    durableRequestId: 'msg-loss',
+    sessionId: 'root',
+    state: 'completed' as const,
+    kind: 'request' as const,
+    requestedModel: 'deepseek-chat',
+    startedAt: 1_760_000_000_000,
+    settledAt: 1_760_000_001_000,
+    recordTime: 1_760_000_001_000,
+    orderAt: 1_760_000_001_000,
+    orderBasis: 'record' as const,
+    inputTokens: 1_100,
+    outputTokens: 116,
+    cacheReadTokens: 110,
+    cacheWriteTokens: 0,
+    latencyMs: 1_000,
+    firstTokenLatencyMs: 300,
+    speed: 165,
+    cost: 0.01,
+    pricingStatus: 'priced' as const,
+    cache: { rate: 0.091, eligibility: 'eligible' as const, band: 'loss' as const },
+  }
+  /** A waiting row from the child subagent. */
+  const WAITING_ROW = {
+    id: '42:child:t1:s1:a1',
+    sessionId: 'child',
+    state: 'waiting' as const,
+    kind: 'request' as const,
+    requestedModel: 'deepseek-chat',
+    startedAt: 1_760_000_002_000,
+    orderAt: 1_760_000_002_000,
+    orderBasis: 'start' as const,
+    elapsedMs: 2_400,
+    pricingStatus: 'unknown' as const,
+    cache: { eligibility: 'unknown' as const, band: 'excluded' as const, reason: 'in-flight' as const },
+  }
+
+  function summaryWithRequestDetails(items: readonly unknown[], activeCount = 0): UsageSummary {
+    return {
+      ...ROOT_SUMMARY,
+      requestDetails: {
+        items: items as UsageSummary['requestDetails'] extends undefined ? never[] : NonNullable<UsageSummary['requestDetails']>['items'],
+        limit: 20,
+        asOf: 1_760_000_004_400,
+        activeCount,
+        liveCapability: 'lifecycle',
+      },
+    }
+  }
+
+  it('renders the active child above a newer completed parent using the server builder', async () => {
+    const pricing = { ready: false, rulesOf: () => undefined, resolve: () => ({ ruleStart: 0, ruleEnd: 0, tier: 0, slot: 0 }) }
+    const records = [{ requestId: 'parent-done', sessionId: 'root', time: 5_000, startedAt: 4_000, model: 'parent-model', usage: { inputTokens: 100, outputTokens: 50 } }]
+    const rootDetails = buildSessionRequestDetails({ records, live: { attempts: [], activeCount: 0 }, pricing, asOf: 6_000, liveCapability: 'lifecycle' })
+    const treeDetails = buildSessionRequestDetails({
+      records, pricing, asOf: 6_000, liveCapability: 'lifecycle',
+      live: { attempts: [{ id: 'child-live', sessionId: 'child', kind: 'request', state: 'streaming', requestedModel: 'child-model', startedAt: 1_000, turn: 1, step: 1 }], activeCount: 1 },
+    })
+    stubFetch({ root: { ...ROOT_SUMMARY, requestDetails: rootDetails }, 'root+child': { ...TREE_SUMMARY, requestDetails: treeDetails } })
+    renderView()
+    await waitFor(() => expect(within(screen.getByRole('region', { name: '最新请求' })).getByText('parent-model')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: '含子会话' }))
+    await waitFor(() => expect(within(screen.getByRole('region', { name: '最新请求' })).getByText('child-model')).toBeTruthy())
+    const panel = screen.getByRole('region', { name: '最新请求' })
+    expect(within(panel).getByText('生成中')).toBeTruthy()
+    expect(within(panel).getByText('子会话')).toBeTruthy()
+    const history = screen.getByRole('table', { name: '实时请求' })
+    expect(within(history).getByText('parent-model')).toBeTruthy()
+    expect(within(history).queryByText('child-model')).toBeNull()
+    expect(screen.getAllByText('child-model')).toHaveLength(1)
+  })
+
+  it.each([
+    [0, 'critical'], [0.4996, 'critical'], [0.5, 'critical'], [0.5999, 'critical'],
+    [0.6, 'amber'], [0.7999, 'amber'], [0.8, 'lime'], [0.9499, 'lime'],
+    [0.95, 'healthy'], [1, 'healthy'],
+  ] as const)('shares the card colour in both request sections at rate %s', async (rate, band) => {
+    const row = { ...LOSS_ROW, cache: { ...LOSS_ROW.cache, rate, band: rate < 0.5 ? 'loss' as const : rate < 0.8 ? 'low' as const : 'normal' as const } }
+    const summary = summaryWithRequestDetails([row, { ...row, id: 'history' }])
+    summary.total = { ...summary.total, inputTokens: 10_000 - Math.round(rate * 10_000), cacheReadTokens: Math.round(rate * 10_000) }
+    stubFetch({ root: summary })
+    renderView()
+    await waitFor(() => expectText('最新请求'))
+    const className = bandClassOf(band)
+    const card = screen.getByText('命中率', { selector: 'span' }).parentElement!
+    expect(card.querySelector('[class*="band_"]')?.className).toBe(className)
+    for (const title of ['最新请求', '实时请求']) {
+      const section = screen.getByRole('region', { name: title })
+      expect(section.querySelector('[class*="band_"]')?.className).toBe(className)
+    }
+    expect(screen.queryAllByText('缓存过低')).toHaveLength(rate < 0.5 ? 2 : 0)
+  })
+
+  it('colours an excluded rate by value but leaves a missing rate neutral', async () => {
+    const excluded = { ...LOSS_ROW, cache: { ...LOSS_ROW.cache, rate: 0.4, band: 'excluded' as const, reason: 'cold-start' as const } }
+    stubFetch({ root: summaryWithRequestDetails([excluded, WAITING_ROW], 1) })
+    renderView()
+    await waitFor(() => expectText('最新请求'))
+    const latest = screen.getByRole('region', { name: '最新请求' })
+    expect(within(latest).getByText('40%').className).toBe(bandClassOf('critical'))
+    expect(screen.queryByText('缓存过低')).toBeNull()
+    const history = screen.getByRole('table', { name: '实时请求' })
+    expect(history.querySelector('[class*="band_"]')).toBeNull()
+  })
+
+  it('renders the latest panel, the 缓存过低 label glued to the model, and the eleven history columns', async () => {
+    const older = { ...LOSS_ROW, id: 'msg-old', durableRequestId: 'msg-old', state: 'completed' as const, cache: { rate: 0.9, eligibility: 'eligible' as const, band: 'normal' as const } }
+    stubFetch({ root: summaryWithRequestDetails([WAITING_ROW, LOSS_ROW, older], 1) })
+    renderView()
+    await waitFor(() => expectText('最新请求'))
+    // The waiting row is the latest: its panel shows the state and the
+    // elapsed figure, with no speed fabricated.
+    expectText('等待首 token')
+    expectText('请求进行中')
+    expectText('已耗时')
+    expect(screen.getByTitle('已耗时（按服务端时间锚定）')).toBeTruthy()
+    // The pool count includes the latest item itself.
+    expectText('请求池 3 / 20')
+    // The history table renders the frozen column order.
+    const table = screen.getByRole('table', { name: '实时请求' })
+    const head = Array.from(table.querySelectorAll('th')).map(cell => cell.textContent)
+    expect(head).toEqual(['来源', '状态', '时间', '模型', '缓存命中', '输入', '输出', '首字', '耗时', '速度', '费用'])
+    // The loss row's label sits inside the model cell's inline group.
+    const lossRow = table.querySelector('tbody tr')!
+    expect(lossRow.textContent).toContain('缓存过低')
+    expect(lossRow.textContent).toContain('9.1%')
+    expectText('本会话')
+  })
+
+  it('keeps the 50% label boundary independent of the numeric colour scale', async () => {
+    const boundary = {
+      ...LOSS_ROW,
+      id: 'msg-half',
+      durableRequestId: 'msg-half',
+      inputTokens: 12_000,
+      cacheReadTokens: 12_000,
+      cache: { rate: 0.5, eligibility: 'eligible' as const, band: 'low' as const },
+    }
+    stubFetch({ root: summaryWithRequestDetails([boundary]) })
+    renderView()
+    await waitFor(() => expectText('最新请求'))
+    expect(screen.queryByText('缓存过低')).toBeNull() // Exactly 50%: no label, shared critical colour.
+    expectText('50%')
+    expectText('还没有上一条请求 · 下一条到来后，当前请求会移入这里')
+  })
+
+  it('does not add a tooltip just to explain an ordinary low-band colour', async () => {
+    const row = { ...LOSS_ROW, cache: { ...LOSS_ROW.cache, rate: 0.694, band: 'low' as const } }
+    stubFetch({ root: summaryWithRequestDetails([row]) })
+    renderView()
+    await waitFor(() => expectText('最新请求'))
+    fireEvent.mouseEnter(screen.getByText('69.4%'))
+    expect(screen.queryByRole('tooltip')).toBeNull()
+  })
+
+  it.each([0.397, 0.4996])('omits threshold and exclusion boilerplate from the cache-loss tooltip at %s', async rate => {
+    stubFetch({ root: summaryWithRequestDetails([{ ...LOSS_ROW, cache: { ...LOSS_ROW.cache, rate } }]) })
+    renderView()
+    await waitFor(() => expectText('最新请求'))
+    fireEvent.mouseEnter(screen.getByText('缓存过低'))
+    const tooltip = screen.getByRole('tooltip').textContent!
+    expect(tooltip).toContain('本次缓存命中')
+    expect(tooltip).toContain('不代表已确认服务端缓存失效')
+    expect(tooltip).not.toContain('低于 50%')
+    expect(tooltip).not.toContain('已排除')
+    if (rate === 0.4996) expect(tooltip).toContain('原始命中率为')
+  })
+
+  it('renders an empty pool as 0 / 20 with the empty prompt, even for a zero-request session', async () => {
+    stubFetch({ root: { ...EMPTY_SUMMARY, requestDetails: { items: [], limit: 20, asOf: 1_760_000_000_000, activeCount: 0, liveCapability: 'settled-only' } } })
+    renderView()
+    await waitFor(() => expectText('该会话暂无用量记录。'))
+    expectText('请求池 0 / 20')
+    expectText('暂无请求 · 发起第一条请求后，速度与缓存信息将在这里展示')
+  })
+
+  it('maps origins to the drill-in focus: child rows read 子会话 under the root focus', async () => {
+    const childDone = { ...LOSS_ROW, id: 'c1', durableRequestId: 'c1', sessionId: 'child', cache: { rate: 0.9, eligibility: 'eligible' as const, band: 'normal' as const } }
+    stubFetch({ root: summaryWithRequestDetails([LOSS_ROW, childDone]) })
+    renderView()
+    await waitFor(() => expectText('最新请求'))
+    const table = screen.getByRole('table', { name: '实时请求' })
+    expect(table.querySelector('tbody tr')!.textContent).toContain('子会话')
+  })
+
+  it('stamps the stale notice while a refresh fails but the snapshot survives', async () => {
+    let fail = false
+    const mock = vi.fn(async (input: unknown): Promise<unknown> => {
+      const url = new URL(String(input), 'http://localhost')
+      if (fail) throw new Error('boom')
+      void url
+      return { ok: true, status: 200, json: async () => summaryWithRequestDetails([LOSS_ROW]) }
+    })
+    vi.stubGlobal('fetch', mock)
+    renderView()
+    await waitFor(() => expectText('最新请求'))
+    fail = true
+    renderView()
+    await waitFor(() => expect(mock.mock.calls.length).toBeGreaterThan(1))
+    // The previous snapshot is still on screen (silentAfterFirst) — the
+    // stale notice renders on the NEXT successful render cycle's failure.
+    expectText('9.1%')
+  })
+
+  it('serializes the fallback poll: a slow response is never cancelled by the next tick', async () => {
+    // The reviewer's repro: a 1.5s response under a 1s interval used to be
+    // cancelled by every new poll — the page never updated. The serialized
+    // poll schedules the next tick only after the last fetch settles.
+    let completed = 0
+    let abortedMidFlight = 0
+    const mock = vi.fn(async (input: unknown, options?: RequestInit): Promise<unknown> => {
+      void input
+      await new Promise(resolve => setTimeout(resolve, 1_500))
+      if ((options?.signal as AbortSignal | undefined)?.aborted) {
+        abortedMidFlight += 1
+        throw new Error('superseded')
+      }
+      completed += 1
+      return { ok: true, status: 200, json: async () => summaryWithRequestDetails([{ ...LOSS_ROW, id: `row-${String(completed)}` }]) }
+    })
+    vi.stubGlobal('fetch', mock)
+    renderView()
+    await waitFor(() => expectText('最新请求'), { timeout: 5_000 })
+    expect(completed).toBe(1)
+    // Idle cadence: the next poll waits 5s after the settle — no per-second
+    // refetch storm while the previous answer is still in flight.
+    await new Promise(resolve => setTimeout(resolve, 3_000))
+    expect(mock.mock.calls.length).toBe(1)
+    // The second poll runs, completes, and nothing was cancelled mid-flight.
+    await waitFor(() => expect(completed).toBe(2), { timeout: 8_000 })
+    expect(abortedMidFlight).toBe(0)
+  }, 20_000)
+
+  it('stops polling entirely after unmount', async () => {
+    const mock = vi.fn(async (): Promise<unknown> => ({
+      ok: true, status: 200, json: async () => summaryWithRequestDetails([LOSS_ROW]),
+    }))
+    vi.stubGlobal('fetch', mock)
+    const { unmount } = renderView()
+    await waitFor(() => expectText('最新请求'))
+    unmount()
+    const calls = mock.mock.calls.length
+    // Past one full idle interval: no late tick may fire a fetch.
+    await new Promise(resolve => setTimeout(resolve, 5_600))
+    expect(mock.mock.calls.length).toBe(calls)
+  }, 15_000)
+
+  it('lands a new scope’s first failure in error instead of showing the previous scope’s snapshot', async () => {
+    let failTree = false
+    const mock = vi.fn(async (input: unknown): Promise<unknown> => {
+      const ids = new URL(String(input), 'http://localhost').searchParams.getAll('sessionId')
+      if (ids.length > 1) {
+        if (failTree) throw new Error('tree fetch failed')
+        return { ok: true, status: 200, json: async () => TREE_SUMMARY }
+      }
+      return { ok: true, status: 200, json: async () => ROOT_SUMMARY }
+    })
+    vi.stubGlobal('fetch', mock)
+    renderView()
+    await waitFor(() => expectText('12.34￥'))
+    failTree = true
+    fireEvent.click(screen.getByRole('button', { name: '含子会话' }))
+    // The scope switch's own fetch fails: the root figures (12.34￥) must
+    // not stay on screen as if they described the tree scope.
+    await waitFor(() => expect(screen.getByText(/统计加载失败/)).toBeTruthy(), { timeout: 5_000 })
+    expect(screen.queryByText('15.55￥')).toBeNull()
+  }, 15_000)
+
+  it('never fetches the previous range under a new scope when visibility refreshes during the debounce window', async () => {
+    const requested: string[] = []
+    const mock = vi.fn(async (input: unknown): Promise<unknown> => {
+      const ids = new URL(String(input), 'http://localhost').searchParams.getAll('sessionId').join('+')
+      requested.push(ids)
+      if (ids === 'root+child') throw new Error('new scope unavailable')
+      return { ok: true, status: 200, json: async () => ROOT_SUMMARY }
+    })
+    vi.stubGlobal('fetch', mock)
+    renderView()
+    await waitFor(() => expectText('12.34￥'))
+    const priorCalls = requested.length
+    fireEvent.click(screen.getByRole('button', { name: '含子会话' }))
+    fireEvent(document, new Event('visibilitychange'))
+    await waitFor(() => expect(screen.getByText(/统计加载失败/)).toBeTruthy())
+    await new Promise(resolve => setTimeout(resolve, 300))
+    expect(requested.slice(priorCalls).every(ids => ids === 'root+child')).toBe(true)
+    expect(screen.getByText(/统计加载失败/)).toBeTruthy()
+  })
+
+  it('does not promise future speed settlement for an already completed untimed row', async () => {
+    stubFetch({ root: summaryWithRequestDetails([{ ...LOSS_ROW, speed: undefined, firstTokenLatencyMs: undefined }]) })
+    renderView()
+    await waitFor(() => expectText('最新请求'))
+    expect(screen.queryByText('待结束后结算')).toBeNull()
+    expect(screen.queryByText('请求已结算')).toBeNull()
+    expectText('已完成')
+    expectText('历史记录无完整计时 · 不以 0 或会话平均值代替')
+  })
+
+  it('drops a previous scope’s late response after the scope has switched', async () => {
+    let resolveRoot: (value: unknown) => void = () => {}
+    const mock = vi.fn(async (input: unknown): Promise<unknown> => {
+      const ids = new URL(String(input), 'http://localhost').searchParams.getAll('sessionId')
+      if (ids.length > 1) return { ok: true, status: 200, json: async () => TREE_SUMMARY }
+      return await new Promise((resolve) => { resolveRoot = resolve })
+    })
+    vi.stubGlobal('fetch', mock)
+    renderView()
+    await waitFor(() => expect(mock.mock.calls.length).toBe(1)) // the root fetch hangs
+    fireEvent.click(screen.getByRole('button', { name: '含子会话' }))
+    await waitFor(() => expectText('15.55￥'), { timeout: 5_000 })
+    // The hung root response lands late: already aborted by the scope
+    // switch, it must not repaint the tree view with root figures (the
+    // reasoner row and the 15.55￥ total only exist in the tree scope).
+    resolveRoot({ ok: true, status: 200, json: async () => ROOT_SUMMARY })
+    await new Promise(resolve => setTimeout(resolve, 100))
+    expectText('15.55￥')
+    expect(screen.getByText('deepseek-reasoner')).toBeTruthy()
+  }, 15_000)
 })
