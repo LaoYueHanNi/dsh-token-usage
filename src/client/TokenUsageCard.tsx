@@ -233,13 +233,27 @@ export function TokenUsageCard(props: TokenUsageCardProps) {
                   <option value="domestic">{t('card.region.domestic')}</option>
                   <option value="overseas">{t('card.region.overseas')}</option>
                 </select>
-                <PricingSyncButton disabled={lockInput || state.saving} dirty={state.dirty} t={t} />
+                <PricingSyncButton disabled={lockInput || state.saving || state.textDirty} dirty={state.textDirty} t={t} />
               </div>
             </div>
             <p className={css.hint}>
               {t('card.hint')}
               {state.overridden.pricingRegion ? ` ${t('card.overridden')}` : ''}
             </p>
+            <div className={css.field}>
+              <label className={css.pinRow} htmlFor="token-usage-card-pin">
+                <input
+                  id="token-usage-card-pin"
+                  type="checkbox"
+                  className={css.pinCheck}
+                  checked={state.pinnedDraft ?? state.sidebarPinned}
+                  disabled={lockInput}
+                  onChange={event => { props.editPinned(event.target.checked) }}
+                />
+                <span className={css.fieldLabel}>{t('card.sidebarPinned.label')}</span>
+              </label>
+              <p className={css.hint}>{t('card.sidebarPinned.hint')}</p>
+            </div>
             {state.migration !== undefined
               ? (
                 <div className={css.migration} role="status">

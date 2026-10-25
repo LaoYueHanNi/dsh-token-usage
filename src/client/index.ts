@@ -73,6 +73,7 @@ interface WorkspacesLike {
 import { CardForm, createFallbackTarget, type CardFormTarget, type SectionValue } from './card-form.ts'
 import { CostPill } from './CostPill.tsx'
 import { PanellistMoreEntry } from './PanellistMoreEntry.tsx'
+import { PanellistPinEntry } from './PanellistPinEntry.tsx'
 import { QuotaButton, type ModelSelectionSource } from './QuotaButton.tsx'
 import { TokenUsageCard } from './TokenUsageCard.tsx'
 import { TokenUsageSection } from './TokenUsageSection.tsx'
@@ -194,15 +195,17 @@ export function apply(ctx: ClientContext): void {
     inject: () => ({ sessionListed, openSession }),
   }, TokenUsageSection))
 
-  // The sidebar "More" menu row and the main panel it opens (the
-  // navigation-entry slots; `main` is an older shell declaration,
-  // `sidebar.panellist.actions` arrived in dsh 0.2.1-rc.3). Both ride
-  // ctx.slots.inject WAITING on the shell's declarations — a shell without
-  // them never runs these callbacks, so the additions degrade silently and
-  // the settings section above stays the only entry. The layout seat is
-  // resolved at click time (dynamic like configForms below, never a
-  // top-level inject dependency): the row opens this panel, the page's
-  // session jump returns to the conversation.
+  // The main panel the sidebar entries open (the `main` keyed slot, an older
+  // shell declaration than the sidebar regions). It rides ctx.slots.inject
+  // WAITING on the shell's declaration — a shell without it never runs the
+  // callback, so the page degrades silently and the settings section above
+  // stays the only entry. The layout seat is resolved at click time (dynamic
+  // like configForms below, never a top-level inject dependency): the sidebar
+  // entries open this panel, and the page's session jump returns to the
+  // conversation. The two sidebar entries themselves (the More-menu row and
+  // the resident pinned row) register further down in syncEntries — the two
+  // are mutually exclusive, so their registrations come and go with the
+  // `sidebarPinned` setting.
   const selectMainPanel = (id: MainPanelId | null): void => {
     ;(ctx.get?.('layout') as { selectPanel?: (id: MainPanelId | null) => void } | undefined)?.selectPanel?.(id)
   }
@@ -212,24 +215,6 @@ export function apply(ctx: ClientContext): void {
     locale: NS,
     inject: () => ({ sessionListed, openSession, returnToConversation: () => selectMainPanel(null) }),
   }, UsagePanelPage))
-  ctx.slots.inject('sidebar.panellist.actions', () => {
-    try {
-      // The returned disposer removes the row when the region's declaration
-      // lifetime folds; a rejected cell returns a no-op instead.
-      return ctx.slots.register({
-        name: 'sidebar.panellist.actions',
-        id: 'token-usage-more',
-        order: 50,
-        locale: NS,
-        inject: () => ({ openPanel: () => selectMainPanel(USAGE_PANEL_ID) }),
-      }, PanellistMoreEntry)
-    } catch {
-      // The row is an optional affordance: a shell that declares the region
-      // but rejects the cell (a same-priority occupant) must not fail
-      // plugin activation.
-      return () => {}
-    }
-  })
 
   // The Usage view tab: one entry of the conversation view ring (beside the
   // built-in Chat tab and the Trajectory tab from ui-trajectory, rendered
@@ -371,6 +356,75 @@ export function apply(ctx: ClientContext): void {
     set: (field, value) => activeTarget.set(field, value),
     unset: (field) => activeTarget.unset(field),
   }
+
+  // The two sidebar entries are mutually exclusive — exactly one exists at
+  // any time. The `sidebarPinned` volatile setting picks which: while it
+  // reads true the usage entry is a resident `sidebar.panellist` row, and the
+  // More-menu row is gone; while it reads false the More-menu row is back and
+  // the resident row is gone (the shell's pin store is in-memory, so
+  // registration alone IS the durable pin — no shell API is driven). Both
+  // registrations wait on their shell declarations via slots.inject (old
+  // shells never run those callbacks, so the entry degrades silently to the
+  // settings section); a rejected cell (a same-priority occupant) likewise
+  // just means that entry stays absent.
+  let residentDisposer: (() => void) | undefined
+  let moreDisposer: (() => void) | undefined
+  const syncEntries = (): void => {
+    const pinned = activeTarget.getSnapshot().value?.sidebarPinned === true
+    if (pinned && residentDisposer === undefined) {
+      try {
+        residentDisposer = ctx.slots.register({
+          name: 'sidebar.panellist',
+          id: USAGE_PANEL_ID,
+          order: 50,
+          locale: NS,
+          label: () => t('nav.label'),
+        }, PanellistPinEntry)
+      } catch {
+        residentDisposer = undefined
+      }
+    } else if (!pinned && residentDisposer !== undefined) {
+      const dispose = residentDisposer
+      residentDisposer = undefined
+      dispose()
+    }
+    if (!pinned && moreDisposer === undefined) {
+      try {
+        moreDisposer = ctx.slots.register({
+          name: 'sidebar.panellist.actions',
+          id: 'token-usage-more',
+          order: 50,
+          locale: NS,
+          inject: () => ({ openPanel: () => selectMainPanel(USAGE_PANEL_ID) }),
+        }, PanellistMoreEntry)
+      } catch {
+        moreDisposer = undefined
+      }
+    } else if (pinned && moreDisposer !== undefined) {
+      const dispose = moreDisposer
+      moreDisposer = undefined
+      dispose()
+    }
+  }
+  ctx.slots.inject('sidebar.panellist', () => { syncEntries(); return () => {} })
+  ctx.slots.inject('sidebar.panellist.actions', () => { syncEntries(); return () => {} })
+  ctx.effect(() => {
+    targetListeners.add(syncEntries)
+    syncEntries()
+    return () => {
+      targetListeners.delete(syncEntries)
+      if (residentDisposer !== undefined) {
+        const dispose = residentDisposer
+        residentDisposer = undefined
+        dispose()
+      }
+      if (moreDisposer !== undefined) {
+        const dispose = moreDisposer
+        moreDisposer = undefined
+        dispose()
+      }
+    }
+  }, 'token-usage: sidebar entries sync')
 
   // The Plugins page dispatches keyed configuration for bundles through
   // `plugins.bundle.config` (keyed by the bundle's package name).

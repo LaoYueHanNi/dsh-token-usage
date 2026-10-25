@@ -74,6 +74,7 @@ export type CardField = typeof CARD_FIELDS[number]
 export interface SectionValue {
   path?: string
   pricingRegion?: string
+  sidebarPinned?: boolean
 }
 
 /** Live migration progress the card polls after saving a directory change. */
@@ -119,12 +120,22 @@ export interface CardState {
   available: boolean
   /** Whether the Host document accepts writes. */
   writable: boolean
+  /** Whether the usage entry is pinned as a resident sidebar row: the
+   * effective (resolved) value the checkbox shows when untouched. */
+  sidebarPinned: boolean
+  /** Staged pin toggle; undefined while untouched. A staged edit shows in
+   * the checkbox and commits only on save. */
+  pinnedDraft: boolean | undefined
   /** Draft text per field ('' marks the inherited/default option). */
   fields: Record<CardField, string>
   /** Whether saving each field would leave a user-layer entry. */
   overridden: Record<CardField, boolean>
   /** Whether the form holds an edit that a save would write. */
   dirty: boolean
+  /** Whether a TEXT field holds an unsaved edit. The pricing-sync gate reads
+   * this, not `dirty`: the staged pin toggle has no say over the pricing
+   * source, so it must not block a sync. */
+  textDirty: boolean
   /** Whether a save is crossing the wire. */
   saving: boolean
   /** Whether the last save did not land as staged; cleared by the next edit or save. */
@@ -140,6 +151,8 @@ export interface CardState {
 export interface CardActions {
   /** Stage draft text for one field. */
   editField: (field: CardField, text: string) => void
+  /** Stage the sidebar-pin toggle; it commits only on save. */
+  editPinned: (value: boolean) => void
   /** Stage a clear for one field, so saving lets it re-inherit the composition layer. */
   clearField: (field: CardField) => void
   /** Write every staged edit, then re-seed from what the Host accepted. */
@@ -161,6 +174,8 @@ export class CardForm {
   private snapshotValue: CardState
   private readonly listeners = new Set<() => void>()
   private drafts: Partial<Record<CardField, string>> = {}
+  /** Staged sidebar-pin toggle; undefined while untouched. */
+  private draftPinned: boolean | undefined
   private saving = false
   private failed = false
   private refusal: SaveRefusal | undefined
@@ -199,6 +214,12 @@ export class CardForm {
         this.refusal = undefined
         this.publish()
       },
+      editPinned: (value) => {
+        this.draftPinned = value
+        this.failed = false
+        this.refusal = undefined
+        this.publish()
+      },
       clearField: (field) => {
         this.drafts[field] = ''
         this.failed = false
@@ -207,8 +228,9 @@ export class CardForm {
       },
       save: () => { void this.save() },
       discard: () => {
-        if (Object.keys(this.drafts).length === 0 && !this.failed) return
+        if (Object.keys(this.drafts).length === 0 && this.draftPinned === undefined && !this.failed) return
         this.drafts = {}
+        this.draftPinned = undefined
         this.failed = false
         this.refusal = undefined
         this.publish()
@@ -235,7 +257,11 @@ export class CardForm {
    */
   private async save(): Promise<void> {
     const edited = CARD_FIELDS.filter(field => this.drafts[field] !== undefined)
-    if (edited.length === 0 || this.saving) return
+    // The staged pin toggle rides the same save; it writes an explicit
+    // true/false (never unset) so a composition-layer `true` can still be
+    // switched off from the card.
+    const pinEdit = this.draftPinned
+    if ((edited.length === 0 && pinEdit === undefined) || this.saving) return
     // Snapshot the intended writes: a keystroke mid-await must not change what
     // this save commits.
     const intended = edited.map(field => [field, this.drafts[field]!.trim()] as const)
@@ -262,6 +288,7 @@ export class CardForm {
         if (text === '') await this.target.unset(field)
         else await this.target.set(field, text)
       }
+      if (pinEdit !== undefined) await this.target.set('sidebarPinned', pinEdit)
       // Read back: the Host's validators own the constraints no schema
       // expresses, so acceptance is judged from the stored layers.
       for (const [field, text] of intended) {
@@ -270,6 +297,7 @@ export class CardForm {
           break
         }
       }
+      if (pinEdit !== undefined && this.storedValue('sidebarPinned') !== pinEdit) landed = false
     } catch (_settingsWriteFailure) {
       landed = false
     }
@@ -282,6 +310,7 @@ export class CardForm {
     }
     if (landed) {
       for (const [field, _text] of intended) delete this.drafts[field]
+      this.draftPinned = undefined
     }
     this.saving = false
     this.failed = !landed
@@ -364,7 +393,7 @@ export class CardForm {
     return typeof user === 'object' && user !== null ? user as Record<string, unknown> : undefined
   }
 
-  private storedValue(field: CardField): unknown {
+  private storedValue(field: string): unknown {
     return this.userLayer()?.[field]
   }
 
@@ -386,9 +415,10 @@ export class CardForm {
 
   private project(): CardState {
     const snapshot = this.snapshot()
+    const pinnedEffective = snapshot.value?.sidebarPinned === true
     const fields = {} as Record<CardField, string>
     const overridden = {} as Record<CardField, boolean>
-    let dirty = false
+    let textDirty = false
     for (const field of CARD_FIELDS) {
       fields[field] = this.textOf(field)
       // A staged edit answers for itself, so the override badge previews the
@@ -397,15 +427,18 @@ export class CardForm {
         ? this.drafts[field]!.trim() !== ''
         : this.stored(field)
       if (this.drafts[field] !== undefined && this.drafts[field] !== this.effectiveOf(field)) {
-        dirty = true
+        textDirty = true
       }
     }
     return {
       available: snapshot.status === 'ready',
       writable: snapshot.writable,
+      sidebarPinned: pinnedEffective,
+      pinnedDraft: this.draftPinned,
       fields,
       overridden,
-      dirty,
+      dirty: textDirty || (this.draftPinned !== undefined && this.draftPinned !== pinnedEffective),
+      textDirty,
       saving: this.saving,
       failed: this.failed,
       refusal: this.refusal,

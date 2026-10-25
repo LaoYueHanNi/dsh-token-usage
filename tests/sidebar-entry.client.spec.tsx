@@ -13,7 +13,7 @@ import { Context, Service } from '@deepseek-ai/cordis'
 
 vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
   IconChevronDownOutlineMedium: (props: { className?: string }) => <span className={props.className} />,
-  IconGaugeOutlineRegular: () => <span data-testid="icon-gauge" />,
+  IconGaugeOutlineRegular: (props: { size?: number }) => <span data-testid="icon-gauge" data-size={props.size} />,
   IconWarningOutlineRegular: () => <span data-testid="icon-warning" />,
   MenuItemButton: ({ children, onSelect, icon }: {
     children: React.ReactNode
@@ -30,6 +30,7 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
 }))
 
 import { PanellistMoreEntry } from '../src/client/PanellistMoreEntry.tsx'
+import { PanellistPinEntry } from '../src/client/PanellistPinEntry.tsx'
 import { TokenUsageSection } from '../src/client/TokenUsageSection.tsx'
 import { UsagePanelPage } from '../src/client/UsagePanelPage.tsx'
 import { zh } from '../src/client/locales.ts'
@@ -51,6 +52,7 @@ interface RegisteredSlot {
  */
 class MockSlots extends Service {
   public readonly registered: RegisteredSlot[] = []
+  public readonly disposals: RegisteredSlot[] = []
 
   constructor(ctx: Context, private readonly declared: readonly string[]) {
     super(ctx, 'slots')
@@ -66,7 +68,7 @@ class MockSlots extends Service {
       throw new Error(`slot "${declaration.name}" is not declared`)
     }
     this.registered.push(declaration)
-    return () => {}
+    return () => { this.disposals.push(declaration) }
   }
 }
 
@@ -196,5 +198,155 @@ describe('sidebar More-menu entry', () => {
     expect(node.type).toBe(TokenUsageSection)
     expect((node.props as { close?: unknown }).close).toBe(returnToConversation)
     expect((node.props as { variant?: unknown }).variant).toBe('page')
+  })
+})
+
+describe('sidebar pin row (sidebarPinned setting)', () => {
+  /** The slots the pin row rides, beside the surfaces every apply touches. */
+  const PIN_DECLARATIONS = [...SHELL_DECLARATIONS, 'main', 'sidebar.panellist', 'sidebar.panellist.actions'] as const
+
+  interface ConfigApp {
+    ctx: Context
+    slots: MockSlots
+    target: {
+      getSnapshot(): { status: 'ready' | 'loading'; writable: boolean; value?: { sidebarPinned?: boolean }; user: Record<string, unknown> }
+      subscribe(listener: () => void): () => void
+      set: ReturnType<typeof vi.fn>
+      unset: ReturnType<typeof vi.fn>
+    }
+    setSnapshot(next: { status: 'ready' | 'loading'; writable: boolean; value?: { sidebarPinned?: boolean } }): void
+  }
+
+  /**
+   * An app whose `configForms` serves the token-usage namespace through one
+   * controllable snapshot: the pin sync reads the value at apply time and on
+   * every committed change the test publishes via setSnapshot; a save lands
+   * in the user layer (kept across setSnapshot) so the form's read-back sees
+   * what it wrote.
+   */
+  function createAppWithConfig(initial: { status: 'ready' | 'loading'; writable?: boolean; value?: { sidebarPinned?: boolean } }): ConfigApp {
+    const app = createClientApp(PIN_DECLARATIONS)
+    const listeners = new Set<() => void>()
+    let snapshot: { status: 'ready' | 'loading'; writable: boolean; value?: { sidebarPinned?: boolean }; user: Record<string, unknown> }
+      = { status: initial.status, writable: initial.writable ?? true, value: initial.value, user: {} }
+    const commit = (): void => { for (const listener of [...listeners]) listener() }
+    const target = {
+      getSnapshot: () => snapshot,
+      subscribe: (listener: () => void) => {
+        listeners.add(listener)
+        return () => { listeners.delete(listener) }
+      },
+      set: vi.fn(async (field: string, value: unknown) => {
+        snapshot = { ...snapshot, user: { ...snapshot.user, [field]: value } }
+        commit()
+        return true
+      }),
+      unset: vi.fn(async (field: string) => {
+        const user = { ...snapshot.user }
+        delete user[field]
+        snapshot = { ...snapshot, user }
+        commit()
+        return true
+      }),
+    }
+    new MockService(app.ctx, 'configForms', {
+      get: () => target,
+      describe: () => ({
+        getSnapshot: () => ({ view: { namespaces: [{ ns: 'token-usage' }] } }),
+        subscribe: () => () => {},
+        ensure: async () => {},
+      }),
+    })
+    return {
+      ...app,
+      target,
+      setSnapshot: (next) => { snapshot = { ...next, user: snapshot.user }; commit() },
+    }
+  }
+
+  it('keeps the entry in the More menu while the setting reads false or unset', () => {
+    for (const value of [undefined, { sidebarPinned: false }] as const) {
+      const { ctx, slots } = createAppWithConfig({ status: 'ready', value: value as { sidebarPinned?: boolean } | undefined })
+      client.apply(ctx)
+      expect(slots.registered.some(row => row.name === 'sidebar.panellist')).toBe(false)
+      expect(slots.registered.some(row => row.name === 'sidebar.panellist.actions' && row.id === 'token-usage-more')).toBe(true)
+    }
+  })
+
+  it('registers the resident row instead of the More-menu row when the setting reads true', () => {
+    const { ctx, slots } = createAppWithConfig({ status: 'ready', value: { sidebarPinned: true } })
+    client.apply(ctx)
+    const row = slots.registered.find(row => row.name === 'sidebar.panellist')
+    expect(row?.id).toBe('token-usage')
+    expect(row?.order).toBe(50)
+    expect(row?.label?.()).toBe('nav.label')
+    // Mutually exclusive: the More-menu row never registers.
+    expect(slots.registered.some(row => row.name === 'sidebar.panellist.actions')).toBe(false)
+  })
+
+  it('follows the setting live: the two entries swap, never coexist', () => {
+    const { ctx, slots, setSnapshot } = createAppWithConfig({ status: 'ready', value: { sidebarPinned: false } })
+    client.apply(ctx)
+    expect(slots.registered.some(row => row.name === 'sidebar.panellist.actions' && row.id === 'token-usage-more')).toBe(true)
+    expect(slots.registered.some(row => row.name === 'sidebar.panellist')).toBe(false)
+    // Pinning disposes the More-menu row and registers the resident row.
+    setSnapshot({ status: 'ready', writable: true, value: { sidebarPinned: true } })
+    expect(slots.disposals.some(row => row.id === 'token-usage-more')).toBe(true)
+    expect(slots.registered.filter(row => row.name === 'sidebar.panellist')).toHaveLength(1)
+    // Unpinning restores the More-menu row and disposes the resident row.
+    setSnapshot({ status: 'ready', writable: true, value: { sidebarPinned: false } })
+    expect(slots.disposals.filter(row => row.name === 'sidebar.panellist')).toHaveLength(1)
+    expect(slots.registered.filter(row => row.name === 'sidebar.panellist.actions' && row.id === 'token-usage-more')).toHaveLength(2)
+  })
+
+  it('waits for the configuration target to become ready before reading the setting', () => {
+    const { ctx, slots, setSnapshot } = createAppWithConfig({ status: 'loading' })
+    client.apply(ctx)
+    // The setting is unreadable, so the default More-menu entry is up.
+    expect(slots.registered.some(row => row.name === 'sidebar.panellist')).toBe(false)
+    expect(slots.registered.some(row => row.name === 'sidebar.panellist.actions')).toBe(true)
+    setSnapshot({ status: 'ready', writable: true, value: { sidebarPinned: true } })
+    expect(slots.registered.filter(row => row.name === 'sidebar.panellist')).toHaveLength(1)
+    expect(slots.disposals.some(row => row.id === 'token-usage-more')).toBe(true)
+  })
+
+  it('a rejecting panellist register cannot fail activation', () => {
+    const { ctx, slots } = createAppWithConfig({ status: 'ready', value: { sidebarPinned: true } })
+    const original = slots.register.bind(slots)
+    slots.register = (declaration: RegisteredSlot, component: unknown) => {
+      if (declaration.name === 'sidebar.panellist') throw new Error('cell occupied')
+      return original(declaration, component)
+    }
+    expect(() => client.apply(ctx)).not.toThrow()
+    expect(slots.registered.some(row => row.name === 'main' && row.key === 'token-usage')).toBe(true)
+  })
+
+  it('the pin entry renders the gauge glyph at the requested size', () => {
+    const { container } = render(<PanellistPinEntry {...({ size: 16, active: false } as never)} />)
+    const glyph = container.querySelector('[data-testid="icon-gauge"]')
+    expect(glyph).not.toBeNull()
+    expect(glyph?.getAttribute('data-size')).toBe('16')
+  })
+
+  it('stages the pin toggle and commits it only on save', async () => {
+    const { ctx, slots, target } = createAppWithConfig({ status: 'ready', value: { sidebarPinned: false } })
+    client.apply(ctx)
+    const card = slots.registered.find(row => row.name === 'plugins.bundle.config')!
+    const face = card.inject!() as {
+      editPinned: (value: boolean) => void
+      save: () => void
+      hooks: { tokenUsageCard: { getSnapshot(): { sidebarPinned: boolean; pinnedDraft: boolean | undefined; dirty: boolean } } }
+    }
+    const store = face.hooks.tokenUsageCard
+    // Staging flips the checkbox and raises the unsaved badge, but writes nothing.
+    face.editPinned(true)
+    expect(store.getSnapshot().pinnedDraft).toBe(true)
+    expect(store.getSnapshot().dirty).toBe(true)
+    expect(target.set).not.toHaveBeenCalled()
+    // Save commits through the config target and clears the stage.
+    face.save()
+    await vi.waitFor(() => { expect(store.getSnapshot().pinnedDraft).toBeUndefined() })
+    expect(target.set).toHaveBeenCalledWith('sidebarPinned', true)
+    expect(store.getSnapshot().dirty).toBe(false)
   })
 })

@@ -158,6 +158,31 @@
   gap: 6px;
 }
 
+/* The sidebar-pin toggle: one checkbox row, committed on click. */
+.pinRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.pinRow .fieldLabel {
+  color: var(--dsw-alias-label-primary);
+}
+
+.pinCheck {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--dsw-alias-brand-primary);
+  cursor: pointer;
+}
+
+.pinCheck:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 .syncFeedback {
   grid-column: 1 / -1;
 }

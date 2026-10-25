@@ -109,6 +109,12 @@ export interface Config {
    * conversation event, so they are captured on the `llm/stream` waterfall;
    * `false` skips the capture. Composition-only. */
   recordAux?: boolean
+  /** Whether the usage dashboard entry is pinned as a resident row in the
+   * client sidebar (default `false`: the entry lives in the sidebar More
+   * menu). Volatile so a settings toggle commits live and the browser half
+   * registers/unregisters the `sidebar.panellist` row without a reload; the
+   * host only stores the field. */
+  sidebarPinned?: Volatile<boolean | undefined> | boolean
 }
 
 /** Composition knobs of the quota feature (cordis.yml level). */
@@ -142,6 +148,7 @@ export const Config: z<any> = z.object({
   pricingRegion: z.union([z.const('domestic'), z.const('overseas')]).volatile(),
   recordCompaction: z.boolean(),
   recordAux: z.boolean(),
+  sidebarPinned: z.boolean().volatile(),
   quota: z.object({
     enabled: z.boolean(),
     intervalSec: z.number().min(15).max(3600),
@@ -154,6 +161,7 @@ export function validateConfig(config: Config): void {
     key !== 'path' && key !== 'pricingUrl' && key !== 'pricingUrlDomestic'
     && key !== 'pricingUrlOverseas' && key !== 'pricingRegion'
     && key !== 'recordCompaction' && key !== 'recordAux'
+    && key !== 'sidebarPinned'
     && key !== 'quota')
   if (unknown !== undefined) {
     throw new Error(`TokenUsageConfig: unknown key "${unknown}"`)
@@ -183,6 +191,10 @@ export function validateConfig(config: Config): void {
   }
   if (config.recordAux !== undefined && typeof config.recordAux !== 'boolean') {
     throw new Error('TokenUsageConfig: "recordAux" must be a boolean')
+  }
+  const sidebarPinned = readVolatile(config.sidebarPinned)
+  if (sidebarPinned !== undefined && typeof sidebarPinned !== 'boolean') {
+    throw new Error('TokenUsageConfig: "sidebarPinned" must be a boolean')
   }
   if (config.quota !== undefined) {
     if (typeof config.quota !== 'object' || config.quota === null) {

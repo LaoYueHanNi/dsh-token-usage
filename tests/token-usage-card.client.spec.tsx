@@ -287,6 +287,7 @@ describe('TokenUsageCard', () => {
       t,
       useTokenUsageCard: useSnapshot,
       editField: actions.editField,
+      editPinned: actions.editPinned,
       clearField: actions.clearField,
       save: actions.save,
       discard: actions.discard,
@@ -398,6 +399,20 @@ describe('TokenUsageCard', () => {
     expect(screen.getByText(t('card.pricingSync.unsaved'))).not.toBeNull()
     fireEvent.click(screen.getByRole('button', { name: '放弃' }))
     expect(button.disabled).toBe(false)
+  })
+
+  it('does not let the staged sidebar-pin toggle block a pricing sync', () => {
+    const fetch = vi.fn(async () => Response.json({ version: 12, updatedAt: 1, models: 3, aliasPatterns: 1, usdExchangeRate: 7 }))
+    vi.stubGlobal('fetch', fetch)
+    render(<TokenUsageCard {...propsOf(new FakeScope(ready({})))} view="page" />)
+    // The pin toggle stages an unsaved edit (the badge shows), but it has no
+    // say over the pricing source: the sync button stays usable.
+    fireEvent.click(screen.getByLabelText('常驻侧边栏'))
+    expect(screen.getByText(t('card.unsaved'))).not.toBeNull()
+    const button = screen.getByRole('button', { name: '同步定价表' }) as HTMLButtonElement
+    expect(button.disabled).toBe(false)
+    fireEvent.click(button)
+    expect(fetch.mock.calls.some(call => call[0] === PRICING_SYNC_PATH)).toBe(true)
   })
 
   it('shows the migration progress line and locks the controls while a move runs', () => {

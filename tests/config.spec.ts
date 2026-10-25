@@ -52,6 +52,12 @@ describe('validateConfig', () => {
     expect(() => validateConfig({ recordCompaction: 1 } as unknown as Config)).toThrow(/recordCompaction/)
   })
 
+  it('accepts a sidebarPinned boolean and rejects a non-boolean', () => {
+    expect(() => validateConfig({ sidebarPinned: true })).not.toThrow()
+    expect(() => validateConfig({ sidebarPinned: false })).not.toThrow()
+    expect(() => validateConfig({ sidebarPinned: 'yes' } as unknown as Config)).toThrow(/sidebarPinned/)
+  })
+
   it('rejects a blank path', () => {
     expect(() => validateConfig({ path: '' })).toThrow(/non-empty string/)
   })
