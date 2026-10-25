@@ -72,7 +72,7 @@ plugins:
 | 供应商 | 展示 |
 |---|---|
 | 智谱 GLM Coding Plan（国内 / 国际） | 5 小时、每周（部分套餐另有每月） |
-| Kimi For Coding | 5 小时、每周 |
+| Kimi For Coding | 5 小时、每月（旧接口响应另含每周） |
 | MiniMax Coding Plan（国内 / 国际） | 5 小时、每周 |
 | OpenCode Go | 5 小时、每周、每月 |
 | Command Code | 5 小时、每周、每月 |
