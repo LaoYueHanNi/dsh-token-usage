@@ -1,12 +1,14 @@
 /**
  * Kimi For Coding adapter (月之暗面编程套餐): the 5-hour rolling window(s)
- * and the weekly window of the coding-plan subscription.
+ * and the weekly/monthly windows of the coding-plan subscription.
  *
  * Endpoint: `GET https://api.kimi.com/coding/v1/usages` with a Bearer key.
- * The response carries `limits[]` — one entry per active 5-hour bucket,
- * and there CAN be several (the window rolls per request batch) — plus a
- * top-level `usage` object for the weekly bucket. Each bucket reports
- * `{ limit, remaining, resetTime }`; the used share is derived.
+ * The legacy response carries `limits[]` — one entry per active 5-hour
+ * bucket, and there CAN be several (the window rolls per request batch) —
+ * plus a top-level `usage` object for the weekly bucket. Current responses
+ * serialize those amounts as strings and add `usages.limit_5h` plus monthly
+ * ratio windows. Both generations are accepted; the finer-grained current
+ * ratio wins when both representations are present.
  *
  * Route matching is host-first: the pi-ai `moonshotai` routes point at the
  * standard Moonshot API (api.moonshot.cn / api.moonshot.ai), which has no
@@ -20,7 +22,7 @@
  */
 
 import type { QuotaWindow } from '../../wire.ts'
-import { fetchJson, hostOf, numberOf, toEpochMs } from '../http.ts'
+import { amountOf, fetchJson, hostOf, toEpochMs } from '../http.ts'
 import { QuotaQueryError } from '../types.ts'
 import type { QuotaAdapter, QuotaQueryResult } from '../types.ts'
 
@@ -37,22 +39,53 @@ export function isKimiHost(baseUrl: string | undefined): boolean {
   return host === KIMI_HOST || (host?.endsWith(`.${KIMI_HOST}`) ?? false)
 }
 
-/** One `{ limit, remaining, resetTime }` bucket → a used-percent window. */
+/** A finite non-negative JSON amount; Kimi currently serializes these as strings. */
+function nonNegativeOf(value: unknown): number | undefined {
+  const parsed = amountOf(value)
+  return parsed !== undefined && parsed >= 0 ? parsed : undefined
+}
+
+/** Kimi reset timestamps appear as epoch numbers or ISO-8601 strings. */
+function resetAtOf(value: unknown): number | undefined {
+  const numeric = nonNegativeOf(value)
+  if (numeric !== undefined) return toEpochMs(numeric)
+  if (typeof value !== 'string' || value.trim() === '') return undefined
+  const parsed = Date.parse(value)
+  return Number.isFinite(parsed) ? parsed : undefined
+}
+
+/** One legacy `{ limit, remaining|used, resetTime }` bucket → a used-percent window. */
 function windowOf(tier: QuotaWindow['tier'], raw: unknown): QuotaWindow | undefined {
   if (typeof raw !== 'object' || raw === null) return undefined
   const bucket = raw as Record<string, unknown>
-  const limit = numberOf(bucket.limit)
-  const remaining = numberOf(bucket.remaining)
-  if (limit === undefined || limit <= 0 || remaining === undefined) return undefined
-  const resetAt = toEpochMs(bucket.resetTime)
+  const limit = nonNegativeOf(bucket.limit)
+  const remaining = nonNegativeOf(bucket.remaining)
+  const used = nonNegativeOf(bucket.used)
+  if (limit === undefined || limit <= 0 || (remaining === undefined && used === undefined)) return undefined
+  const usedAmount = remaining !== undefined ? limit - remaining : used!
+  const resetAt = resetAtOf(bucket.resetTime)
   return {
     tier,
-    usedPercent: Math.min(100, Math.max(0, ((limit - remaining) / limit) * 100)),
+    usedPercent: Math.min(100, Math.max(0, (usedAmount / limit) * 100)),
     ...(resetAt !== undefined ? { resetAt } : {}),
   }
 }
 
-/** The Kimi For Coding adapter: 5-hour + weekly windows. */
+/** One current `{ used_ratio, reset_time }` window → the shared percent model. */
+function ratioWindowOf(tier: QuotaWindow['tier'], raw: unknown): QuotaWindow | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined
+  const bucket = raw as Record<string, unknown>
+  const ratio = nonNegativeOf(bucket.used_ratio ?? bucket.usedRatio)
+  if (ratio === undefined) return undefined
+  const resetAt = resetAtOf(bucket.reset_time ?? bucket.resetTime)
+  return {
+    tier,
+    usedPercent: Math.min(100, ratio * 100),
+    ...(resetAt !== undefined ? { resetAt } : {}),
+  }
+}
+
+/** The Kimi For Coding adapter: 5-hour + weekly/monthly windows. */
 export const kimiAdapter: QuotaAdapter = {
   id: 'kimi-coding-plan',
   label: 'Kimi For Coding',
@@ -65,10 +98,10 @@ export const kimiAdapter: QuotaAdapter = {
     }
     const record = body as Record<string, unknown>
 
-    // Several 5-hour buckets can be live at once (the window rolls); the
-    // one resetting LATEST is the freshest — the bucket the current
-    // requests feed. cc-switch renders every bucket; a single panel column
-    // wants that freshest one.
+    // Several legacy 5-hour buckets can be live at once (the window rolls);
+    // the one resetting LATEST is the freshest — the bucket the current
+    // requests feed. The current `usages.limit_5h` ratio is more precise and
+    // takes precedence when both representations are present.
     const buckets: QuotaWindow[] = []
     if (Array.isArray(record.limits)) {
       for (const entry of record.limits) {
@@ -79,14 +112,25 @@ export const kimiAdapter: QuotaAdapter = {
         if (window !== undefined) buckets.push(window)
       }
     }
-    const fiveHour = buckets.length > 0
+    const legacyFiveHour = buckets.length > 0
       ? buckets.reduce((latest, next) => (next.resetAt ?? 0) >= (latest.resetAt ?? 0) ? next : latest)
       : undefined
+    const usages = typeof record.usages === 'object' && record.usages !== null
+      ? record.usages as Record<string, unknown>
+      : undefined
+    const fiveHour = (usages !== undefined ? ratioWindowOf('five_hour', usages.limit_5h) : undefined)
+      ?? legacyFiveHour
     const weekly = windowOf('weekly', record.usage)
+    // `limit_month_code` is the coding-plan pool. `limit_month_total` is the
+    // account-wide fallback for responses that do not distinguish that pool.
+    const monthly = usages === undefined ? undefined
+      : ratioWindowOf('monthly', usages.limit_month_code)
+        ?? ratioWindowOf('monthly', usages.limit_month_total)
 
     const windows: QuotaWindow[] = []
     if (fiveHour !== undefined) windows.push(fiveHour)
     if (weekly !== undefined) windows.push(weekly)
+    if (monthly !== undefined) windows.push(monthly)
     if (windows.length === 0) {
       throw new QuotaQueryError('parse', 'no usable limit buckets in response')
     }

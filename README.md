@@ -72,7 +72,7 @@ The input-bar button follows the currently selected provider and opens a panel w
 | Provider | Shows |
 |---|---|
 | Zhipu GLM Coding Plan (CN / international) | 5-hour, weekly (some plans also monthly) |
-| Kimi For Coding | 5-hour, weekly |
+| Kimi For Coding | 5-hour, monthly (legacy responses: weekly) |
 | MiniMax Coding Plan (CN / international) | 5-hour, weekly |
 | OpenCode Go | 5-hour, weekly, monthly |
 | Command Code | 5-hour, weekly, monthly |
