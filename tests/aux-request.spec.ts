@@ -89,6 +89,13 @@ describe('recordFromAuxRequest', () => {
     expect(row).toMatchObject({ kind: 'aux', auxKind: 'translation', sessionId: '' })
   })
 
+  it('preserves a host-provided session owner for attributed auxiliary work', () => {
+    expect(recordFromAuxRequest({
+      auxKind: 'session-title', requestId: 'aux:session-title:1:6', time: 1,
+      model: 'deepseek-flash', sessionId: 'session-1',
+    }).sessionId).toBe('session-1')
+  })
+
   it('carries the routed and provider-reported models side by side', () => {
     const row = recordFromAuxRequest({
       auxKind: 'session-title',

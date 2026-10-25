@@ -23,6 +23,7 @@ function record(overrides: Partial<UsageRecord> = {}): UsageRecord {
     ...(overrides.provider !== undefined ? { provider: overrides.provider } : {}),
     ...(overrides.usage !== undefined ? { usage: overrides.usage } : 'usage' in overrides ? {} : { usage: { inputTokens: 100, outputTokens: 50, cacheReadTokens: 900 } }),
     ...(overrides.kind !== undefined ? { kind: overrides.kind } : {}),
+    ...(overrides.auxKind !== undefined ? { auxKind: overrides.auxKind } : {}),
     ...(overrides.interrupted === true ? { interrupted: true as const } : {}),
     ...(overrides.latencyMs !== undefined ? { latencyMs: overrides.latencyMs } : {}),
     ...(overrides.firstTokenLatencyMs !== undefined ? { firstTokenLatencyMs: overrides.firstTokenLatencyMs } : {}),
@@ -378,6 +379,34 @@ describe('buildSessionRequestDetails — merge and dedupe', () => {
 })
 
 describe('buildSessionRequestDetails — derived figures', () => {
+  it('keeps an attributed auxiliary row in the pool without a cache-low assessment', () => {
+    const details = buildSessionRequestDetails({
+      records: [record({
+        requestId: 'aux:session-title:1:1',
+        kind: 'aux',
+        auxKind: 'session-title',
+        usage: { inputTokens: 9_000, outputTokens: 20, cacheReadTokens: 0, cacheWriteTokens: 300 },
+      })],
+      live: { attempts: [], activeCount: 0 },
+      pricing: NO_PRICING,
+      asOf: 2_000,
+      liveCapability: 'settled-only',
+    })
+    expect(details.items[0]).toMatchObject({ kind: 'aux', auxKind: 'session-title', cache: { band: 'excluded', reason: 'auxiliary' } })
+  })
+
+  it('publishes the pricing-resolved model id for request-pool display', () => {
+    const details = buildSessionRequestDetails({
+      records: [record({ requestId: 'alias', model: 'group/glm-5.3-flashx' })],
+      live: { attempts: [], activeCount: 0 },
+      pricing: { ...NO_PRICING, modelIdOf: name => name === 'group/glm-5.3-flashx' ? 'glm-5.3-flashx' : name },
+      asOf: 2_000,
+      liveCapability: 'settled-only',
+    })
+    expect(details.items[0]!.modelId).toBe('glm-5.3-flashx')
+    expect(details.items[0]!.requestedModel).toBe('group/glm-5.3-flashx')
+  })
+
   it.each(['zai-coding-cn', undefined])('assesses reported cache data on %s after the cold-start request', provider => {
     const details = buildSessionRequestDetails({
       records: [

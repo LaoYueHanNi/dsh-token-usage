@@ -533,6 +533,7 @@ export function createStatsRoute(dir: () => string, options: StatsRouteOptions =
             pricing: {
               resolve,
               rulesOf: name => context.ratesForModel(name),
+              modelIdOf: name => context.resolveModel(name).modelId ?? name,
               ready: summary.costState === 'ready',
             },
             asOf: Date.now(),

@@ -38,9 +38,9 @@
  *   the window's compaction attempt is the summarized one). `turn/end`
  *   resolves whatever the stream never did.
  * - Compaction summarize calls carry `purpose: 'compaction'` and the owning
- *   session id but no step; auxiliary bypass calls (session title, review
- *   authorization, translation) carry no session id — they stay out of the
- *   pool, exactly like the stats route refuses to attribute them.
+ *   session id but no step. Title calls carry their owning session id on
+ *   current hosts and enter the pool as `aux`; unowned review/translation
+ *   calls stay out because the stats route cannot safely attribute them.
  *
  * @module token-usage/request-observe
  */
@@ -53,7 +53,9 @@ import type { StreamChunk, TokenUsage } from '@deepseek-ai/dsh-llm'
 // can name `SessionEvent<'llm/retry'>` and the compaction types.
 import type {} from '@deepseek-ai/dsh-llm-retry/types'
 import type {} from '@deepseek-ai/dsh-compaction/types'
+import type { AuxKind } from './usage-record.ts'
 import { isTokenDelta, type UsageFields, type UsageRecord } from './usage-record.ts'
+import { AUTO_REVIEW_PROMPT_PREFIX } from './aux-request.ts'
 import type { RequestDetailState } from './wire.ts'
 
 /** One live attempt observed at the waterfall: the runtime-state shape the
@@ -64,7 +66,9 @@ export interface LiveAttempt {
    * Unique per process; a restarted process gets a new epoch. */
   readonly id: string
   sessionId: string
-  kind: 'request' | 'compaction' | 'failure'
+  kind: 'request' | 'compaction' | 'failure' | 'aux'
+  /** Auxiliary subtype when the host stamped an owning session. */
+  auxKind?: AuxKind
   state: RequestDetailState
   /** True for attempts that entered the waiting/streaming lifecycle. Used
    * to distinguish a just-finished live request from a synthetic settled
@@ -206,6 +210,31 @@ export class RequestObserver {
     return record
   }
 
+  /** Link a successful, host-attributed auxiliary stream to the id used by
+   * the JSONL recorder. Title requests are observed by both listeners and
+   * have no session event to provide a durable id of their own. */
+  linkAuxAttempt(input: {
+    sessionId: string
+    auxKind: AuxKind
+    startedAt: number
+    provider: string
+    model: string
+    requestId: string
+  }): void {
+    let found: LiveAttempt | undefined
+    let distance = Number.POSITIVE_INFINITY
+    for (const attempt of this.attempts.values()) {
+      if (attempt.kind !== 'aux' || attempt.auxKind !== input.auxKind
+        || attempt.sessionId !== input.sessionId || attempt.durableRequestId !== undefined
+        || attempt.provider !== input.provider || attempt.requestedModel !== input.model) continue
+      const nextDistance = Math.abs(attempt.startedAt - input.startedAt)
+      if (nextDistance > 2_000 || nextDistance >= distance) continue
+      found = attempt
+      distance = nextDistance
+    }
+    if (found !== undefined) found.durableRequestId = input.requestId
+  }
+
   /** Housekeeping the route never sees: drop settled rows past the TTL or
    * beyond the per-session bound, so idle sessions shrink back to zero. */
   cleanup(now: number = Date.now()): void {
@@ -239,7 +268,7 @@ export class RequestObserver {
       // The durable settlement of this turn/step's LAST attempt: link it so
       // the merge can fold the persisted row into the live one in place.
       const linked = this.lastAttemptOf(sessionId, event.data.turn, event.data.step)
-      if (linked !== undefined && linked.durableRequestId === undefined) {
+      if (linked !== undefined && linked.kind !== 'aux' && linked.durableRequestId === undefined) {
         linked.durableRequestId = event.data.message.id
       }
       return
@@ -255,7 +284,7 @@ export class RequestObserver {
       // A provider can throw without emitting a finish chunk. The stream
       // wrapper marks that attempt interrupted, but this retry event is
       // authoritative evidence that it was a failed provider attempt.
-      if (linked !== undefined && (linked.state === 'failed' || linked.state === 'interrupted') && linked.durableRequestId === undefined) {
+      if (linked !== undefined && linked.kind !== 'aux' && (linked.state === 'failed' || linked.state === 'interrupted') && linked.durableRequestId === undefined) {
         linked.state = 'failed'
         linked.failureCode ??= event.data.failure.code
         linked.durableRequestId = `failure:${sessionId}:${String(event.seq)}`
@@ -305,7 +334,7 @@ export class RequestObserver {
       let terminal: LiveAttempt | undefined
       if (durable !== undefined) {
         for (const attempt of this.attempts.values()) {
-          if (attempt.sessionId !== sessionId || attempt.turn !== event.data.turn || attempt.kind === 'compaction') continue
+          if (attempt.sessionId !== sessionId || attempt.turn !== event.data.turn || attempt.kind === 'compaction' || attempt.kind === 'aux') continue
           if (attempt.durableRequestId !== undefined || attempt.state === 'cancelled' || attempt.state === 'completed') continue
           if (terminal === undefined || attempt.startedAt >= terminal.startedAt) terminal = attempt
         }
@@ -313,7 +342,7 @@ export class RequestObserver {
       for (const attempt of this.attempts.values()) {
         if (attempt.sessionId !== sessionId) continue
         if (attempt.turn !== event.data.turn) continue
-        if (attempt.kind === 'compaction') continue
+        if (attempt.kind === 'compaction' || attempt.kind === 'aux') continue
         const inFlight = attempt.state === 'waiting' || attempt.state === 'streaming'
         if (!inFlight && attempt !== terminal) continue
         if (inFlight) {
@@ -345,7 +374,7 @@ export class RequestObserver {
   private lastAttemptOf(sessionId: string, turn: number, step: number): LiveAttempt | undefined {
     let found: LiveAttempt | undefined
     for (const attempt of this.attempts.values()) {
-      if (attempt.sessionId !== sessionId || attempt.turn !== turn || attempt.step !== step) continue
+      if (attempt.sessionId !== sessionId || attempt.turn !== turn || attempt.step !== step || attempt.kind === 'aux') continue
       if (found === undefined || attempt.startedAt >= found.startedAt) found = attempt
     }
     return found
@@ -378,15 +407,20 @@ export class RequestObserver {
    * waterfall chain keeps its synchronous shape.
    */
   private observe(
-    options: { sessionId?: string; purpose?: string; provider: string; model: string; signal?: AbortSignal },
+    options: { sessionId?: string; purpose?: string; system?: string; provider: string; model: string; signal?: AbortSignal },
     next: () => AsyncIterable<StreamChunk>,
   ): AsyncIterable<StreamChunk> {
     const sessionId = options.sessionId
-    // No owning session → an auxiliary bypass call (session title, review
-    // gate, translation) or an unattributed host call: never squeezed into
-    // a conversation's pool. `session-title` is aux by contract too.
-    if (sessionId === undefined || sessionId === '' || options.purpose === 'session-title') return next()
-    const kind = options.purpose === 'compaction' ? 'compaction' : 'request'
+    // No owning session → an auxiliary bypass call (review gate, translation)
+    // or an unattributed host call. It cannot safely appear in a session
+    // pool, so leave it to the global auxiliary recorder only.
+    if (sessionId === undefined || sessionId === '') return next()
+    const auxKind: AuxKind | undefined = options.purpose === 'session-title'
+      ? 'session-title'
+      : typeof options.system === 'string' && options.system.startsWith(AUTO_REVIEW_PROMPT_PREFIX)
+        ? 'auto-review'
+        : undefined
+    const kind = options.purpose === 'compaction' ? 'compaction' : auxKind !== undefined ? 'aux' : 'request'
     const active = this.activeSteps.get(sessionId)
     const turn = active?.turn ?? -1
     const step = active?.step ?? -1
@@ -398,6 +432,7 @@ export class RequestObserver {
       id,
       sessionId,
       kind,
+      ...(auxKind !== undefined ? { auxKind } : {}),
       state: 'waiting',
       wasActive: true,
       provider: options.provider,

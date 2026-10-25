@@ -325,10 +325,10 @@ export function summarizeRecords(records: readonly UsageRecord[], resolve: RateR
       ?? { day, model, rate, totals: emptyTotals() }
     addUsage(cell.totals, record)
     rated.set(rowKey, cell)
-    // An auxiliary (bypass) request has no owning conversation: it folds
-    // into every model-scoped dimension above (it bills a real model) but
-    // never into the per-session cells or the session table. Its own
-    // (kind, day, model, rate) dimension backs the runtime-overhead block.
+    // Unowned auxiliary calls (the legacy Auto-review/translation shape)
+    // never enter the per-session dimension. A host-attributed auxiliary
+    // call, such as the current session-title request carrying sessionId,
+    // does: the session view must reconcile every billable call it can prove.
     if (record.kind === 'aux') {
       const auxKind = auxKindOfRecord(record)
       const key = auxRowKey(auxKind, day, model, rate)
@@ -336,7 +336,8 @@ export function summarizeRecords(records: readonly UsageRecord[], resolve: RateR
         ?? { auxKind, day, model, rate, totals: emptyTotals() }
       addUsage(auxCell.totals, record)
       aux.set(key, auxCell)
-    } else {
+    }
+    if (record.kind !== 'aux' || record.sessionId !== '') {
       const sessionCell: UsageSessionRow = {
         sessionId: record.sessionId,
         day,

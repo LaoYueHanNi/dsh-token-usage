@@ -206,11 +206,22 @@ describe('live request observer', () => {
     expect(attempts.filter(attempt => attempt.state === 'cancelled')).toHaveLength(1)
   })
 
-  it('keeps auxiliary bypass calls and session-title requests out of the pool', async () => {
+  it('keeps unowned bypass calls out while attributing session-title requests', async () => {
     const { ctx, observer } = await mounted()
     await stream(ctx, { provider: 'p', model: 'm' }, [{ type: 'finish', reason: { kind: 'stop' } }])
     await stream(ctx, { sessionId: 's1', purpose: 'session-title', provider: 'p', model: 'm' }, [{ type: 'finish', reason: { kind: 'stop' } }])
-    expect(observer.snapshot(['s1']).attempts).toHaveLength(0)
+    expect(observer.snapshot(['s1']).attempts).toMatchObject([{ kind: 'aux', auxKind: 'session-title', state: 'completed' }])
+  })
+
+  it('links an attributed auxiliary attempt to its persisted id without changing its kind', async () => {
+    const { ctx, observer } = await mounted()
+    await stream(ctx, { sessionId: 's1', purpose: 'session-title', provider: 'p', model: 'm' }, [
+      { type: 'usage', usage: { inputTokens: 12, outputTokens: 2, cacheReadTokens: 0 } },
+      { type: 'finish', reason: { kind: 'stop' } },
+    ])
+    const attempt = observer.snapshot(['s1']).attempts[0]!
+    observer.linkAuxAttempt({ sessionId: 's1', auxKind: 'session-title', startedAt: attempt.startedAt, provider: 'p', model: 'm', requestId: 'aux:session-title:1:1' })
+    expect(observer.snapshot(['s1']).attempts[0]).toMatchObject({ kind: 'aux', durableRequestId: 'aux:session-title:1:1' })
   })
 
   it('attributes compaction calls with purpose compaction and the owning session', async () => {

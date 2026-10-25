@@ -10,16 +10,19 @@ Status: implemented
 
 ## Decision
 
+> [!NOTE]
+> 本决策中“辅助请求一律没有会话归属、按会话不含”的部分已于 2026-10-25 由 [DR: 将可证明归属的辅助请求纳入会话用量](../implemented/2026-10-25-session-attributed-auxiliary-requests.md) 部分取代。当前仍无法安全归属的旁路请求继续保持全局运行开销口径。
+
 采集点改为模型服务的统一入口：插件监听 `llm/stream` waterfall。dsh-llm 的 `LlmRuntime.stream` / 已准备调用的 `stream()` 都经过 `ctx.waterfall(this, 'llm/stream', options, () => adapterStream(...))`，且该 waterfall 是同步组合——监听器同步返回一个**原样透传的 async generator**：逐步 `yield` 上游 chunk、记住 `usage` chunk 与终止 `finish`，流结束后（fire-and-forget）向当前数据目录追加一行 JSONL。不消费、不改写、不延迟任何 chunk。
 
 分类不依赖宿主新增导出（`isAgentLoopRequest` 等），避免低版本 DSH 缺 API 时插件加载失败：有 `sessionId` 的请求属于主对话（已由 `assistant/message` 记录）或压缩/标题（`purpose` 明确），无 `sessionId` 的旁路请求再按固定 system 提示词识别——`REVIEW_POLICY` 开头是自动审查，`Translate the following text` 开头是推理翻译，其余落 `other` 兜底类别（首次出现打一条日志，便于发现宿主新增旁路调用点）。请求没有 `purpose` 标记时不做猜测式归属。
 
-记录行：`kind: 'aux'` + `auxKind: 'auto-review' | 'session-title' | 'translation' | 'other'`，`sessionId: ''`（旁路调用没有会话归属），`model` 为请求实际路由，usage 为 provider 上报的四桶，`requestId` 为 `aux:<kind>:<流开始毫秒>:<进程内计数>`。成功的流才写行；失败/取消的流没有计费 usage，只写插件警告日志（含失败码），不落数据。配置新增 `recordAux`（默认 `true`，composition-only，与 `recordCompaction` 并列）可关闭采集。
+记录行：`kind: 'aux'` + `auxKind: 'auto-review' | 'session-title' | 'translation' | 'other'`，无法确认归属时 `sessionId: ''`，`model` 为请求实际路由，usage 为 provider 上报的四桶，`requestId` 为 `aux:<kind>:<流开始毫秒>:<进程内计数>`。成功的流才写行；失败/取消的流没有计费 usage，只写插件警告日志（含失败码），不落数据。配置新增 `recordAux`（默认 `true`，composition-only，与 `recordCompaction` 并列）可关闭采集。
 
 聚合口径（用户口径：计入总消耗、按模型包含、按会话无法关联则不含）：
 
 - 辅助记录进入 `total`、`byDay`、`byHour`、`byModel`、`rateRows`、`recent`——总额、趋势图、按模型表、成本底账都把它当真实计费请求；
-- 不进入 `bySession` / `sessionRows`——没有会话可归属，按会话表与会话用量页签、输入栏胶囊都保持对话口径；
+- 未归属的辅助行不进入 `bySession` / `sessionRows`——没有会话可归属，按会话表与会话用量页签、输入栏胶囊都保持对话口径；可证明归属的辅助行按新决策进入对应会话；
 - 另设 `auxRows`（kind × day × model × rate）与 `AuxSummary`（按 kind 汇总 + 成本），只为设置页「运行开销」页签提供拆分；该维度与 `rateRows` 冗余但互不影响，避免为了拆分而绕开既有定价与筛选链路；
 - 日期筛选对辅助请求生效；模型筛选同样作用于辅助请求（其 `model` 是真实路由），因此运行开销页签与筛选后的总量、按模型表始终对得上。
 

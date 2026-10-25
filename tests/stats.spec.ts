@@ -33,6 +33,20 @@ function record(time: number, model: string, usage?: { input?: number; output?: 
 }
 
 describe('summarizeRecords', () => {
+  it('folds a host-attributed auxiliary request into its session while keeping unowned aux global', () => {
+    const owned: UsageRecord = {
+      requestId: 'aux:session-title:1:1', time: 1_700_000_000_000, sessionId: 's1', model: 'title-model',
+      kind: 'aux', auxKind: 'session-title', usage: { inputTokens: 20, outputTokens: 4 },
+    }
+    const unowned: UsageRecord = { ...owned, requestId: 'aux:auto-review:1:2', sessionId: '', auxKind: 'auto-review' }
+    const summary = summarizeRecords([owned, unowned])
+    expect(summary.total.requests).toBe(2)
+    expect(summary.bySession).toHaveLength(1)
+    expect(summary.bySession[0]!.sessionId).toBe('s1')
+    expect(summary.bySession[0]!.totals.requests).toBe(1)
+    expect(summary.auxRows).toHaveLength(2)
+  })
+
   it('groups every model dimension under the provider-reported response model first', () => {
     const at = new Date(2026, 0, 15, 12).getTime()
     const summary = summarizeRecords([

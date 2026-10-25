@@ -32,7 +32,7 @@ const DEEPSEEK_BLOCK_PROVIDERS: ReadonlySet<string> = new Set(['deepseek-officia
  * facts, plus the route-sequence exclusion the caller walked beforehand. */
 export interface CacheAssessInput {
   state: RequestDetailState
-  kind: 'request' | 'compaction' | 'failure'
+  kind: 'request' | 'compaction' | 'failure' | 'aux'
   /** Provider route key, used only for the documented minimum-input rule. */
   provider?: string
   /** Uncached input count reported by the provider. */
@@ -104,6 +104,11 @@ export function assessRequestCache(input: CacheAssessInput): RequestDetailCache 
     assessment.reason = 'compaction'
     return assessment
   }
+  if (kind === 'aux') {
+    assessment.band = 'excluded'
+    assessment.reason = 'auxiliary'
+    return assessment
+  }
 
   // 2. Data validity.
   if (!countsAreValid(input)) {
@@ -163,6 +168,7 @@ export function assessRequestCache(input: CacheAssessInput): RequestDetailCache 
 export interface RouteSequenceEntry {
   sessionId: string
   model: string
+  kind?: 'request' | 'compaction' | 'failure' | 'aux'
   /** Provider route key; absent on legacy rows (recorded before the field
    * existed) and on failure rows whose session never named a route. */
   provider?: string
@@ -185,9 +191,10 @@ export interface RouteSequenceEntry {
  * request that fell out of the 20-item pool is still correctly marked, and
  * the marks do not move as the window slides.
  *
- * Predecessors are by adjacent request regardless of kind: a compaction
- * summarize call is a real provider request of the same session and takes
- * part in the cache lineage.
+ * Predecessors are by adjacent conversation request regardless of kind: a
+ * compaction summarize call is a real provider request of the same session
+ * and takes part in the cache lineage. Auxiliary work is a separate prompt
+ * lineage and is skipped.
  */
 export function routeExclusionsOf(
   entries: readonly RouteSequenceEntry[],
@@ -195,6 +202,10 @@ export function routeExclusionsOf(
   const marks = new Map<object, 'cold-start' | 'model-switch'>()
   const lastRoute = new Map<string, Pick<RouteSequenceEntry, 'model' | 'provider'>>()
   for (const entry of entries) {
+    // Auxiliary work uses a separate prompt lineage. It must not become the
+    // predecessor that makes the next conversation request look like a model
+    // switch (title generation commonly uses a different model).
+    if (entry.kind === 'aux') continue
     // An unattributed entry (model '' — a failure row whose session never
     // named a route) takes no mark and leaves no predecessor: it would
     // otherwise forge a model switch around itself.
@@ -249,6 +260,7 @@ export const CACHE_EXCLUSION_REASONS: readonly RequestCacheExclusion[] = [
   'in-flight',
   'not-success',
   'compaction',
+  'auxiliary',
   'cache-unreported',
   'insufficient-input',
   'invalid-data',

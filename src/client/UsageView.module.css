@@ -393,6 +393,18 @@
 
 .cacheLoss svg { width: 12px; height: 12px; flex: none; }
 
+/* Auxiliary work is a real model call but not a normal conversation turn.
+ * Keep its compact marker next to the model, where the cache marker lives. */
+.auxKind {
+  flex: none;
+  padding: 2px 5px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 4px;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
 /* The six fixed metrics of the latest panel, in frozen order. */
 .requestMetrics {
   display: grid;
@@ -445,7 +457,7 @@
 .poolNoticeError { color: var(--dsw-alias-state-error-primary); }
 .poolNoticeNeutral { color: var(--dsw-alias-label-tertiary); }
 
-/* History table: eleven columns, horizontal scroll when the pane is too
+/* History table: thirteen columns, horizontal scroll when the pane is too
  * narrow (columns are never hidden). */
 .poolTableWrap {
   max-height: 196px;
@@ -458,7 +470,7 @@
 
 .poolTable {
   width: 100%;
-  min-width: 880px;
+  min-width: 1040px;
   border-collapse: collapse;
   font-size: 11px;
   font-variant-numeric: tabular-nums;

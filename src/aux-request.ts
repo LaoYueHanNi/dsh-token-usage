@@ -3,9 +3,10 @@
  * and record projection for provider calls that are NOT part of a
  * conversation turn — the Auto review authorization gate, session-title
  * generation, and reasoning translation. Those calls are issued through
- * `ctx.llm.stream()` by their owning host packages and never produce a
- * session event, so the plugin records them on the `llm/stream` waterfall
- * every streaming call passes through (see `LlmRuntime.stream`).
+ * `ctx.llm.stream()` by their owning host packages and do not produce an
+ * `assistant/message` usage event, so the plugin records them on the
+ * `llm/stream` waterfall every streaming call passes through
+ * (see `LlmRuntime.stream`).
  *
  * Classification never relies on host exports that older DSH builds may not
  * ship: the conversation loop always carries a `sessionId`, compaction and
@@ -46,14 +47,16 @@ export function classifyAuxRequest(options: GenerateOptions): AuxKind | undefine
   if (options.purpose === 'compaction') return undefined
   // Title generation is a bypass call, but its purpose marker is explicit.
   if (options.purpose === 'session-title') return 'session-title'
+  // Newer Auto-review hosts may stamp the owning session while older hosts
+  // still omit it.  The fixed policy remains authoritative in either shape.
+  const system = options.system
+  if (typeof system === 'string' && system.startsWith(AUTO_REVIEW_PROMPT_PREFIX)) return 'auto-review'
   // Every conversation-loop request is marked with the session it serves
   // (dsh-agent-loop freezes `sessionId` into its request); the loop records
   // the call through `assistant/message`. A hand-built request without a
   // session is the bypass shape.
   if (options.sessionId !== undefined) return undefined
-  const system = options.system
   if (typeof system === 'string') {
-    if (system.startsWith(AUTO_REVIEW_PROMPT_PREFIX)) return 'auto-review'
     if (system.startsWith(TRANSLATION_PROMPT_PREFIX)) return 'translation'
   }
   return 'other'
@@ -67,6 +70,9 @@ export interface AuxRequestRecordInput {
   requestId: string
   /** Stream-start wall time, epoch milliseconds. */
   time: number
+  /** Owning conversation when the host stamped one (currently title
+   * generation; older unowned bypass calls stay empty). */
+  sessionId?: string
   /** Provider model id the bypass call routed to. */
   model: string
   /** Provider-reported model id of the response body, when the adapter's
@@ -79,8 +85,9 @@ export interface AuxRequestRecordInput {
 
 /**
  * Build the log row for one settled auxiliary model request. The row carries
- * `kind: 'aux'` and an empty `sessionId` — a bypass call has no conversation
- * owner, so the per-session dimension must never attribute it to one.
+ * `kind: 'aux'`; when the host supplies a session owner, that id is retained
+ * so per-session views can include the attributable running overhead. Legacy
+ * unowned bypass calls keep an empty `sessionId`.
  * @param input - kind, identity, timing, route, and usage of the call.
  * @returns the persistable record (usage omitted when unusable).
  */
@@ -89,7 +96,7 @@ export function recordFromAuxRequest(input: AuxRequestRecordInput): UsageRecord 
   return {
     requestId: input.requestId,
     time: input.time,
-    sessionId: '',
+    sessionId: input.sessionId ?? '',
     model: input.model,
     ...(input.responseModel !== undefined ? { responseModel: input.responseModel } : {}),
     ...(usage !== undefined ? { usage } : {}),

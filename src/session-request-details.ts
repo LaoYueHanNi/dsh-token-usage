@@ -18,7 +18,7 @@
 import { costOf, ratesForKey } from './pricing.ts'
 import type { ModelRates } from './wire.ts'
 import type { RateKey } from './wire.ts'
-import { effectiveModelOf, type UsageRecord } from './usage-record.ts'
+import { effectiveModelOf, type AuxKind, type UsageRecord } from './usage-record.ts'
 import { assessRequestCache, routeExclusionsOf, settledSpeedOf } from './request-details.ts'
 import type { LiveAttempt } from './request-observe.ts'
 import { REQUEST_POOL_LIMIT, type RequestDetailView, type SessionRequestDetails } from './wire.ts'
@@ -30,6 +30,8 @@ export interface RequestPricing {
   resolve: (record: UsageRecord) => RateKey
   /** The model's rate rules under the current table; undefined = unpriced. */
   rulesOf: (model: string) => ModelRates | undefined
+  /** Canonical model id after pricing aliases / regexes are resolved. */
+  modelIdOf?: (model: string) => string
   /** Whether the pricing layer is ready at all (else costs read unknown). */
   ready: boolean
 }
@@ -46,7 +48,8 @@ interface OrderAnchor {
 interface MergedAttempt extends OrderAnchor {
   durableRequestId?: string
   sessionId: string
-  kind: 'request' | 'compaction' | 'failure'
+  kind: 'request' | 'compaction' | 'failure' | 'aux'
+  auxKind?: AuxKind
   state: RequestDetailView['state']
   requestedModel: string
   responseModel?: string
@@ -99,7 +102,8 @@ function attemptOfRecord(record: UsageRecord): MergedAttempt {
     id: record.requestId,
     durableRequestId: record.requestId,
     sessionId: record.sessionId,
-    kind: record.kind === 'failure' ? 'failure' : record.kind === 'compaction' ? 'compaction' : 'request',
+    kind: record.kind === 'failure' ? 'failure' : record.kind === 'compaction' ? 'compaction' : record.kind === 'aux' ? 'aux' : 'request',
+    ...(record.auxKind !== undefined ? { auxKind: record.auxKind } : {}),
     state,
     requestedModel: record.model,
     ...(record.responseModel !== undefined ? { responseModel: record.responseModel } : {}),
@@ -136,6 +140,7 @@ function attemptOfLive(live: LiveAttempt): MergedAttempt & { startedAt: number }
     ...(live.durableRequestId !== undefined ? { durableRequestId: live.durableRequestId } : {}),
     sessionId: live.sessionId,
     kind: live.kind,
+    ...(live.auxKind !== undefined ? { auxKind: live.auxKind } : {}),
     state: live.state,
     requestedModel: live.requestedModel,
     ...(live.provider !== undefined ? { provider: live.provider } : {}),
@@ -272,6 +277,7 @@ export function buildSessionRequestDetails(input: {
       model: attempt.requestedModel,
       ...(attempt.responseModel !== undefined ? { responseModel: attempt.responseModel } : {}),
     }),
+    kind: attempt.kind,
     ...(attempt.provider !== undefined ? { provider: attempt.provider } : {}),
   }))
   const marks = routeExclusionsOf(sequence)
@@ -299,6 +305,11 @@ export function buildSessionRequestDetails(input: {
       ...(sequenceExclusion !== undefined ? { sequenceExclusion } : {}),
     })
     const { cost, pricingStatus } = priceOf(attempt, pricing)
+    const effectiveModel = effectiveModelOf({
+      model: attempt.requestedModel,
+      ...(attempt.responseModel !== undefined ? { responseModel: attempt.responseModel } : {}),
+    })
+    const modelId = pricing.modelIdOf?.(effectiveModel) ?? effectiveModel
     // The settled single-request speed: one gate (the shared 500ms streaming
     // sample rule), computed server-side so the model table and the pool
     // rows can never disagree about what a trustworthy tok/s is.
@@ -316,6 +327,8 @@ export function buildSessionRequestDetails(input: {
       sessionId: attempt.sessionId,
       state: attempt.state,
       kind: attempt.kind,
+      ...(attempt.auxKind !== undefined ? { auxKind: attempt.auxKind } : {}),
+      ...(modelId !== '' ? { modelId } : {}),
       requestedModel: attempt.requestedModel,
       ...(attempt.responseModel !== undefined ? { responseModel: attempt.responseModel } : {}),
       ...(attempt.startedAt !== undefined ? { startedAt: attempt.startedAt } : {}),

@@ -212,14 +212,14 @@ describe('auxiliary request recording', () => {
       purpose: 'session-title',
     }, SUCCESS_CHUNKS)
     const rows = await pollRows(dir, 1)
-    expect(rows[0]).toMatchObject({ kind: 'aux', auxKind: 'session-title', sessionId: '' })
+    expect(rows[0]).toMatchObject({ kind: 'aux', auxKind: 'session-title', sessionId: 'session-1' })
   })
 
   it('does not record conversation-loop or compaction requests', async () => {
     const dir = await mount()
     // A loop request (session id) and a compaction summary are already
     // covered by their own session events; the recorder must leave both alone.
-    await streamWaterfall(ctx!, { ...AUTO_REVIEW_REQUEST, sessionId: 'session-1' }, SUCCESS_CHUNKS)
+    await streamWaterfall(ctx!, { provider: 'deepseek-account', model: 'deepseek-flash', messages: [], sessionId: 'session-1' }, SUCCESS_CHUNKS)
     await streamWaterfall(ctx!, {
       ...AUTO_REVIEW_REQUEST,
       sessionId: 'session-1',

@@ -46,9 +46,9 @@ export type UsageRecordKind = 'request' | 'compaction' | 'failure' | 'aux'
 
 /**
  * The origin of one auxiliary (bypass) model request. These calls are
- * issued by host packages directly through `ctx.llm.stream()` and never
- * produce a conversation event, so the recorder captures them on the
- * `llm/stream` waterfall instead:
+ * issued by host packages directly through `ctx.llm.stream()` and do not
+ * produce an `assistant/message` usage event, so the recorder captures them
+ * on the `llm/stream` waterfall instead:
  *
  * - `auto-review` — the per-tool-call authorization reviewer of
  *   `@deepseek-ai/dsh-experimental-auto-review`.
@@ -74,8 +74,8 @@ export interface UsageRecord {
   requestId: string
   /** Session-event wall time, epoch milliseconds. */
   time: number
-  /** Owning session id; '' for an auxiliary row (no conversation owns a
-   * bypass call — see the kind field). */
+  /** Owning session id; '' for an auxiliary row whose host call cannot be
+   * attributed safely (for example Auto review on older hosts). */
   sessionId: string
   /** Provider model id that produced the message; a failure row carries the
    * session's last-known route model ('' when none was ever observed). */

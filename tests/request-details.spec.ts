@@ -71,6 +71,12 @@ describe('request cache assessment — the 50/80 request-area policy', () => {
     expect(unreported.reason).toBe('cache-unreported')
   })
 
+  it('excludes an attributed auxiliary request from cache-low diagnostics', () => {
+    const assessment = assessRequestCache({ ...eligible({ cacheReadTokens: 0 }), kind: 'aux' })
+    expect(assessment.band).toBe('excluded')
+    expect(assessment.reason).toBe('auxiliary')
+  })
+
   // C06 — every degenerate denominator stays unknown, never 0%.
   it('renders — (unknown) for zero/negative/NaN/Infinity data', () => {
     expect(assessRequestCache(eligible({ inputTokens: 0, cacheReadTokens: 0 })).reason).toBe('invalid-data')
@@ -140,6 +146,18 @@ describe('route-sequence exclusions', () => {
       { sessionId: 'a', model: 'm1' },
     ]
     const marks = routeExclusionsOf(entries)
+    expect(marks.get(entries[1]!)).toBeUndefined()
+    expect(marks.get(entries[2]!)).toBeUndefined()
+  })
+
+  it('does not let an attributed auxiliary model break the conversation cache lineage', () => {
+    const entries = [
+      { sessionId: 'a', model: 'deepseek-chat', kind: 'request' as const },
+      { sessionId: 'a', model: 'title-model', kind: 'aux' as const },
+      { sessionId: 'a', model: 'deepseek-chat', kind: 'request' as const },
+    ]
+    const marks = routeExclusionsOf(entries)
+    expect(marks.get(entries[0]!)).toBe('cold-start')
     expect(marks.get(entries[1]!)).toBeUndefined()
     expect(marks.get(entries[2]!)).toBeUndefined()
   })
@@ -225,6 +243,7 @@ describe('exclusion vocabulary coverage', () => {
       'in-flight',
       'not-success',
       'compaction',
+      'auxiliary',
       'cache-unreported',
       'insufficient-input',
       'invalid-data',

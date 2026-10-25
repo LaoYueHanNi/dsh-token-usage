@@ -667,7 +667,7 @@ describe('UsageView request pool', () => {
     expect(history.querySelector('[class*="band_"]')).toBeNull()
   })
 
-  it('renders the latest panel, the 缓存过低 label glued to the model, and the eleven history columns', async () => {
+  it('renders the latest panel, the 缓存过低 label glued to the model, and the thirteen history columns', async () => {
     const older = { ...LOSS_ROW, id: 'msg-old', durableRequestId: 'msg-old', state: 'completed' as const, cache: { rate: 0.9, eligibility: 'eligible' as const, band: 'normal' as const } }
     stubFetch({ root: summaryWithRequestDetails([WAITING_ROW, LOSS_ROW, older], 1) })
     renderView()
@@ -683,12 +683,36 @@ describe('UsageView request pool', () => {
     // The history table renders the frozen column order.
     const table = screen.getByRole('table', { name: '实时请求' })
     const head = Array.from(table.querySelectorAll('th')).map(cell => cell.textContent)
-    expect(head).toEqual(['来源', '状态', '时间', '模型', '缓存命中', '输入', '输出', '首字', '耗时', '速度', '费用'])
+    expect(head).toEqual(['来源', '状态', '时间', '模型', '缓存命中', '输入', '输出', '缓存读', '缓存写', '首字', '耗时', '速度', '费用'])
     // The loss row's label sits inside the model cell's inline group.
     const lossRow = table.querySelector('tbody tr')!
     expect(lossRow.textContent).toContain('缓存过低')
     expect(lossRow.textContent).toContain('9.1%')
     expectText('本会话')
+  })
+
+  it('hides the cache-write column when no visible request reports a write bucket', async () => {
+    const withoutWrites = [
+      { ...LOSS_ROW, cacheWriteTokens: undefined },
+      { ...LOSS_ROW, id: 'history-no-write', cacheWriteTokens: undefined },
+    ]
+    stubFetch({ root: summaryWithRequestDetails(withoutWrites) })
+    renderView()
+    await waitFor(() => expectText('最新请求'))
+    const table = screen.getByRole('table', { name: '实时请求' })
+    expect(Array.from(table.querySelectorAll('th')).map(cell => cell.textContent)).toEqual([
+      '来源', '状态', '时间', '模型', '缓存命中', '输入', '输出', '缓存读', '首字', '耗时', '速度', '费用',
+    ])
+    expect(screen.queryByText('缓存写')).toBeNull()
+  })
+
+  it('shows the canonical pricing model id in the latest panel', async () => {
+    const row = { ...LOSS_ROW, requestedModel: 'group/glm-5.3-flashx', modelId: 'glm-5.3-flashx' }
+    stubFetch({ root: summaryWithRequestDetails([row]) })
+    renderView()
+    await waitFor(() => expectText('最新请求'))
+    expect(within(screen.getByRole('region', { name: '最新请求' })).getByText('glm-5.3-flashx')).toBeTruthy()
+    expect(within(screen.getByRole('region', { name: '最新请求' })).queryByText('group/glm-5.3-flashx')).toBeNull()
   })
 
   it('keeps the 50% label boundary independent of the numeric colour scale', async () => {
@@ -706,6 +730,24 @@ describe('UsageView request pool', () => {
     expect(screen.queryByText('缓存过低')).toBeNull() // Exactly 50%: no label, shared critical colour.
     expectText('50%')
     expectText('还没有上一条请求 · 下一条到来后，当前请求会移入这里')
+  })
+
+  it('marks a session-attributed title request and never adds the cache-low tag', async () => {
+    const title = {
+      ...LOSS_ROW,
+      id: 'aux-title',
+      kind: 'aux' as const,
+      auxKind: 'session-title' as const,
+      requestedModel: 'title-model',
+      cache: { rate: 0, eligibility: 'eligible' as const, band: 'excluded' as const, reason: 'auxiliary' as const },
+    }
+    stubFetch({ root: summaryWithRequestDetails([title]) })
+    renderView()
+    await waitFor(() => expectText('最新请求'))
+    // A single request is shown only in the latest panel; it moves into the
+    // history table once a newer request arrives.
+    expect(screen.getAllByText('标题')).toHaveLength(1)
+    expect(screen.queryByText('缓存过低')).toBeNull()
   })
 
   it('does not add a tooltip just to explain an ordinary low-band colour', async () => {

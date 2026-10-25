@@ -487,12 +487,12 @@ export interface UsageRateRow {
 /**
  * One per-(kind, day, model, rate) aggregation row of the auxiliary (bypass)
  * model requests: Auto review, session-title generation, and translation.
- * These calls are not part of any conversation turn, so they carry no session
- * dimension — but they are provider-billed requests of a concrete model, so
- * they fold into `rateRows` / `byModel` / the totals while this separate
- * dimension keeps the settings page's "runtime overhead" breakdown (and its
- * own cost) independent of the conversation filters that produce the
- * per-session table.
+ * These calls are not part of any conversation turn. The auxiliary dimension
+ * intentionally stays keyed only by kind/day/model/rate even when a newer
+ * host supplies an owning session id; that keeps the settings page's
+ * "runtime overhead" breakdown independent of the per-session table. They
+ * still fold into `rateRows` / `byModel` / the totals as provider-billed
+ * requests of a concrete model.
  */
 export interface UsageAuxRow {
   /** Which bypass call produced the rows folded into this cell. */
@@ -756,6 +756,8 @@ export type RequestDetailState = 'waiting' | 'streaming' | 'completed' | 'failed
  * - `in-flight`：等待首 token 或生成中，尚未完成。
  * - `not-success`：失败 / 取消 / 中断，终态并非成功完成。
  * - `compaction`：压缩 summarize 请求，输入特征特殊，不做性能诊断。
+ * - `auxiliary`：已归属会话的辅助请求（如标题生成 / 审查），用途开销
+ *   与主请求不同，不做缓存性能诊断。
  * - `cache-unreported`：provider 未显式报告缓存读（缺失不当 0%）。
  * - `insufficient-input`：输入不满足该路由的缓存条件（按适配语义推导）。
  * - `invalid-data`：分母为零、负值、NaN/Infinity 或计数矛盾。
@@ -766,6 +768,7 @@ export type RequestCacheExclusion =
   | 'in-flight'
   | 'not-success'
   | 'compaction'
+  | 'auxiliary'
   | 'cache-unreported'
   | 'insufficient-input'
   | 'invalid-data'
@@ -794,7 +797,12 @@ export interface RequestDetailView {
   durableRequestId?: string
   sessionId: string
   state: RequestDetailState
-  kind: 'request' | 'compaction' | 'failure'
+  kind: 'request' | 'compaction' | 'failure' | 'aux'
+  /** Auxiliary subtype when the host proved this request belongs to the
+   * current session (for example `session-title`). */
+  auxKind?: AuxKind
+  /** Canonical model id after the pricing table's alias / regex resolution. */
+  modelId?: string
   /** 请求路由的模型（计费身份）。 */
   requestedModel: string
   /** provider 实际响应的模型（别名路由可不同）；缺失时以请求模型展示。 */

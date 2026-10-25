@@ -747,9 +747,9 @@ export function apply(ctx: Context, config: Config = {}) {
    * Record auxiliary (bypass) model requests: the Auto review authorization
    * gate, session-title generation, and reasoning translation. Those calls
    * are issued through `ctx.llm.stream()` by their owning host packages and
-   * never produce a session event, so the conversation recorder above cannot
-   * see them — the `llm/stream` waterfall every streaming call passes through
-   * is the one capture point.
+   * do not produce an `assistant/message` usage event, so the conversation
+   * recorder above cannot see their provider usage — the `llm/stream`
+   * waterfall every streaming call passes through is the one capture point.
    *
    * The listener is a pass-through wrapper: it yields every chunk unchanged,
    * remembers the `usage` chunk and the terminal `finish`, and appends one
@@ -797,11 +797,24 @@ export function apply(ctx: Context, config: Config = {}) {
             const target = current
             if (target !== undefined) {
               auxSeq += 1
+              const requestId = `aux:${auxKind}:${String(startedAt)}:${String(auxSeq)}`
+              const sessionId = options.sessionId === undefined ? undefined : String(options.sessionId)
+              if (sessionId !== undefined) {
+                requestObserver.linkAuxAttempt({
+                  sessionId,
+                  auxKind,
+                  startedAt,
+                  provider: options.provider,
+                  model,
+                  requestId,
+                })
+              }
               void target.log.record(recordFromAuxRequest({
                 auxKind,
-                requestId: `aux:${auxKind}:${String(startedAt)}:${String(auxSeq)}`,
+                requestId,
                 time: startedAt,
                 model,
+                ...(sessionId !== undefined ? { sessionId } : {}),
                 ...(responseModel !== undefined ? { responseModel } : {}),
                 ...(usage !== undefined ? { usage } : {}),
               }))

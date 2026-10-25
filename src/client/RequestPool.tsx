@@ -4,7 +4,9 @@
  * input, output, first token, latency, speed — with cost / cache read /
  * cache write demoted to the footer) plus the history table of up to 19
  * earlier rows (columns frozen in order: origin, state, time, model, cache
- * hit, input, output, first token, latency, speed, cost).
+ * hit, input, output, cache read, cache write, first token, latency, speed,
+ * cost). The cache-write column is omitted when every visible request lacks
+ * a reported write bucket.
  *
  * Every figure comes from the server snapshot (`requestDetails`) — the
  * component never re-derives rates or speeds, never runs its own clock
@@ -88,20 +90,31 @@ function HitCell({ cache, t }: { cache: RequestDetailCache; t: TranslateNS<'toke
 /** The model + label pair as one non-breaking inline group: the model name
  * compresses first, the badge never wraps onto its own line. */
 function ModelCell({ detail, cache, t }: { detail: RequestDetailView; cache: RequestDetailCache; t: TranslateNS<'token-usage'> }): ReactNode {
-  const model = detail.responseModel ?? detail.requestedModel
-  const name = (
-    <Tooltip label={detail.responseModel !== undefined && detail.responseModel !== detail.requestedModel
+  const rawModel = detail.responseModel ?? detail.requestedModel
+  const model = detail.modelId ?? rawModel
+  const modelTooltip = model !== rawModel
+    ? `${rawModel} → ${model}`
+    : detail.responseModel !== undefined && detail.responseModel !== detail.requestedModel
       ? `${detail.requestedModel} → ${detail.responseModel}`
-      : model} side="top" delayMs={100}>
+      : model
+  const name = (
+    <Tooltip label={modelTooltip} side="top" delayMs={100}>
       <span className={styles['modelName']} tabIndex={0}>{model}</span>
     </Tooltip>
   )
+  const auxLabel = detail.kind === 'aux' && detail.auxKind !== undefined
+    ? t(`pool.kind.${detail.auxKind}`)
+    : undefined
   if (cache.band !== 'loss') {
-    return <span className={styles['modelInline']}>{name}</span>
+    return <span className={styles['modelInline']}>
+      {name}
+      {auxLabel !== undefined && <span className={styles['auxKind']} aria-label={auxLabel}>{auxLabel}</span>}
+    </span>
   }
   return (
     <span className={styles['modelInline']}>
       {name}
+      {auxLabel !== undefined && <span className={styles['auxKind']} aria-label={auxLabel}>{auxLabel}</span>}
       <Tooltip label={hitTooltipOf(cache, t)} side="top" delayMs={100}>
         <span className={styles['cacheLoss']} tabIndex={0}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m10.3 3.8-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.7-3.2l-8-14a2 2 0 0 0-3.4 0Z" /><path d="M12 9v4m0 4h.01" /></svg>
@@ -169,6 +182,9 @@ function noticeOf(detail: RequestDetailView, t: TranslateNS<'token-usage'>): str
     case 'failed': return t('pool.note.failed', { code: detail.failureCode ?? '' })
     default: break
   }
+  // The compact auxiliary marker already explains why this is not a normal
+  // conversation request; do not add a second cache-diagnostics sentence.
+  if (detail.kind === 'aux') return ''
   if (detail.pricingStatus === 'unpriced') return t('pool.note.unpriced')
   if (detail.inputTokens === undefined || detail.outputTokens === undefined) return t('pool.note.noUsage')
   if (detail.latencyMs === undefined || detail.firstTokenLatencyMs === undefined) return t('pool.note.untimed')
@@ -178,10 +194,10 @@ function noticeOf(detail: RequestDetailView, t: TranslateNS<'token-usage'>): str
   return ''
 }
 
-/** One history row: the eleven columns in frozen order — origin, state,
- * time, model+label, cache hit, input, output, first token, latency, speed,
- * cost. Numbers right-aligned via the shared table CSS. */
-function PoolRow({ detail, focusId, view, t }: { detail: RequestDetailView; focusId: string; view: CurrencyView; t: TranslateNS<'token-usage'> }): ReactNode {
+/** One history row: the metrics stay in the visible order cache hit, input,
+ * output, cache read, optional cache write, first token, latency, speed, cost.
+ * Numbers right-aligned via the shared table CSS. */
+function PoolRow({ detail, focusId, view, showCacheWrite, t }: { detail: RequestDetailView; focusId: string; view: CurrencyView; showCacheWrite: boolean; t: TranslateNS<'token-usage'> }): ReactNode {
   const origin = detail.sessionId === focusId
   const time = detail.orderBasis === 'record'
     ? detail.recordTime ?? detail.orderAt
@@ -195,6 +211,8 @@ function PoolRow({ detail, focusId, view, t }: { detail: RequestDetailView; focu
       <td data-label={t('pool.col.hit')}><HitCell cache={detail.cache} t={t} /></td>
       <td data-label={t('pool.col.input')} title={t('pool.metric.hitInput')}>{tokenTextOf(detail.inputTokens)}</td>
       <td data-label={t('pool.col.output')}>{tokenTextOf(detail.outputTokens)}</td>
+      <td data-label={t('pool.col.cacheRead')}>{tokenTextOf(detail.cacheReadTokens)}</td>
+      {showCacheWrite && <td data-label={t('pool.col.cacheWrite')}>{tokenTextOf(detail.cacheWriteTokens)}</td>}
       <td data-label={t('pool.col.ttft')}>{detail.firstTokenLatencyMs !== undefined ? formatTtft(detail.firstTokenLatencyMs) : '—'}</td>
       <td data-label={t('pool.col.latency')}>{latencyTextOf(detail)}</td>
       <td data-label={t('pool.col.speed')} title={detail.state === 'waiting' || detail.state === 'streaming' ? t('pool.metric.speedSettled') : undefined}>{speedTextOf(detail)}</td>
@@ -213,6 +231,7 @@ export function RequestPoolSections({ details, focusId, view, staleAt, t }: Requ
   const { items, limit, activeCount } = details
   const latest = items[0]
   const history = items.slice(1)
+  const showCacheWrite = items.some(item => item.cacheWriteTokens !== undefined)
   const beyond = Math.max(0, activeCount - items.filter(item => item.state === 'waiting' || item.state === 'streaming').length)
 
   const latestPanel = (
@@ -269,7 +288,7 @@ export function RequestPoolSections({ details, focusId, view, staleAt, t }: Requ
                     <div className={styles['requestBuckets']}>
                       <span>{t('pool.metric.cost')} <b>{costTextOf(latest, view)}</b></span>
                       <span>{t('pool.metric.cacheRead')} <b>{tokenTextOf(latest.cacheReadTokens)}</b></span>
-                      <span>{t('pool.metric.cacheWrite')} <b>{tokenTextOf(latest.cacheWriteTokens)}</b></span>
+                      {showCacheWrite && <span>{t('pool.metric.cacheWrite')} <b>{tokenTextOf(latest.cacheWriteTokens)}</b></span>}
                     </div>
                     {(staleAt !== undefined || latest.state !== 'completed') && (
                       <span className={styles['poolContext']}>{staleAt !== undefined ? t('pool.asOf', { time: formatTimeOfDay(staleAt) }) : t(inFlight ? 'pool.pending' : 'pool.ended')}</span>
@@ -314,6 +333,8 @@ export function RequestPoolSections({ details, focusId, view, staleAt, t }: Requ
                     <th>{t('pool.col.hit')}</th>
                     <th>{t('pool.col.input')}</th>
                     <th>{t('pool.col.output')}</th>
+                    <th>{t('pool.col.cacheRead')}</th>
+                    {showCacheWrite && <th>{t('pool.col.cacheWrite')}</th>}
                     <th>{t('pool.col.ttft')}</th>
                     <th>{t('pool.col.latency')}</th>
                     <th>{t('pool.col.speed')}</th>
@@ -321,7 +342,7 @@ export function RequestPoolSections({ details, focusId, view, staleAt, t }: Requ
                   </tr>
                 </thead>
                 <tbody>
-                  {history.map(detail => <PoolRow key={detail.id} detail={detail} focusId={focusId} view={view} t={t} />)}
+                  {history.map(detail => <PoolRow key={detail.id} detail={detail} focusId={focusId} view={view} showCacheWrite={showCacheWrite} t={t} />)}
                 </tbody>
               </table>
             </div>
