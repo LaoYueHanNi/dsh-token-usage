@@ -2,9 +2,9 @@
  * Token-usage settings page (browser half): fetches the stats summary from
  * the host route and renders the filter bar (inclusive day range, model
  * select, 1d/7d/30d quick ranges where 1d spans today 00:00–23:59), the
- * total-usage strip, the daily-token trend chart, and the per-model detail
- * table with the hit rate last — all following the active filters. A
- * priced model name is the row's price affordance (one click opens
+ * total-usage strip, the switchable daily-token line/activity chart, and the
+ * per-model detail table with the hit rate last — all following the active
+ * filters. A priced model name is the row's price affordance (one click opens
  * PricingDialog.tsx); unpriced rows keep the in-cell tag. The filter
  * row's tail link opens the filter-free pricing-overview dialog
  * (PricingOverviewDialog.tsx). There is no refresh
@@ -35,7 +35,7 @@ import { SessionTable } from './SessionTable.tsx'
 import { PricingStatus, costsAvailable } from './PricingStatus.tsx'
 import { ModelAssociationBadge, PricingAssociationProvider, UnpricedModelTag } from './PricingAssociations.tsx'
 import { usePricingAssociationRefresh } from './pricing-associations.ts'
-import { TrendChart } from './TrendChart.tsx'
+import { UsageChart } from './UsageChart.tsx'
 import { useColorSchemeMirror } from './use-color-scheme.ts'
 import styles from './TokenUsageSection.module.css'
 
@@ -457,7 +457,7 @@ export function TokenUsageSection({ t, close, sessionListed, openSession }: Sett
               <StatCard label={t('stat.cacheWrite')} value={formatTokens(total.cacheWriteTokens)} />
             </div>
             <PricingStatus costState={state.value.costState} pricingUnavailableReason={state.value.pricingUnavailableReason} associationStorageError={state.value.associationStorageError} t={t} />
-            <TrendChart
+            <UsageChart
               rows={state.value.byDay}
               t={t}
               {...filters.from !== '' ? { from: filters.from } : {}}

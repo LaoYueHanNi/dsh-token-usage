@@ -1,0 +1,71 @@
+/* Shared chart header for the settings page: title plus local view/mode
+ * switches. The selected pill follows the host's existing neutral vocabulary. */
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+}
+
+.title {
+  margin: 0;
+  color: var(--dsw-alias-label-primary);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.controls,
+.segmented {
+  display: inline-flex;
+  align-items: center;
+}
+
+.controls {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.segmented {
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 8px;
+  background: var(--dsw-alias-fill-container, transparent);
+}
+
+.button {
+  padding: 4px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary));
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.button:hover:not(.active) {
+  background: color-mix(in srgb, var(--dsw-alias-label-primary) 6%, transparent);
+  color: var(--dsw-alias-label-secondary);
+}
+
+.button:focus-visible {
+  outline: 2px solid var(--dsw-alias-border-l2);
+  outline-offset: 1px;
+}
+
+.active {
+  background: color-mix(in srgb, var(--dsw-alias-label-primary) 16%, transparent);
+  color: var(--dsw-alias-label-primary);
+  font-weight: 600;
+}

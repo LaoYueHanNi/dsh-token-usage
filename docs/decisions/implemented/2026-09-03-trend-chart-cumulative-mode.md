@@ -15,7 +15,7 @@ Status: implemented
 - 文案与无障碍：累计模式 tooltip 只显示累计值——日/小时点用 `chart.cumulativePoint`（「{day} 累计 {tokens}」）、请求桶用 `chart.cumulativeBucket`（「{window} · {count} 请求 · 累计 {tokens}」，`count` 仍是本桶请求数）；图表 aria 统一 `chart.ariaCumulative`，不复用分时的「每日/分时/按时间分段」措辞（那描述的是区间总量，对运行总和是撒谎）。`tipOf` 是 tooltip 与逐点 aria 的单一来源，两处一起换。
 - `UsageView` 持 `useState<TrendChartMode>('interval')`，标题与按钮组包进 `chartHead`（flex，同 `subagentsHead` 模式），按钮组复用 scope 开关的 `segmented/segBtn/segActive` 样式与 `role="group"` + `aria-pressed` 结构。切换状态不持久化，与 scope 开关同一哲学（会话内临时视角）。
 - 切换是纯客户端重渲染，不触发新 fetch（requestSeries 已在手）。
-- 设置页 `TokenUsageSection` 的 `TrendChart` 调用不传 `mode`，默认分时，零改动。
+- 设置页现由 `UsageChart` 组合折线与活动砖块图；其折线分支仍不传 `mode`，默认分时。活动日历的累计读数与互切见 [Token 活动砖块日历](./2026-10-25-token-activity-brick-view.md)。
 
 ## Alternatives considered
 

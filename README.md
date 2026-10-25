@@ -6,7 +6,7 @@
 
 [简体中文](./README.zh.md) | English
 
-A dsh usage plugin that displays model token usage right in the Web UI. After installation, open **Settings** (the gear icon in the sidebar) and you'll find the **Token Usage** page — summary cards (with cost), a daily total-token line chart, a per-model / per-session breakdown, and per-model pricing dialogs, all filterable by date range and model, exactly as shown in the screenshot above.
+A dsh usage plugin that displays model token usage right in the Web UI. After installation, open **Settings** (the gear icon in the sidebar) and you'll find the **Token Usage** page — summary cards (with cost), a line chart switchable to a Token activity brick calendar, a per-model / per-session breakdown, and per-model pricing dialogs, all filterable by date range and model.
 
 [dsh]: https://github.com/cordiverse/dsh
 
@@ -24,7 +24,7 @@ Repo: <https://github.com/LaoYueHanNi/dsh-token-usage>
 ## Features
 
 - **Live recording**: every provider-billed model call is recorded as it happens — tokens, cost, model, session — conversation requests, context-compaction calls, and auxiliary system calls included: the Auto review authorization reviewer, session-title generation, and reasoning translation. Auxiliary calls bill into the totals and the per-model table, while the **Runtime overhead** tab in the detail switch splits them out by kind; they carry no session, so the per-session table stays conversation-only. That history cannot be backfilled — the host keeps no usage record of those calls, and recording starts with the first request after upgrading.
-- **Web stats page**: filters (date range + model + `1d`/`7d`/`30d` shortcuts), summary cards, daily trend chart (hover a day for its total), per-model table. The table block toggles between **per-model / per-session / runtime overhead**: the session table groups by working directory (switchable to a flat list), sorts by total tokens / cost / recent activity on header click, and **Ctrl+click** on a session row jumps straight to that session's usage tab; the runtime-overhead tab breaks the auxiliary calls down by kind.
+- **Web stats page**: filters (date range + model + `1d`/`7d`/`30d` shortcuts), summary cards, daily trend chart (hover a day for its total), per-model table. The trend switches to a Codex-style **Token activity brick calendar** with **daily / weekly / cumulative total** readings, staggered brick entrances, and keyboard-readable values; every reading uses the active filters and switching never refetches. The table block toggles between **per-model / per-session / runtime overhead**: the session table groups by working directory (switchable to a flat list), sorts by total tokens / cost / recent activity on header click, and **Ctrl+click** on a session row jumps straight to that session's usage tab; the runtime-overhead tab breaks the auxiliary calls down by kind.
 - **Session usage tab**: the conversation pane gains a **Usage** view tab (beside Chat / Trajectory) with the active session's dashboard — six stat cards (successful requests with a failure pill, cost, cache hit rate, average time-to-first-token, generation throughput, total tokens), a 4-bucket token strip, an hourly trend chart, and a per-model table. A scope switch toggles **Session / With subagents**, and the subagent table drills into each child and back. Hovering the failure pill breaks failures down per class (rate limited, server error, context exceeded, …).
 
 ![Session Usage tab](docs/images/usage-tab.png)
@@ -70,7 +70,7 @@ The input-bar button follows the currently selected provider and opens a panel w
 | Provider | Shows |
 |---|---|
 | Zhipu GLM Coding Plan (CN / international) | 5-hour, weekly (some plans also monthly) |
-| Kimi For Coding | 5-hour, weekly |
+| Kimi For Coding | 5-hour, monthly (legacy responses also weekly) |
 | MiniMax Coding Plan (CN / international) | 5-hour, weekly |
 | OpenCode Go | 5-hour, weekly, monthly |
 | Command Code | 5-hour, weekly, monthly |

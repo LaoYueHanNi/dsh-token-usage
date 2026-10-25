@@ -1,0 +1,93 @@
+/* Token activity calendar: five accent stops derived from theme tokens.
+ * Bricks enter oldest-to-newest with a short capped stagger; stable day keys
+ * ensure a data refresh does not replay the whole sequence. */
+
+.scroll {
+  width: 100%;
+  overflow-x: auto;
+  padding: 4px 0 8px;
+}
+
+.calendar {
+  display: grid;
+  grid-template-rows: 16px repeat(7, 12px);
+  grid-auto-columns: 12px;
+  grid-auto-flow: column;
+  gap: 4px;
+  width: max-content;
+  min-width: 100%;
+}
+
+.month {
+  overflow: visible;
+  color: var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary));
+  font-size: 11px;
+  line-height: 16px;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.brick,
+.placeholder {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+}
+
+.brick {
+  display: block;
+  box-sizing: border-box;
+  border: 1px solid transparent;
+  outline: none;
+  transition: background-color 160ms ease, border-color 120ms ease, transform 120ms ease;
+}
+
+.brick[data-level='0'] {
+  background: color-mix(in srgb, var(--dsw-alias-label-primary) 5%, transparent);
+  border-color: color-mix(in srgb, var(--dsw-alias-label-primary) 3%, transparent);
+}
+
+.brick[data-level='1'] {
+  background: color-mix(in srgb, var(--dsw-alias-link-primary, var(--dsw-alias-label-primary)) 20%, transparent);
+}
+
+.brick[data-level='2'] {
+  background: color-mix(in srgb, var(--dsw-alias-link-primary, var(--dsw-alias-label-primary)) 40%, transparent);
+}
+
+.brick[data-level='3'] {
+  background: color-mix(in srgb, var(--dsw-alias-link-primary, var(--dsw-alias-label-primary)) 64%, transparent);
+}
+
+.brick[data-level='4'] {
+  background: color-mix(in srgb, var(--dsw-alias-link-primary, var(--dsw-alias-label-primary)) 88%, transparent);
+}
+
+.brick:hover,
+.brick:focus-visible {
+  border-color: var(--dsw-alias-label-secondary);
+  transform: scale(1.18);
+}
+
+.brick:focus-visible {
+  outline: 2px solid var(--dsw-alias-border-l2);
+  outline-offset: 1px;
+}
+
+.placeholder {
+  display: block;
+}
+
+.empty {
+  margin: 0;
+  padding: 24px 0;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 13px;
+  text-align: center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .brick {
+    transition: none;
+  }
+}

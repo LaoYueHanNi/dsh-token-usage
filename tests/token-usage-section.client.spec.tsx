@@ -939,6 +939,27 @@ describe('TokenUsageSection filtering', () => {
     await waitForCall(fetch, 2)
     expect(await screen.findByRole('img', { name: '每日总 token 曲线' })).toBeTruthy()
   })
+
+  it('switches line/activity readings without refetching or expanding the 1d filter', async () => {
+    const fetch = stubFetch(async () => ({ ok: true, json: async () => SUMMARY }))
+    render(<TokenUsageSection close={() => {}} t={t} />)
+    expect(await screen.findByRole('img', { name: '单日分时 token 曲线' })).toBeTruthy()
+    const statsCalls = (): number => fetch.mock.calls.filter(call => String(call[0]).startsWith('/token-usage/stats')).length
+    expect(statsCalls()).toBe(1)
+
+    fireEvent.click(screen.getByRole('button', { name: '砖块' }))
+    const daily = screen.getByRole('group', { name: '每日 token 活动砖块图' })
+    expect(within(daily).getAllByRole('img')).toHaveLength(1)
+    expect(within(daily).getByLabelText(`${dayKey(0)} 总量 0`)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '每周' }))
+    expect(screen.getByLabelText(`${dayKey(0)} 所在周（${dayKey(0)} 至 ${dayKey(0)}）总量 0`)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '累计总量' }))
+    expect(screen.getByLabelText(`${dayKey(0)} 累计总量 0`)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '折线' }))
+    expect(screen.getByRole('img', { name: '单日分时 token 曲线' })).toBeTruthy()
+    expect(statsCalls()).toBe(1)
+    expect(screen.getByRole('button', { name: '快捷区间' }).textContent).toBe('1d')
+  })
 })
 
 /** Local `YYYY-MM-DD` of today. */

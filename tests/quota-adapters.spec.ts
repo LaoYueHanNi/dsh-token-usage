@@ -240,6 +240,54 @@ describe('kimiAdapter', () => {
     expect(calls[0]?.headers.authorization).toBe('Bearer sk-test')
   })
 
+  it('parses the current ratio windows and prefers the coding monthly pool', async () => {
+    const { ctx } = contextOf({
+      limits: [{
+        window: { duration: 300, timeUnit: 'TIME_UNIT_MINUTE' },
+        detail: { limit: '100', used: '4', remaining: '96', resetTime: '2026-10-25T06:23:39.378609Z' },
+      }],
+      usages: {
+        limit_5h: { used_ratio: 0.0353, reset_time: '2026-10-25T06:23:39Z' },
+        limit_month_total: { used_ratio: 0.0718, reset_time: '2026-11-24T00:00:00Z' },
+        limit_month_code: { used_ratio: 0.0485, reset_time: '2026-11-24T00:00:00Z' },
+      },
+    })
+    const result = await kimiAdapter.query(ctx)
+    expect(result.windows).toHaveLength(2)
+    expect(result.windows[0]).toEqual({
+      tier: 'five_hour', usedPercent: 3.53, resetAt: Date.parse('2026-10-25T06:23:39Z'),
+    })
+    expect(result.windows[1]?.tier).toBe('monthly')
+    expect(result.windows[1]?.usedPercent).toBeCloseTo(4.85, 10)
+    expect(result.windows[1]?.resetAt).toBe(Date.parse('2026-11-24T00:00:00Z'))
+  })
+
+  it('accepts stringified legacy amounts and ISO reset timestamps', async () => {
+    const { ctx } = contextOf({
+      limits: [{ detail: { limit: '100', used: '4', remaining: '96', resetTime: '2026-10-25T06:23:39.378609Z' } }],
+      usage: { limit: '2000', remaining: '1500', resetTime: '2026-10-31T00:00:00Z' },
+    })
+    const result = await kimiAdapter.query(ctx)
+    expect(result.windows).toEqual([
+      { tier: 'five_hour', usedPercent: 4, resetAt: Date.parse('2026-10-25T06:23:39.378609Z') },
+      { tier: 'weekly', usedPercent: 25, resetAt: Date.parse('2026-10-31T00:00:00Z') },
+    ])
+  })
+
+  it('uses the account-wide monthly ratio when no coding-specific pool exists', async () => {
+    const { ctx } = contextOf({
+      usages: {
+        limit_5h: { used_ratio: '0.1', reset_time: '2026-10-25T06:23:39Z' },
+        limit_month_total: { used_ratio: '0.25', reset_time: '2026-11-24T00:00:00Z' },
+      },
+    })
+    const result = await kimiAdapter.query(ctx)
+    expect(result.windows).toEqual([
+      { tier: 'five_hour', usedPercent: 10, resetAt: Date.parse('2026-10-25T06:23:39Z') },
+      { tier: 'monthly', usedPercent: 25, resetAt: Date.parse('2026-11-24T00:00:00Z') },
+    ])
+  })
+
   it('matches the coding-plan host and the catalog route — not moonshotai', () => {
     expect(kimiAdapter.matches({ provider: 'kimi-coding' })).toBe(true)
     expect(kimiAdapter.matches({ provider: 'moonshotai', baseUrl: 'https://api.kimi.com/coding/v1' })).toBe(true)
