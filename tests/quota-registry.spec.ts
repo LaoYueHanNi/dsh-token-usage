@@ -15,6 +15,16 @@ describe('resolveQuotaAdapter', () => {
     expect(resolveQuotaAdapter({ provider: 'minimax' })?.id).toBe('minimax-coding-plan')
     expect(resolveQuotaAdapter({ provider: 'kimi-coding' })?.id).toBe('kimi-coding-plan')
     expect(resolveQuotaAdapter({ provider: 'opencode-go' })?.id).toBe('opencode-go')
+    // The magpie route key claims its adapter outright; every other
+    // gateway-shaped route waits for the service's probe.
+    expect(resolveQuotaAdapter({ provider: 'magpie' })?.id).toBe('magpie-quotas')
+  })
+
+  it('does not claim gateway hosts without the probe', () => {
+    // A loopback host is not evidence of magpie (other local gateways
+    // live there too): only the route key or the detector's hello
+    // verdict routes here — see quota-service.spec.ts.
+    expect(resolveQuotaAdapter({ provider: 'my-gateway', baseUrl: 'http://127.0.0.1:3425/v1' })).toBeUndefined()
   })
 
   it('routes user-declared routes by base-URL host', () => {

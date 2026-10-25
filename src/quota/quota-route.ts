@@ -18,11 +18,11 @@ export { QUOTA_PATH } from '../wire.ts'
  * Build the quota route over the orchestration service.
  * @param snapshot - resolves the payload for one asking session (the
  * `session` query parameter, undefined when absent) and its model chip's
- * current selection (the `provider` query parameter, undefined when the
- * browser could not read one).
+ * current selection (`provider` + `model`, undefined when the browser
+ * could not read them).
  * @returns the exact GET route answering the quota JSON.
  */
-export function createQuotaRoute(snapshot: (sessionId: string | undefined, providerHint: string | undefined) => Promise<QuotaPayload>): WebRoute {
+export function createQuotaRoute(snapshot: (sessionId: string | undefined, providerHint: string | undefined, modelHint: string | undefined) => Promise<QuotaPayload>): WebRoute {
   return {
     kind: 'exact',
     path: QUOTA_PATH,
@@ -43,7 +43,7 @@ export function createQuotaRoute(snapshot: (sessionId: string | undefined, provi
         return value === null || value === '' ? undefined : value
       }
       try {
-        const payload = await snapshot(pick('session'), pick('provider'))
+        const payload = await snapshot(pick('session'), pick('provider'), pick('model'))
         res.writeHead(200, {
           'content-type': 'application/json; charset=utf-8',
           // The payload changes with the provider's own meters; never cache.

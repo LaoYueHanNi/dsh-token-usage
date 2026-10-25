@@ -18,6 +18,8 @@
 
 import type { QuotaFailure, QuotaPayload, QuotaSnapshot } from '../wire.ts'
 import { resolveQuotaAdapter } from './registry.ts'
+import { magpieAdapter, MagpieDetector } from './adapters/magpie.ts'
+import type { ProviderSighting } from './provider-tracking.ts'
 import type { QuotaAdapter } from './types.ts'
 import { QuotaQueryError } from './types.ts'
 import { withCatalogBaseUrl, type ResolvedQuotaCredentials } from './credentials.ts'
@@ -27,11 +29,17 @@ import type { AccountBalanceReader } from './types.ts'
 const DEFAULT_CACHE_TTL_MS = 45_000
 /** Per-query deadline: quota endpoints are small; anything slower is dead. */
 const QUERY_TIMEOUT_MS = 10_000
+/** The gateway probe's own deadline — a hello that takes longer than this
+ * is a dead route, not a magpie. */
+const PROBE_TIMEOUT_MS = 5_000
 
 /** The seams the service runs over (index.ts wires the host services in). */
 export interface QuotaServiceDeps {
-  /** Route key of the provider the asking session uses, if determinable. */
-  resolveProvider: (sessionId: string | undefined) => string | undefined
+  /** Route key + model of the provider the asking session uses, if
+   * determinable (the request tracker's latest sighting, else the default
+   * selection). The model rides along for adapters that scope a whole
+   * gateway's report by it (magpie). */
+  resolveSighting: (sessionId: string | undefined) => ProviderSighting | undefined
   /** Credential chain seam; see credentials.ts. */
   resolveCredentials: (provider: string) => Promise<ResolvedQuotaCredentials>
   /** Transport (global fetch in production, a stub in tests). */
@@ -44,6 +52,9 @@ export interface QuotaServiceDeps {
   now?: () => number
   /** DeepSeek account wallets. Absent readers make that route `signed-out`. */
   readAccountBalance?: AccountBalanceReader
+  /** The magpie-gateway probe consulted when no registry adapter matches
+   * a route; tests stub it. Defaults to a plain detector instance. */
+  magpieDetector?: MagpieDetector
 }
 
 /** One cached provider ok result. */
@@ -96,9 +107,11 @@ export class QuotaService {
   readonly #deps: QuotaServiceDeps
   readonly #cache = new Map<string, CacheEntry>()
   readonly #inflight = new Map<string, Promise<QuotaSnapshot | QuotaFailure>>()
+  readonly #magpieDetector: MagpieDetector
 
   constructor(deps: QuotaServiceDeps) {
     this.#deps = deps
+    this.#magpieDetector = deps.magpieDetector ?? new MagpieDetector(deps.now ?? Date.now)
   }
 
   /** The poll cadence every payload carries. */
@@ -115,20 +128,38 @@ export class QuotaService {
    * @param providerHint - the provider the session's model chip currently
    * selects (the host-reported NEXT selection), when the browser could read
    * one. It wins over the request tracker: the chip is the user's live
-   * intent, and the next `request/context` event makes the tracker agree.
+   * intent.
+   * @param modelHint - that chip selection's model, paired with the live
+   * provider. Without a provider hint, only the tracker's model is trusted.
    */
-  async snapshot(sessionId?: string, providerHint?: string): Promise<QuotaPayload> {
-    const provider = providerHint !== undefined && providerHint !== ''
-      ? providerHint
-      : this.#deps.resolveProvider(sessionId)
+  async snapshot(sessionId?: string, providerHint?: string, modelHint?: string): Promise<QuotaPayload> {
+    const sighting = this.#deps.resolveSighting(sessionId)
+    const hintLive = providerHint !== undefined && providerHint !== ''
+    const provider = hintLive ? providerHint : sighting?.provider
     if (provider === undefined) {
       return { status: 'no-provider', intervalSec: this.intervalSec }
     }
+    const model = hintLive && modelHint !== undefined && modelHint !== ''
+      ? modelHint
+      : sighting !== undefined && sighting.provider === provider ? sighting.model : undefined
     const credentials = withCatalogBaseUrl(provider, await this.#deps.resolveCredentials(provider))
-    const adapter = resolveQuotaAdapter({
+    let adapter = resolveQuotaAdapter({
       provider,
       ...(credentials.baseUrl !== undefined ? { baseUrl: credentials.baseUrl } : {}),
     })
+    if (adapter === undefined && credentials.baseUrl !== undefined) {
+      // A route no table knows, pointing at a base URL: ask the magpie
+      // hello — a user-declared gateway profile is exactly the shape the
+      // host table cannot enumerate. The detector caches both verdicts,
+      // so this stays off the hot path.
+      const hit = await this.#magpieDetector.detect({
+        baseUrl: credentials.baseUrl,
+        ...(credentials.apiKey !== undefined ? { apiKey: credentials.apiKey } : {}),
+        fetchFn: this.#deps.fetchFn ?? globalThis.fetch,
+        signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+      })
+      if (hit) adapter = magpieAdapter
+    }
     if (adapter === undefined) {
       return {
         status: 'unsupported',
@@ -153,23 +184,28 @@ export class QuotaService {
       }
     }
 
-    const cached = this.#cached(provider)
+    // The cache key includes the model: a gateway adapter's windows are a
+    // function of both (the model scopes the cards), so two sessions on
+    // the same route but different models keep their own snapshots.
+    const cacheKey = `${provider}\u0000${model ?? ''}`
+    const cached = this.#cached(cacheKey)
     if (cached !== undefined) return cached
-    const running = this.#inflight.get(provider)
+    const running = this.#inflight.get(cacheKey)
     if (running !== undefined) return running
 
-    const query = this.#query(provider, providerName, credentials, adapter)
-    this.#inflight.set(provider, query)
+    const query = this.#query(provider, model, providerName, credentials, adapter)
+    this.#inflight.set(cacheKey, query)
     try {
       return await query
     } finally {
-      this.#inflight.delete(provider)
+      this.#inflight.delete(cacheKey)
     }
   }
 
   /** The fresh-or-cached ok result, or a live error, of one provider query. */
   async #query(
     provider: string,
+    model: string | undefined,
     providerName: string | undefined,
     credentials: ResolvedQuotaCredentials,
     adapter: QuotaAdapter,
@@ -179,7 +215,8 @@ export class QuotaService {
         provider,
         ...(credentials.baseUrl !== undefined ? { baseUrl: credentials.baseUrl } : {}),
         apiKey: credentials.apiKey ?? '',
-        signal: AbortSignal.timeout(QUERY_TIMEOUT_MS),
+        ...(model !== undefined && model !== '' ? { model } : {}),
+        signal: AbortSignal.timeout(adapter.queryTimeoutMs ?? QUERY_TIMEOUT_MS),
         ...(this.#deps.fetchFn !== undefined ? { fetchFn: this.#deps.fetchFn } : { fetchFn: globalThis.fetch }),
         ...(this.#deps.readAccountBalance !== undefined ? { readAccountBalance: this.#deps.readAccountBalance } : {}),
       })
@@ -193,11 +230,11 @@ export class QuotaService {
         ...(result.planTier !== undefined ? { planTier: result.planTier } : {}),
         windows: result.windows,
       }
-      this.#cache.set(provider, { at: this.#now(), payload })
+      this.#cache.set(`${provider}\u0000${model ?? ''}`, { at: this.#now(), payload })
       return payload
     } catch (error) {
       // Errors do not cache: the panel's retry must actually re-query.
-      this.#cache.delete(provider)
+      this.#cache.delete(`${provider}\u0000${model ?? ''}`)
       return toQuotaFailure(
         provider, providerName, adapter, error, this.intervalSec, this.#now(),
       )

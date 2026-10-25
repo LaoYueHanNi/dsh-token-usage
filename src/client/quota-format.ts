@@ -76,13 +76,15 @@ export function quotaSeverityOf(window: QuotaWindow): QuotaSeverity {
 
 /**
  * The FINEST-granularity window of a payload — 5-hour over weekly over
- * monthly over balance. The trigger icon reads this one, not the worst
- * across windows: the finest unit is the constraint the session is
- * currently acting inside (a calm 5-hour window carries the icon even when
- * the weekly pool runs low). Undefined when there is no window at all.
+ * monthly over balance, an `other` window (a gateway's open-named meter:
+ * "Credits", "Allowance") ranking with the coarser pools it usually is.
+ * The trigger icon reads this one, not the worst across windows: the
+ * finest unit is the constraint the session is currently acting inside
+ * (a calm 5-hour window carries the icon even when the weekly pool runs
+ * low). Undefined when there is no window at all.
  */
 export function finestQuotaWindow(windows: readonly QuotaWindow[]): QuotaWindow | undefined {
-  const rank: Record<QuotaWindow['tier'], number> = { five_hour: 0, weekly: 1, monthly: 2, balance: 3 }
+  const rank: Record<QuotaWindow['tier'], number> = { five_hour: 0, weekly: 1, other: 2, monthly: 3, balance: 4 }
   let pick: QuotaWindow | undefined
   for (const window of windows) {
     if (pick === undefined || rank[window.tier] < rank[pick.tier]) pick = window

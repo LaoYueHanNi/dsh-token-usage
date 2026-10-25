@@ -79,8 +79,13 @@ plugins:
 | DeepSeek（官方 API Key） | ¥ 账户余额 |
 | DeepSeek 账号 | 充值余额、赠金余额 |
 | OpenRouter | $ 剩余额度 |
+| Magpie 网关 | 全部上游账号的配额卡，按所选模型限定到对应供应商（路由组展示全部） |
 
 不支持的供应商不显示该按钮；查询失败可在面板内重试。默认开启，可用 `quota.enabled: false` 关闭。暂不支持：火山方舟、ZenMux、智谱团队版、Claude / Codex / Gemini / Grok 官方订阅、GitHub Copilot。
+
+magpie 路由无需任何配置：声明一个 baseURL 指向网关（默认 `http://127.0.0.1:3425/v1`）的 OpenAI 兼容供应商即可——插件会通过网关的 hello 接口自动识别并读取汇总配额。网关在另一台机器上共享时，把网关密钥填进供应商的 API Key；本机网关无需密钥。
+
+Magpie 卡片在切换模型后立即跟随，无需先发送请求。查询始终使用 `?kept=1`：轮询、打开面板和重试都只读取 Magpie 自身缓存，不触发上游供应商的配额刷新。需要新读数时请在 Magpie 中刷新；缓存为空时也不会回退到实时供应商查询。
 
 ## 安装
 

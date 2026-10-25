@@ -26,7 +26,6 @@ export interface QuotaMatchInput {
    * undefined when neither is known. */
   baseUrl?: string
 }
-
 /** One DeepSeek account purse the host account service reports. Structural
  * on purpose: the plugin does not import the account package. */
 export interface AccountPurseWallet {
@@ -54,6 +53,10 @@ export interface QuotaQueryContext {
   /** The provider's API key, resolved through the credentials seam.
    * Empty when the adapter does not use an API key. */
   apiKey: string
+  /** The model id the asking session's request used (or the model chip
+   * selected), when one is known — adapters that aggregate a whole
+   * gateway's upstreams (magpie) filter their cards by it. */
+  model?: string
   /** Deadline signal; the service stamps one per query. */
   signal?: AbortSignal
   /** Transport to use — global fetch in production, a stub in tests. */
@@ -96,6 +99,11 @@ export interface QuotaAdapter {
    * kimi adapter matches on host or the catalog route `kimi-coding`).
    */
   matches(input: QuotaMatchInput): boolean
+  /** Per-query deadline override, ms. Absent reads the service default —
+   * an adapter whose gateway relays to upstreams with a longer deadline
+   * of their own (magpie's 12s fan-out) raises it so the client does not
+   * cut the relay off first. */
+  queryTimeoutMs?: number
   /** Query the provider's quota endpoint and normalize the windows.
    * Transport failures throw {@link QuotaQueryError} with the normalized
    * kind; anything else is treated as a parse failure by the service. */

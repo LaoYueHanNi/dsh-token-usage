@@ -46,21 +46,37 @@ export class ProviderTracker {
 }
 
 /**
- * Resolve the provider route a quota query should target: the tracker's
- * sighting first (the active session's or the global last), else the
+ * Resolve the provider sighting a quota query should target: the
+ * tracker's latest (the active session's or the global last), else the
  * host's default model selection (the `agent-default-model` settings
- * section — what a brand-new, never-requesting session would use).
+ * section — what a brand-new, never-requesting session would use) as a
+ * model-less sighting.
  * @param input - the tracker, the asking session, and a thunk reading the
  * default selection's `provider` (undefined when no default is stored).
- * @returns the route key, or undefined when nothing determinable exists.
+ * @returns the sighting (its model scopes gateway adapters' cards), or
+ * undefined when nothing determinable exists.
+ */
+export function resolveCurrentSighting(input: {
+  tracker: ProviderTracker
+  sessionId?: string
+  defaultProvider?: () => string | undefined
+}): ProviderSighting | undefined {
+  const sighting = input.tracker.sightingOf(input.sessionId)
+  if (sighting !== undefined) return sighting
+  const fallback = input.defaultProvider?.()
+  return fallback !== undefined && fallback !== ''
+    ? { provider: fallback, model: '', at: 0 }
+    : undefined
+}
+
+/**
+ * Resolve the provider ROUTE KEY alone — the key-only projection of
+ * {@link resolveCurrentSighting} for callers that do not scope by model.
  */
 export function resolveCurrentProvider(input: {
   tracker: ProviderTracker
   sessionId?: string
   defaultProvider?: () => string | undefined
 }): string | undefined {
-  const sighting = input.tracker.sightingOf(input.sessionId)
-  if (sighting !== undefined) return sighting.provider
-  const fallback = input.defaultProvider?.()
-  return fallback !== undefined && fallback !== '' ? fallback : undefined
+  return resolveCurrentSighting(input)?.provider
 }

@@ -79,8 +79,13 @@ The input-bar button follows the currently selected provider and opens a panel w
 | DeepSeek (official API key) | ¥ account balance |
 | DeepSeek account | topped-up balance, granted balance |
 | OpenRouter | $ remaining credits |
+| Magpie gateway | every upstream account's quota cards, scoped to the selected model's provider (routing groups show the whole fleet) |
 
 Unsupported providers hide the button; a failed query can be retried from the panel. On by default; turn it off with `quota.enabled: false`. Not supported yet: Volcengine, ZenMux, Zhipu Team plan, Claude / Codex / Gemini / Grok official subscriptions, GitHub Copilot.
+
+A magpie route needs no setup: declare any OpenAI-compatible provider whose base URL points at the gateway (`http://127.0.0.1:3425/v1` by default) — the plugin probes the gateway's hello and reads its aggregated quota report. The gateway key goes in the provider's API key when the gateway is shared from another machine; a loopback gateway needs none.
+
+Magpie cards follow the selected model immediately, before sending a request. Reads always use `?kept=1`: polling, opening the panel and retrying only read Magpie's own cache, never trigger upstream quota refreshes. Refresh quotas in Magpie when newer readings are needed; an empty cache does not fall back to a live vendor query.
 
 ## Install
 

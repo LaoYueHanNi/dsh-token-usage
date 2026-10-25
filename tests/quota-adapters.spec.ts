@@ -12,6 +12,7 @@ import { commandCodeAdapter } from '../src/quota/adapters/command-code.ts'
 import { deepseekAccountAdapter } from '../src/quota/adapters/deepseek-account.ts'
 import { deepseekBalanceAdapter } from '../src/quota/adapters/deepseek-balance.ts'
 import { kimiAdapter } from '../src/quota/adapters/kimi.ts'
+import { magpieAdapter, MagpieDetector, magpieQuotaUrl } from '../src/quota/adapters/magpie.ts'
 import { minimaxAdapter } from '../src/quota/adapters/minimax.ts'
 import { opencodeGoAdapter } from '../src/quota/adapters/opencode-go.ts'
 import { openrouterAdapter } from '../src/quota/adapters/openrouter.ts'
@@ -791,5 +792,234 @@ describe('commandCodeAdapter', () => {
     expect(commandCodeAdapter.matches({ provider: 'commandcode' })).toBe(false)
     expect(commandCodeAdapter.matches({ provider: 'command', baseUrl: 'https://api.example.com/v1' })).toBe(false)
     expect(commandCodeAdapter.matches({ provider: 'relay', baseUrl: 'https://opencode.ai/zen/go/v1' })).toBe(false)
+  })
+})
+
+/** The magpie quota report fixture: one subscription (windows in percent),
+ * one key-bought plan, one API-key balance — the report shape the
+ * gateway's `GET /v1/magpie/quotas` answers (see magpie's provider.Quota). */
+const MAGPIE_REPORT = {
+  object: 'list',
+  data: [
+    {
+      provider: 'zcode', name: 'ZCode', kind: 'subscription', plan: 'GLM Coding Lite', user: 'ZCode',
+      windows: [
+        { name: '5 hours', used: 100, remaining: 0, resetsAt: '2026-10-25T03:20:04Z', display: '2000 / 2000' },
+        { name: 'Weekly', used: 66.97, remaining: 33.03, resetsAt: '2026-10-30T07:07:49Z', display: '6697 / 10000' },
+      ],
+      readAt: '2026-10-25T10:54:21+08:00',
+    },
+    {
+      provider: 'stepfun', name: 'StepFun', kind: 'plan', plan: 'Pro', user: '',
+      windows: [{ name: 'Credits', used: 13, resetsAt: '2026-11-01T00:00:00Z' }],
+      readAt: '2026-10-25T10:54:22+08:00',
+    },
+    {
+      provider: 'deepseek', name: 'DeepSeek', kind: 'balance', windows: [], balance: '¥356.81',
+      readAt: '2026-10-25T10:54:23+08:00',
+    },
+  ],
+}
+
+/** A magpie query context over a stub transport; `calls` records the
+ * request shape, and the context carries the gateway base URL and the
+ * asking model the way the service injects them. */
+function magpieContextOf(
+  body: unknown,
+  overrides: { baseUrl?: string; model?: string; apiKey?: string; status?: number } = {},
+): { ctx: QuotaQueryContext; calls: Array<{ url: string; headers: Record<string, string> }> } {
+  const calls: Array<{ url: string; headers: Record<string, string> }> = []
+  const fetchFn = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+    calls.push({ url: String(url), headers: (init?.headers ?? {}) as Record<string, string> })
+    return new Response(JSON.stringify(body), {
+      status: overrides.status ?? 200,
+      headers: { 'content-type': 'application/json' },
+    })
+  })
+  return {
+    ctx: {
+      provider: 'magpie',
+      baseUrl: overrides.baseUrl ?? 'http://127.0.0.1:3425/v1',
+      apiKey: overrides.apiKey ?? '',
+      ...(overrides.model !== undefined ? { model: overrides.model } : {}),
+      fetchFn,
+    },
+    calls,
+  }
+}
+
+describe('magpieAdapter', () => {
+  it('normalizes the report: period windows, open-named windows, balances', async () => {
+    const { ctx } = magpieContextOf(MAGPIE_REPORT, { model: 'zcode/glm-4.7' })
+    const result = await magpieAdapter.query(ctx)
+    expect(result.windows).toEqual([
+      {
+        tier: 'five_hour', usedPercent: 100, resetAt: Date.parse('2026-10-25T03:20:04Z'),
+        card: 'ZCode · GLM Coding Lite',
+      },
+      {
+        tier: 'weekly', usedPercent: 66.97, resetAt: Date.parse('2026-10-30T07:07:49Z'),
+        card: 'ZCode · GLM Coding Lite',
+      },
+    ])
+  })
+
+  it('scopes by the model prefix, falls back to the fleet for groups and bare ids', async () => {
+    // A model of the plan-carrying provider: the open-named window rides
+    // as `other` with the vendor's own name.
+    const scoped = await magpieAdapter.query(magpieContextOf(MAGPIE_REPORT, { model: 'stepfun/step-3' }).ctx)
+    expect(scoped.windows).toEqual([
+      { tier: 'other', usedPercent: 13, resetAt: Date.parse('2026-11-01T00:00:00Z'), name: 'Credits', card: 'StepFun · Pro' },
+    ])
+
+    // A routing group id scopes to nothing the REST API can name: the
+    // whole fleet answers, cards distinguished by their titles.
+    const fleet = await magpieAdapter.query(magpieContextOf(MAGPIE_REPORT, { model: 'group/quick' }).ctx)
+    expect(fleet.windows.map(w => w.card)).toEqual([
+      'ZCode · GLM Coding Lite', 'ZCode · GLM Coding Lite', 'StepFun · Pro', 'DeepSeek',
+    ])
+    expect(fleet.windows[3]).toEqual({ tier: 'balance', remainingValue: 356.81, unit: 'cny', card: 'DeepSeek' })
+
+    // A bare id (the gateway's bare-ids setting) has no prefix either.
+    const bare = await magpieAdapter.query(magpieContextOf(MAGPIE_REPORT, { model: 'glm-4.7' }).ctx)
+    expect(bare.windows.length).toBe(4)
+  })
+
+  it('parses the first money amount of multi-currency balances and skips money-less cards', async () => {
+    const report = {
+      object: 'list',
+      data: [
+        { provider: 'ds', name: 'DS', kind: 'balance', windows: [], balance: '$11.12 · ¥-0.05' },
+        { provider: 'sf', name: 'SF', kind: 'balance', windows: [], balance: '12.3k credits' },
+      ],
+    }
+    const result = await magpieAdapter.query(magpieContextOf(report).ctx)
+    expect(result.windows).toEqual([{ tier: 'balance', remainingValue: 11.12, unit: 'usd', card: 'DS' }])
+  })
+
+  it('qualifies same-provider cards by account and numbers blank ones', async () => {
+    const report = {
+      object: 'list',
+      data: [
+        { provider: 'codex', name: 'Codex', kind: 'subscription', user: 'me@example.com', windows: [{ name: '5 hours', used: 40 }] },
+        { provider: 'codex', name: 'Codex', kind: 'subscription', windows: [{ name: '5 hours', used: 5 }] },
+      ],
+    }
+    const result = await magpieAdapter.query(magpieContextOf(report, { model: 'codex/gpt-5.5' }).ctx)
+    expect(result.windows.map(w => w.card)).toEqual([
+      'Codex · me@example.com', 'Codex · #1',
+    ])
+  })
+
+  it('drops failed cards while any healthy one remains, surfaces an all-error report', async () => {
+    const mixed = {
+      object: 'list',
+      data: [
+        { provider: 'claude', name: 'Claude', kind: 'subscription', windows: [], error: 'session expired' },
+        ...MAGPIE_REPORT.data.slice(0, 1),
+      ],
+    }
+    const healthy = await magpieAdapter.query(magpieContextOf(mixed).ctx)
+    expect(healthy.windows.every(w => w.card?.startsWith('ZCode') === true)).toBe(true)
+
+    const allError = {
+      object: 'list',
+      data: [{ provider: 'claude', name: 'Claude', kind: 'subscription', windows: [], error: 'session expired' }],
+    }
+    await expect(magpieAdapter.query(magpieContextOf(allError).ctx)).rejects.toMatchObject({
+      kind: 'http',
+      message: 'session expired',
+    })
+  })
+
+  it('appends the endpoint under both base-URL spellings and sends the key when one exists', async () => {
+    const v1 = magpieContextOf(MAGPIE_REPORT, { apiKey: 'gw-key' })
+    await magpieAdapter.query(v1.ctx)
+    expect(v1.calls[0]?.url).toBe('http://127.0.0.1:3425/v1/magpie/quotas?kept=1')
+    expect(v1.calls[0]?.headers.authorization).toBe('Bearer gw-key')
+
+    const bare = magpieContextOf(MAGPIE_REPORT, { baseUrl: 'http://127.0.0.1:3425/' })
+    await magpieAdapter.query(bare.ctx)
+    expect(bare.calls[0]?.url).toBe('http://127.0.0.1:3425/v1/magpie/quotas?kept=1')
+    expect(bare.calls[0]?.headers.authorization).toBeUndefined()
+  })
+
+  it('never falls back to a live vendor read when the kept report is empty or failed', async () => {
+    for (const report of [{ object: 'list', data: [] }, { object: 'list', data: [
+      { provider: 'zcode', name: 'ZCode', error: 'not read yet' },
+    ] }]) {
+      const { ctx, calls } = magpieContextOf(report)
+      await expect(magpieAdapter.query(ctx)).rejects.toBeInstanceOf(QuotaQueryError)
+      expect(calls).toHaveLength(1)
+      expect(calls[0]?.url).toBe('http://127.0.0.1:3425/v1/magpie/quotas?kept=1')
+    }
+  })
+
+  it('claims only its route key and raises the query deadline over the relay', () => {
+    expect(magpieAdapter.usesApiKey).toBe(false)
+    expect(magpieAdapter.queryTimeoutMs).toBe(15_000)
+    expect(magpieAdapter.matches({ provider: 'magpie' })).toBe(true)
+    // Any other name waits for the hello probe — a loopback host is not
+    // evidence of magpie (other local gateways live there too).
+    expect(magpieAdapter.matches({ provider: 'my-gateway', baseUrl: 'http://127.0.0.1:3425/v1' })).toBe(false)
+    expect(magpieAdapter.matches({ provider: 'my-gateway' })).toBe(false)
+  })
+})
+
+describe('magpieQuotaUrl', () => {
+  it('normalizes every base-URL spelling onto the report endpoint', () => {
+    expect(magpieQuotaUrl('http://127.0.0.1:3425/v1')).toBe('http://127.0.0.1:3425/v1/magpie/quotas?kept=1')
+    expect(magpieQuotaUrl('http://127.0.0.1:3425/v1/')).toBe('http://127.0.0.1:3425/v1/magpie/quotas?kept=1')
+    expect(magpieQuotaUrl('http://127.0.0.1:3425')).toBe('http://127.0.0.1:3425/v1/magpie/quotas?kept=1')
+    expect(magpieQuotaUrl('http://192.168.1.9:5000/v1')).toBe('http://192.168.1.9:5000/v1/magpie/quotas?kept=1')
+    // No profile base URL at all: the gateway's default listen address.
+    expect(magpieQuotaUrl(undefined)).toBe('http://127.0.0.1:3425/v1/magpie/quotas?kept=1')
+  })
+})
+
+describe('MagpieDetector', () => {
+  it('recognizes the hello and caches both verdicts off the hot path', async () => {
+    let at = 1_000_000
+    const fetchFn = vi.fn(async (url: string | URL | Request) => {
+      const href = String(url)
+      const body = href.includes('not-magpie')
+        ? { object: 'list', data: [] }
+        : { name: 'magpie' }
+      return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } })
+    })
+    const detector = new MagpieDetector(() => at)
+
+    expect(await detector.detect({ baseUrl: 'http://127.0.0.1:3425/v1', fetchFn })).toBe(true)
+    expect(await detector.detect({ baseUrl: 'http://127.0.0.1:3425/v1/', fetchFn })).toBe(true) // same cache key
+    expect(await detector.detect({ baseUrl: 'http://127.0.0.1:9999/not-magpie/v1', fetchFn })).toBe(false)
+    expect(fetchFn).toHaveBeenCalledTimes(2)
+
+    // Both verdicts hold inside their TTLs…
+    at += MagpieDetector.MISS_TTL_MS - 1
+    expect(await detector.detect({ baseUrl: 'http://127.0.0.1:3425/v1', fetchFn })).toBe(true)
+    expect(await detector.detect({ baseUrl: 'http://127.0.0.1:9999/not-magpie/v1', fetchFn })).toBe(false)
+    expect(fetchFn).toHaveBeenCalledTimes(2)
+
+    // …and re-probe once each expires (a gateway that came up between
+    // polls is found on the next one).
+    at += 2
+    expect(await detector.detect({ baseUrl: 'http://127.0.0.1:9999/not-magpie/v1', fetchFn })).toBe(false)
+    expect(fetchFn).toHaveBeenCalledTimes(3)
+  })
+
+  it('treats a transport failure as not-magpie rather than throwing', async () => {
+    const dead = vi.fn(async () => { throw new Error('ECONNREFUSED') })
+    const detector = new MagpieDetector()
+    expect(await detector.detect({ baseUrl: 'http://127.0.0.1:3425/v1', fetchFn: dead })).toBe(false)
+  })
+
+  it('sends the gateway key with the hello when one is given', async () => {
+    const calls: Array<Record<string, string>> = []
+    const fetchFn = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push((init?.headers ?? {}) as Record<string, string>)
+      return new Response(JSON.stringify({ name: 'magpie' }), { status: 200, headers: { 'content-type': 'application/json' } })
+    })
+    await new MagpieDetector().detect({ baseUrl: 'http://192.168.1.9:5000/v1', apiKey: 'gw-key', fetchFn })
+    expect(calls[0]?.authorization).toBe('Bearer gw-key')
   })
 })

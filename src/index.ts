@@ -57,7 +57,7 @@ import { createDirectoryGuardRoute, createFullSyncRoute, createMigrationRoute, c
 import { currencyOfRegion, type DirectoryGuardView, type FullSyncView, type QuotaPayload } from './wire.ts'
 import { createQuotaRoute } from './quota/quota-route.ts'
 import { QuotaService } from './quota/quota-service.ts'
-import { ProviderTracker, resolveCurrentProvider } from './quota/provider-tracking.ts'
+import { ProviderTracker, resolveCurrentSighting } from './quota/provider-tracking.ts'
 import {
   resolveQuotaCredentials, withCatalogBaseUrl,
   type CredentialRecordReader, type CredentialResolver, type ProviderDirectory, type SettingsReader,
@@ -791,7 +791,7 @@ export function apply(ctx: Context, config: Config = {}) {
     void invalidateSummary(dir).catch(error => logger.error('[token-usage] cannot invalidate rollup:', error))
   }
   const quotaService = new QuotaService({
-    resolveProvider: sessionId => resolveCurrentProvider({
+    resolveSighting: sessionId => resolveCurrentSighting({
       tracker: quotaTracker,
       ...(sessionId !== undefined ? { sessionId } : {}),
       defaultProvider: () => defaultProviderSelection?.(),
@@ -1001,8 +1001,8 @@ export function apply(ctx: Context, config: Config = {}) {
       // service. A disabled feature still answers — with the `disabled`
       // variant the button hides behind, rather than a 404.
       webCtx.effect(() => webCtx.webServer.register(
-        createQuotaRoute((sessionId, providerHint) => quotaEnabled
-          ? quotaService.snapshot(sessionId, providerHint)
+        createQuotaRoute((sessionId, providerHint, modelHint) => quotaEnabled
+          ? quotaService.snapshot(sessionId, providerHint, modelHint)
           : Promise.resolve({ status: 'disabled', intervalSec: quotaIntervalSec } satisfies QuotaPayload)),
       ), 'token-usage: quota route')
     })

@@ -68,6 +68,19 @@ describe('finestQuotaWindow', () => {
     expect(finestQuotaWindow([balance])).toBe(balance)
     expect(finestQuotaWindow([])).toBeUndefined()
   })
+
+  it('ranks an other window with the coarser pools it usually is', () => {
+    // A gateway's open-named meter ("Credits", "Allowance") is a whole-
+    // period pool: finer than nothing, coarser than the period tiers.
+    const fiveHour = { tier: 'five_hour' as const, usedPercent: 5 }
+    const weekly = { tier: 'weekly' as const, usedPercent: 40 }
+    const other = { tier: 'other' as const, usedPercent: 13, name: 'Credits' }
+    const balance = { tier: 'balance' as const, remainingValue: 6.8, unit: 'cny' as const }
+    expect(finestQuotaWindow([other])).toBe(other)
+    expect(finestQuotaWindow([other, balance])).toBe(other)
+    expect(finestQuotaWindow([other, weekly])).toBe(weekly)
+    expect(finestQuotaWindow([fiveHour, other])).toBe(fiveHour)
+  })
 })
 
 describe('quotaIconFillShare', () => {

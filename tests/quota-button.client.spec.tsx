@@ -82,17 +82,18 @@ function propsOf(sessionId = 's1', modelDirectory?: { service: unknown }): Quota
 }
 
 /** A fake model-directory holder answering one live chip selection. */
-function modelDirectoryOf(initial: string | undefined): {
+function modelDirectoryOf(initial: string | undefined, initialModel?: string): {
   handle: { service: unknown }
-  select(provider: string | undefined): void
+  select(provider: string | undefined, model?: string): void
 } {
   let current = initial
+  let currentModel = initialModel
   const listeners = new Set<() => void>()
   const service = {
     directoryFor: () => ({
       store: {
-        getSnapshot: (): { current: { provider: string } | null } =>
-          current === undefined ? { current: null } : { current: { provider: current } },
+        getSnapshot: (): { current: { provider: string; model?: string } | null } =>
+          current === undefined ? { current: null } : { current: { provider: current, ...(currentModel === undefined ? {} : { model: currentModel }) } },
         subscribe: (fn: () => void): (() => void) => {
           listeners.add(fn)
           return () => { listeners.delete(fn) }
@@ -102,8 +103,9 @@ function modelDirectoryOf(initial: string | undefined): {
   }
   return {
     handle: { service },
-    select(provider: string | undefined): void {
+    select(provider: string | undefined, model?: string): void {
       current = provider
+      currentModel = model
       for (const fn of [...listeners]) fn()
     },
   }
@@ -397,6 +399,45 @@ describe('QuotaButton', () => {
     await vi.advanceTimersByTimeAsync(60_000)
     await waitFor(() => {
       expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(2)
+    })
+  })
+
+  it('bounds the panel to the larger vertical space and updates on resize', async () => {
+    stubFetch(OK_PAYLOAD)
+    const { container } = render(<div style={{ overflowY: 'auto' }}><QuotaButton {...propsOf()} /></div>)
+    const trigger = await screen.findByLabelText('供应商配额')
+    const clip = container.firstChild as HTMLElement
+    vi.spyOn(clip, 'getBoundingClientRect').mockReturnValue({ top: 40, bottom: 700 } as DOMRect)
+    const wrapper = clip.firstChild as HTMLElement
+    const rect = vi.spyOn(wrapper, 'getBoundingClientRect')
+    rect.mockReturnValue({ left: 700, width: 28, top: 430, bottom: 458 } as DOMRect)
+    const height = window.innerHeight
+    window.innerHeight = 720
+    fireEvent.click(trigger)
+    const panel = screen.getByRole('dialog') as HTMLElement
+    expect(panel.style.maxHeight).toBe('366px')
+    expect(panel.style.top).toBe('')
+    rect.mockReturnValue({ left: 700, width: 28, top: 80, bottom: 108 } as DOMRect)
+    act(() => { window.dispatchEvent(new Event('resize')) })
+    expect(panel.style.maxHeight).toBe('568px')
+    expect(panel.style.top).toBe('calc(100% + 8px)')
+    expect(panel.style.bottom).toBe('auto')
+    window.innerHeight = height
+  })
+
+  it('sends the live model before a request and refetches within the same provider', async () => {
+    const fetchMock = stubFetch(OK_PAYLOAD)
+    const chip = modelDirectoryOf('magpie', 'zcode/GLM-5.3')
+    render(<QuotaButton {...propsOf('s1', chip.handle)} />)
+    await screen.findByLabelText('供应商配额')
+    expect(fetchMock.mock.calls.at(-1)?.[0]).toBe('/token-usage/quota?session=s1&provider=magpie&model=zcode%2FGLM-5.3')
+    act(() => { chip.select('magpie', 'minimax-cn/MiniMax-M3.1-Flash') })
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.at(-1)?.[0]).toBe('/token-usage/quota?session=s1&provider=magpie&model=minimax-cn%2FMiniMax-M3.1-Flash')
+    })
+    act(() => { chip.select('magpie', 'group/quick') })
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.at(-1)?.[0]).toBe('/token-usage/quota?session=s1&provider=magpie&model=group%2Fquick')
     })
   })
 

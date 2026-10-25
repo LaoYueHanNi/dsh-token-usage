@@ -82,6 +82,9 @@
   box-sizing: border-box;
   width: 320px;
   max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 12px;
   border: 1px solid var(--dsw-alias-border-inverted);
   border-radius: 12px;
@@ -129,6 +132,27 @@
   display: grid;
   grid-template-columns: repeat(var(--cols, 3), 1fr);
   gap: 14px;
+}
+
+/* One quota card of a multi-card gateway payload: its title heading plus
+ * the card's own window grid; stacked groups keep a small gutter. */
+.cardGroup {
+  margin-top: 10px;
+}
+
+.cardGroup:first-child {
+  margin-top: 0;
+}
+
+.cardTitle {
+  margin-bottom: 6px;
+  font-size: 11px;
+  line-height: 16px;
+  font-weight: 500;
+  color: var(--dsw-alias-label-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .col {

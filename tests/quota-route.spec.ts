@@ -49,18 +49,18 @@ describe('createQuotaRoute', () => {
     expect(JSON.parse(captured.body)).toEqual({ status: 'no-provider', intervalSec: 60 })
   })
 
-  it('passes the session and provider parameters through', async () => {
+  it('passes the session, provider and decoded model parameters through', async () => {
     const { route, snapshot } = routeOf({ status: 'no-provider', intervalSec: 60 })
     const { res } = fakeResponse()
-    await route.handler(fakeRequest({ url: `${QUOTA_PATH}?session=s-42&provider=minimax` }), res)
-    expect(snapshot).toHaveBeenCalledWith('s-42', 'minimax')
+    await route.handler(fakeRequest({ url: `${QUOTA_PATH}?session=s-42&provider=magpie&model=zcode%2FGLM-5.3` }), res)
+    expect(snapshot).toHaveBeenCalledWith('s-42', 'magpie', 'zcode/GLM-5.3')
   })
 
   it('treats blank parameters as absent', async () => {
     const { route, snapshot } = routeOf({ status: 'no-provider', intervalSec: 60 })
     const { res } = fakeResponse()
-    await route.handler(fakeRequest({ url: `${QUOTA_PATH}?session=&provider=` }), res)
-    expect(snapshot).toHaveBeenCalledWith(undefined, undefined)
+    await route.handler(fakeRequest({ url: `${QUOTA_PATH}?session=&provider=&model=` }), res)
+    expect(snapshot).toHaveBeenCalledWith(undefined, undefined, undefined)
   })
 
   it('refuses non-GET methods and cross-site fetches', async () => {

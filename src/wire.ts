@@ -759,8 +759,11 @@ export interface UsageSummary extends Omit<CostedSummary, 'bySession'> {
 /** One normalized quota window tier, mirroring the tier vocabulary the
  * cc-switch research normalized providers onto: time-boxed windows for
  * coding-plan subscriptions, an open-ended balance tier for pay-as-you-go
- * accounts. Display adapts by tier (progress bar vs amount). */
-export type QuotaTier = 'five_hour' | 'weekly' | 'monthly' | 'balance'
+ * accounts. `other` carries a window whose name fits no known period (a
+ * gateway's open window vocabulary: "Credits", "Allowance") — display
+ * leans on {@link QuotaWindow.name}, and only the granularity rank treats
+ * it generically. Display adapts by tier (progress bar vs amount). */
+export type QuotaTier = 'five_hour' | 'weekly' | 'monthly' | 'other' | 'balance'
 
 /**
  * One provider quota window as the panel renders it. Percent fields carry
@@ -786,6 +789,15 @@ export interface QuotaWindow {
   /** Which DeepSeek account purse a balance window came from. Absent on
    * API-key balances, which stay a single unlabeled amount. */
   balanceKind?: 'recharge' | 'bonus'
+  /** The vendor's own name of the window ("Credits", "Allowance"), when it
+   * fits no known period tier; the panel's column label prefers it over
+   * the generic `other` copy. Absent on windows a tier already names. */
+  name?: string
+  /** The quota CARD a window belongs to when one payload aggregates
+   * several (a gateway summarizing its whole upstream fleet): the card's
+   * display title (vendor · plan · account), which the panel renders as a
+   * section heading. Absent on single-source payloads. */
+  card?: string
 }
 
 /** Why a quota query failed, normalized so the panel can pick friendly copy. */

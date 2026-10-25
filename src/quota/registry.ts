@@ -15,6 +15,7 @@ import { commandCodeAdapter } from './adapters/command-code.ts'
 import { deepseekAccountAdapter } from './adapters/deepseek-account.ts'
 import { deepseekBalanceAdapter } from './adapters/deepseek-balance.ts'
 import { kimiAdapter } from './adapters/kimi.ts'
+import { magpieAdapter } from './adapters/magpie.ts'
 import { minimaxAdapter } from './adapters/minimax.ts'
 import { opencodeGoAdapter } from './adapters/opencode-go.ts'
 import { openrouterAdapter } from './adapters/openrouter.ts'
@@ -33,6 +34,11 @@ export const QUOTA_ADAPTERS: readonly QuotaAdapter[] = [
   deepseekAccountAdapter,
   deepseekBalanceAdapter,
   openrouterAdapter,
+  // Last: the magpie adapter claims only its route key here — a gateway
+  // route is a user-declared name at an arbitrary host, so the service
+  // resolves those through the MagpieDetector probe when this table (and
+  // every host-based match above) finds nothing.
+  magpieAdapter,
 ]
 
 /**

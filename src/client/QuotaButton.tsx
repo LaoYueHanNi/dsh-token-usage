@@ -62,12 +62,12 @@ const PANEL_WIDTH_BALANCE = 200
 const PANEL_WIDTH_SINGLE = 232
 const PANEL_WIDTH_FULL = 320
 const PANEL_VIEWPORT_MARGIN = 16
-
 /** Tier → label key; the locale dictionaries carry both languages. */
-const TIER_LABEL_KEYS: Record<QuotaTier, 'quota.tier.fiveHour' | 'quota.tier.weekly' | 'quota.tier.monthly' | 'quota.tier.balance'> = {
+const TIER_LABEL_KEYS: Record<QuotaTier, 'quota.tier.fiveHour' | 'quota.tier.weekly' | 'quota.tier.monthly' | 'quota.tier.other' | 'quota.tier.balance'> = {
   five_hour: 'quota.tier.fiveHour',
   weekly: 'quota.tier.weekly',
   monthly: 'quota.tier.monthly',
+  other: 'quota.tier.other',
   balance: 'quota.tier.balance',
 }
 
@@ -83,7 +83,7 @@ export interface ModelSelectionSource {
   directoryFor(sessionId: string): {
     /** The host-reported selection for the NEXT assembled step; null before the first load. */
     store: {
-      getSnapshot(): { current: { provider: string } | null }
+      getSnapshot(): { current: { provider: string; model?: string } | null }
       subscribe(fn: () => void): () => void
     }
   }
@@ -122,39 +122,54 @@ export function QuotaButton({ sessionId, t, modelDirectory }: QuotaButtonProps):
   // off-screen on narrow windows). Set at open time, refreshed on resize
   // and any ancestor scroll while open.
   const [panelLeft, setPanelLeft] = useState<number | undefined>(undefined)
+  const [panelHeight, setPanelHeight] = useState<number | undefined>(undefined)
+  const [panelBelow, setPanelBelow] = useState(false)
   const measurePanelLeft = useCallback((width: number): void => {
     const wrapper = rootRef.current
     if (wrapper === null) return
-    const { left: wrapperLeft, width: wrapperWidth } = wrapper.getBoundingClientRect()
+    const { left: wrapperLeft, width: wrapperWidth, top, bottom } = wrapper.getBoundingClientRect()
     const panelWidth = Math.min(width, window.innerWidth - 2 * PANEL_VIEWPORT_MARGIN)
     const desired = (wrapperWidth - panelWidth) / 2
     const minLeft = PANEL_VIEWPORT_MARGIN - wrapperLeft
     const maxLeft = window.innerWidth - PANEL_VIEWPORT_MARGIN - panelWidth - wrapperLeft
     setPanelLeft(Math.min(Math.max(desired, minLeft), Math.max(minLeft, maxLeft)))
+    // The shell's scroll body clips above its header, inside the viewport.
+    let clipTop = 0
+    let clipBottom = window.innerHeight
+    for (let parent = wrapper.parentElement; parent !== null; parent = parent.parentElement) {
+      if (!/^(auto|scroll|hidden|clip)$/u.test(getComputedStyle(parent).overflowY)) continue
+      const rect = parent.getBoundingClientRect()
+      clipTop = Math.max(clipTop, rect.top)
+      clipBottom = Math.min(clipBottom, rect.bottom)
+    }
+    const above = top - clipTop - 8 - PANEL_VIEWPORT_MARGIN
+    const below = clipBottom - bottom - 8 - PANEL_VIEWPORT_MARGIN
+    setPanelBelow(below > above)
+    setPanelHeight(Math.max(0, above, below))
   }, [])
 
-  // The provider the model chip currently selects — the host-reported NEXT
+  // The provider + model the chip currently selects — the host-reported NEXT
   // selection, live before any request is sent. Seeded synchronously (the
   // chip's directory has usually loaded by the time this button mounts),
   // then kept live through the store subscription; absent when the shell's
   // model-selection service is unavailable or has not loaded yet, in which
-  // case the host falls back to its own resolution (last request's
-  // provider, else the default model selection).
+  // case the host falls back to its own resolution (last request, else
+  // the default provider).
   const modelService = modelDirectory?.service
-  const readChipProvider = (): string | undefined => {
+  const readChipSelection = (): { provider: string; model?: string } | undefined => {
     if (sessionId === '' || modelService === undefined) return undefined
     try {
-      return modelService.directoryFor(sessionId).store.getSnapshot().current?.provider ?? undefined
+      return modelService.directoryFor(sessionId).store.getSnapshot().current ?? undefined
     } catch {
       // An unresolvable session scope (e.g. a transient subagent address)
       // simply contributes no hint.
       return undefined
     }
   }
-  const [chipProvider, setChipProvider] = useState<string | undefined>(readChipProvider)
+  const [chipSelection, setChipSelection] = useState(readChipSelection)
   useEffect(() => {
     // Re-seed on session/service change, then subscribe for chip switches.
-    setChipProvider(readChipProvider())
+    setChipSelection(readChipSelection())
     if (sessionId === '' || modelService === undefined) return
     let directory: ReturnType<ModelSelectionSource['directoryFor']> | undefined
     try {
@@ -162,15 +177,15 @@ export function QuotaButton({ sessionId, t, modelDirectory }: QuotaButtonProps):
     } catch {
       return
     }
-    return directory.store.subscribe(() => { setChipProvider(readChipProvider()) })
+    return directory.store.subscribe(() => { setChipSelection(readChipSelection()) })
     // The synchronous reader is intentionally not a dep: it closes over the
     // two deps below and would re-run the effect on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, modelService])
 
   const [resource, retry] = useAsyncResource<QuotaPayload | null>(
-    signal => fetchQuotaPayload(sessionId, chipProvider, signal),
-    [sessionId, chipProvider],
+    signal => fetchQuotaPayload(sessionId, chipSelection?.provider, chipSelection?.model, signal),
+    [sessionId, chipSelection?.provider, chipSelection?.model],
     { silentAfterFirst: true, retryToken: 0 },
   )
   const payload = resource.status === 'ready' ? resource.value : null
@@ -280,6 +295,8 @@ export function QuotaButton({ sessionId, t, modelDirectory }: QuotaButtonProps):
           style={{
             width: `${String(panelWidth)}px`,
             ...(panelLeft === undefined ? {} : { left: `${String(panelLeft)}px` }),
+            ...(panelHeight === undefined ? {} : { maxHeight: `${String(panelHeight)}px` }),
+            ...(panelBelow ? { top: 'calc(100% + 8px)', bottom: 'auto' } : {}),
           }}
         >
           <div className={styles.header}>
@@ -302,18 +319,57 @@ export function QuotaButton({ sessionId, t, modelDirectory }: QuotaButtonProps):
                 </button>
               </div>
             )
-            : (
-              <div
-                className={styles.grid}
-                style={{ '--cols': String(Math.min(payload.windows.length, 3)) } as CSSProperties}
-              >
-                {payload.windows.map((window, index) =>
-                  <QuotaColumn key={`${window.tier}:${String(index)}`} window={window} t={t} />)}
-              </div>
-            )}
+            : <QuotaCardGroups windows={payload.windows} t={t} />}
         </div>
       )}
     </span>
+  )
+}
+
+/**
+ * The panel's window body: one group per quota CARD (a gateway payload
+ * aggregates several upstream accounts — each window carries its card's
+ * title), a card title heading each; a single-card (or card-less) payload
+ * renders the flat grid as before, so the plain providers' panels do not
+ * change shape.
+ */
+function QuotaCardGroups({ windows, t }: { windows: readonly QuotaWindow[]; t: QuotaButtonProps['t'] }): ReactNode {
+  const groups: Array<{ card?: string; windows: QuotaWindow[] }> = []
+  for (const window of windows) {
+    const last = groups[groups.length - 1]
+    if (last !== undefined && (last.card ?? '') === (window.card ?? '')) {
+      last.windows.push(window)
+    } else {
+      groups.push({ ...(window.card !== undefined ? { card: window.card } : {}), windows: [window] })
+    }
+  }
+  if (groups.length <= 1) {
+    const flat = groups[0]?.windows ?? []
+    return (
+      <div
+        className={styles.grid}
+        style={{ '--cols': String(Math.min(flat.length, 3)) } as CSSProperties}
+      >
+        {flat.map((window, index) =>
+          <QuotaColumn key={`${window.tier}:${String(index)}`} window={window} t={t} />)}
+      </div>
+    )
+  }
+  return (
+    <>
+      {groups.map((group, gi) => (
+        <div key={group.card ?? String(gi)} className={styles.cardGroup}>
+          <div className={styles.cardTitle}>{group.card}</div>
+          <div
+            className={styles.grid}
+            style={{ '--cols': String(Math.min(group.windows.length, 3)) } as CSSProperties}
+          >
+            {group.windows.map((window, index) =>
+              <QuotaColumn key={`${window.tier}:${String(index)}`} window={window} t={t} />)}
+          </div>
+        </div>
+      ))}
+    </>
   )
 }
 
@@ -375,11 +431,15 @@ function QuotaGlyph({ share }: { share: number }): ReactNode {
 function QuotaColumn({ window, t }: { window: QuotaWindow; t: QuotaButtonProps['t'] }): ReactNode {
   const remaining = quotaRemainingPercent(window)
   const severity: QuotaSeverity = quotaSeverityOf(window)
+  // An `other` window keeps the vendor's own name ("Credits",
+  // "Allowance"); the known tiers read the localized period label.
   const label = window.balanceKind === 'recharge'
     ? t('quota.tier.recharge')
     : window.balanceKind === 'bonus'
       ? t('quota.tier.bonus')
-      : t(TIER_LABEL_KEYS[window.tier])
+      : window.name !== undefined && window.tier === 'other'
+        ? window.name
+        : t(TIER_LABEL_KEYS[window.tier])
 
   // Balance windows lead with the amount (the figure the user manages
   // against); ratio windows with the remaining share. The `meta` suffix
@@ -427,10 +487,12 @@ function QuotaColumn({ window, t }: { window: QuotaWindow; t: QuotaButtonProps['
  * the minimal plate, two amount purses (account recharge + bonus) the
  * full plate, one bar (a weekly-only plan, or a balance with a spend
  * total like OpenRouter) the middle one, two or more bars the full plate.
- * Errors and payloads without windows read the full plate (their copy
- * runs long). */
+ * A multi-card gateway payload (several upstream accounts) always reads
+ * the full plate — the card headings need the room. Errors and payloads
+ * without windows read the full plate (their copy runs long). */
 function panelWidthOf(payload: QuotaPayload | null): number {
   if (payload === null || payload.status !== 'ok') return PANEL_WIDTH_FULL
+  if (new Set(payload.windows.map(window => window.card ?? '')).size > 1) return PANEL_WIDTH_FULL
   const bars = payload.windows.filter(window => quotaUsedPercent(window) !== undefined).length
   if (bars === 0) {
     // One amount (the API-key DeepSeek shape) stays the minimal plate.
@@ -468,14 +530,15 @@ function looksLikeQuotaPayload(value: unknown): value is QuotaPayload {
 
 /**
  * Fetch the quota payload for the active session, naming the chip-selected
- * provider when one is known. Throws on transport failure or a payload that
+ * provider and model when known. Throws on transport failure or a payload that
  * does not look like one, so the hook can keep the previous render
  * (silentAfterFirst) or stay hidden (first failure).
  */
-async function fetchQuotaPayload(sessionId: string, provider: string | undefined, signal: AbortSignal): Promise<QuotaPayload | null> {
+async function fetchQuotaPayload(sessionId: string, provider: string | undefined, model: string | undefined, signal: AbortSignal): Promise<QuotaPayload | null> {
   const params = new URLSearchParams()
   if (sessionId !== '') params.set('session', sessionId)
   if (provider !== undefined && provider !== '') params.set('provider', provider)
+  if (provider !== undefined && provider !== '' && model !== undefined && model !== '') params.set('model', model)
   const encoded = params.toString()
   const query = encoded === '' ? '' : `?${encoded}`
   const response = await fetch(QUOTA_PATH + query, {
