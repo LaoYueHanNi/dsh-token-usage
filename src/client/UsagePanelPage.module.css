@@ -1,0 +1,44 @@
+/* The Token Usage main panel's page shell: the first-level-page vocabulary
+ * of the official Plugins/Tasks pages — a full-height scroll pane holding a
+ * centered 1200px column with clamp(24-48px) inline / 48px bottom insets.
+ * The dashboard's two-card rows read cramped at the old 960px; the wider
+ * column is what the v3 demo's four-card grid was drawn at. */
+
+.page {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-bg-base);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.pageScroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  scrollbar-gutter: stable;
+  /* A 9px rail carries the 5px thumb inset 2px from the pane edge, the same
+   * rail the official pages' scroll panes ask of ui-theme. */
+  --dsh-scrollbar-width: 9px;
+  --dsh-scrollbar-thumb-border: 2px;
+}
+
+.pageContent {
+  max-width: 1200px;
+  margin: 0 auto;
+  /* The 28px top inset belongs here (the section's title starts the page);
+   * the official pages carry it on the heading row instead, whose row starts
+   * at the window's top edge — same 28px, one owner each. */
+  padding: 28px clamp(24px, 4vw, 48px) 48px;
+}
+
+/* macOS hiddenInset titlebar: keep the heading clear of the traffic lights,
+ * the same clearance the Plugins/Tasks headings carry. */
+:global([data-platform='darwin']) .pageContent {
+  padding-top: calc(28px + var(--dsh-frame-top-clearance, 0px));
+}

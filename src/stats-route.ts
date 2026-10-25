@@ -17,6 +17,7 @@ import { attachCosts, buildSessionRows, buildSummary, filterRecordsBySessions, f
 import type { RateResolver, SessionMetaEntry } from './stats.ts'
 import { readCachedRecords } from './record-cache.ts'
 import { SessionMetaStore } from './session-meta.ts'
+import { projectRowsOf } from './project-rows.ts'
 import { bucketSeries, pointsOfBuckets } from './trend-bucket.ts'
 import { decodeChildGroups, decodeSessionScope, DIR_GUARD_PATH, FULL_SYNC_PATH, MIGRATION_PATH, PRICING_PATH, STATS_PATH, UNPRICED_KEY } from './wire.ts'
 import type { ChildGroup, ChildUsageSummary, CostedSummary, DirectoryGuardView, DisplayCurrency, FullSyncView, PricingOverviewPayload, PricingTable, RequestPoint, SessionUsageRow, StatsFields, StatsPayload, TokenSummary } from './wire.ts'
@@ -494,7 +495,10 @@ export function createStatsRoute(dir: () => string, options: StatsRouteOptions =
         // subagents badge through childCount, never their own rows.
         const metaIndex = await metaStoreOf(dataDir).read()
         const meta = new Map<string, SessionMetaEntry>(Object.entries(metaIndex))
-        const sessionRows: readonly SessionUsageRow[] = buildSessionRows(summary, meta, SESSION_ROW_LIMIT)
+        // Project totals must see every root, not just the most expensive
+        // sessions retained in the bounded session-list payload.
+        const allSessionRows = buildSessionRows(summary, meta, Infinity)
+        const sessionRows: readonly SessionUsageRow[] = allSessionRows.slice(0, SESSION_ROW_LIMIT)
         // Strip the granular cells from the whole-scope payload: the client
         // renders the folded rows, and sending the cells would duplicate
         // every aggregate once more on the wire.
@@ -516,6 +520,7 @@ export function createStatsRoute(dir: () => string, options: StatsRouteOptions =
             ...summaryRest,
             scope: 'whole' as const,
             sessionRows,
+            projectRows: projectRowsOf(allSessionRows),
             currency,
             usdExchangeRate,
           } satisfies StatsPayload

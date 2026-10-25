@@ -20,7 +20,7 @@ import { fileDay, listDayFiles, readDayFile, readDayFileChecked } from './record
 import { consoleLogger, type LoggerLike } from './log.ts'
 import type { AuxKind, UsageRecord } from './usage-record.ts'
 import { AUX_KINDS, effectiveModelOf } from './usage-record.ts'
-import { readRollup, writeRollup, ROLLUP_FILE_NAME, ROLLUP_TMP_FILE_NAME } from './rollup.ts'
+import { readRollup, writeRollup, ROLLUP_FILE_NAME, ROLLUP_TMP_FILE_NAME, ROLLUP_AGGREGATE_FORMAT } from './rollup.ts'
 import type { RollupFile } from './rollup.ts'
 import type {
   AuxSummary,
@@ -28,6 +28,7 @@ import type {
   CostedSessionCell,
   CostedSummary,
   CostState,
+  ModelPerf,
   ModelRates,
   PricingTable,
   RateKey,
@@ -76,7 +77,8 @@ export function emptyTotals(): UsageTotals {
  * Add one totals row into another, field by field. `compactions` and
  * `failures` merge with a `?? 0` fallback so a legacy rollup (no key) folds
  * into new aggregates without NaN; `failuresByCode` merges key-wise with
- * the same absent-reads-as-empty rule.
+ * the same absent-reads-as-empty rule; the performance accumulators follow
+ * the same fallback (a legacy shape has no timing to contribute).
  */
 function addTotals(target: UsageTotals, source: UsageTotals): void {
   target.requests += source.requests
@@ -93,6 +95,20 @@ function addTotals(target: UsageTotals, source: UsageTotals): void {
       merged[code] = (merged[code] ?? 0) + count
     }
     target.failuresByCode = merged
+  }
+  // Performance accumulators merge only when a side carries timing data —
+  // a timing-less totals stays without the keys, so legacy rollups and
+  // timing-free windows never grow zero-valued noise.
+  if (source.perfLatencyMsSum !== undefined) {
+    target.perfLatencyMsSum = (target.perfLatencyMsSum ?? 0) + source.perfLatencyMsSum
+  }
+  if (source.perfLatencyCount !== undefined) {
+    target.perfLatencyCount = (target.perfLatencyCount ?? 0) + source.perfLatencyCount
+  }
+  if (source.perfStreamCount !== undefined) {
+    target.perfStreamCount = (target.perfStreamCount ?? 0) + source.perfStreamCount
+    target.perfStreamTpsSum = (target.perfStreamTpsSum ?? 0) + (source.perfStreamTpsSum ?? 0)
+    target.perfStreamFirstMsSum = (target.perfStreamFirstMsSum ?? 0) + (source.perfStreamFirstMsSum ?? 0)
   }
 }
 
@@ -166,6 +182,12 @@ function auxKindOfRecord(record: UsageRecord): AuxKind {
   return record.auxKind ?? 'other'
 }
 
+/** Smallest generation span (latency − first token) a request must show to
+ * count as a streaming sample for the performance accumulators: a shorter
+ * span means the response landed in one shot (non-streaming), and its
+ * "speed" — thousands of tokens over a few ms — is pure noise. */
+const PERF_STREAM_MIN_GEN_MS = 500
+
 /**
  * Fold one record into totals; a record without provider usage still counts a
  * request, and a compaction record additionally counts the `compactions`
@@ -174,6 +196,13 @@ function auxKindOfRecord(record: UsageRecord): AuxKind {
  * `requests`, so the requests figure stays "successful requests" — and its
  * `failureCode` folds into the per-code breakdown the failure pill's
  * tooltip renders.
+ *
+ * A successful request with timing folds its end-to-end `latencyMs` into the
+ * performance accumulators and increments the valid timing count, and
+ * when its generation span marks it streaming (see
+ * {@link PERF_STREAM_MIN_GEN_MS}) its tokens-per-second and first-token
+ * latency join the streaming means too. Defensive guards on the recorder's
+ * optional figures keep a malformed row out of the means.
  */
 function addUsage(totals: UsageTotals, record: UsageRecord): void {
   if (record.kind === 'failure') {
@@ -187,6 +216,21 @@ function addUsage(totals: UsageTotals, record: UsageRecord): void {
   totals.requests += 1
   if (record.kind === 'compaction') {
     totals.compactions = (totals.compactions ?? 0) + 1
+  }
+  const latency = record.latencyMs
+  if (typeof latency === 'number' && Number.isFinite(latency) && latency >= 0) {
+    totals.perfLatencyMsSum = (totals.perfLatencyMsSum ?? 0) + latency
+    totals.perfLatencyCount = (totals.perfLatencyCount ?? 0) + 1
+    const first = record.firstTokenLatencyMs
+    if (typeof first === 'number' && Number.isFinite(first) && first >= 0) {
+      const genMs = latency - first
+      const output = record.usage?.outputTokens ?? 0
+      if (genMs >= PERF_STREAM_MIN_GEN_MS && output > 0) {
+        totals.perfStreamTpsSum = (totals.perfStreamTpsSum ?? 0) + output / (genMs / 1000)
+        totals.perfStreamFirstMsSum = (totals.perfStreamFirstMsSum ?? 0) + first
+        totals.perfStreamCount = (totals.perfStreamCount ?? 0) + 1
+      }
+    }
   }
   const usage = record.usage
   if (usage === undefined) return
@@ -630,6 +674,27 @@ export function summaryForSessions(summary: TokenSummary, sessionIds: readonly s
 }
 
 /**
+ * Derive the model card's performance means from one folded totals row:
+ * speed and first token over the streaming samples, end-to-end latency over
+ * successful requests with valid timing only. No streaming samples (or no
+ * timed requests at all) yields `undefined` — the row renders 「无计时数据」 rather than a
+ * fabricated mean.
+ */
+function perfOf(totals: UsageTotals): ModelPerf | undefined {
+  const samples = totals.perfStreamCount ?? 0
+  const latencySum = totals.perfLatencyMsSum
+  const timedRequests = totals.perfLatencyCount ?? 0
+  if (samples <= 0 || timedRequests <= 0 || latencySum === undefined) return undefined
+  return {
+    tokensPerSec: (totals.perfStreamTpsSum ?? 0) / samples,
+    firstTokenMs: (totals.perfStreamFirstMsSum ?? 0) / samples,
+    latencyMs: latencySum / timedRequests,
+    timedRequests,
+    samples,
+  }
+}
+
+/**
  * Attach the cost layer to a token-only summary: each rate row is priced at
  * the prices its rate identity resolves to under the current table, folded
  * into per-model costs, the total, the unpriced model list, and the table
@@ -736,7 +801,13 @@ export function attachCosts(
       existing.cost += costs.get(row.model) ?? 0
     }
   }
-  const byModel: CostedModelRow[] = [...folded.values()]
+  // The performance means derive once per folded model row, after every
+  // same-family row's accumulators merged — a per-row derivation would
+  // average the aliases separately and disagree with the folded tokens.
+  const byModel: CostedModelRow[] = [...folded.values()].map(row => {
+    const perf = perfOf(row.totals)
+    return { model: row.model, totals: row.totals, cost: row.cost, ...(perf !== undefined ? { perf } : {}) }
+  })
     .sort((left, right) =>
       right.totals.requests - left.totals.requests || left.model.localeCompare(right.model))
   const unpricedModels = byModel
@@ -962,7 +1033,13 @@ async function buildSummaryLocked(
 ): Promise<TokenSummary & { dataDir: string; costState?: CostState }> {
   const today = dayKey(now().getTime())
   const stored = (await readRollup(dir, logger)) ?? emptyRollup()
-  const rebuild = stored.requiresRebuild === true || (pricing !== undefined && stored.pricingFingerprint !== pricing.fingerprint)
+  // A stale aggregate shape rebuilds exactly like a pricing-fingerprint
+  // change: the day files are re-absorbed so dimensions the old shape never
+  // carried (the performance accumulators) backfill over the whole history.
+  // The rebuild runs once — the rewritten rollup carries the new format.
+  const rebuild = stored.requiresRebuild === true
+    || (pricing !== undefined && stored.pricingFingerprint !== pricing.fingerprint)
+    || (stored.aggregateFormat ?? 1) !== ROLLUP_AGGREGATE_FORMAT
   const rollup = rebuild ? emptyRollup() : stored
   const names = await listDayFiles(dir)
   const cold: string[] = []
@@ -1002,6 +1079,7 @@ async function buildSummaryLocked(
     absorbed = {
       upto: fileDay(cold[cold.length - 1]!)!,
       ...mergeSummaries(rollup, summarizeRecords(records, resolve)),
+      aggregateFormat: ROLLUP_AGGREGATE_FORMAT,
       ...(pricing !== undefined ? { pricingFingerprint: pricing.fingerprint } : {}),
       sourceFiles: [...new Set([...rollup.sourceFiles ?? [], ...cold])].sort(),
     }

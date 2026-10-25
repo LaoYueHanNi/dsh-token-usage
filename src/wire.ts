@@ -212,7 +212,45 @@ export interface UsageTotals {
    * empty map). Sums to `failures` when present. Codes are an open set:
    * unknown future codes read verbatim. */
   failuresByCode?: Record<string, number>
+  /** Internal accumulators behind the model card's performance view: the
+   * streaming samples' tokens-per-second and first-token-latency sums with
+   * their count, plus the end-to-end latency sum and valid timing count.
+   * Requests without timing never contribute to a performance mean.
+   * Absent on legacy rollups and
+   * pre-timing shapes (reads as no samples) — the means are derived at the
+   * cost layer, never stored. Timing figures follow the records' own
+   * `latencyMs` / `firstTokenLatencyMs`; a streaming sample is one whose
+   * generation span (latency − first token) reached the recorder's
+   * streaming threshold, so non-streaming one-shot responses never poison
+   * the speed mean. */
+  perfStreamTpsSum?: number
+  perfStreamFirstMsSum?: number
+  perfStreamCount?: number
+  perfLatencyMsSum?: number
+  perfLatencyCount?: number
 }
+
+/** Per-model performance means the model card's performance view renders.
+ * Derived at the cost layer from the totals' timing accumulators — never
+ * persisted itself, so a filter/merge re-derivation stays exact. */
+export interface ModelPerf {
+  /** Mean output speed over the streaming samples, tokens per second. */
+  tokensPerSec: number
+  /** Mean first-token latency over the same streaming samples, ms. */
+  firstTokenMs: number
+  /** Mean end-to-end latency over successful requests with valid timing, ms. */
+  latencyMs: number
+  /** Successful requests with valid latency; untimed requests are excluded. */
+  timedRequests: number
+  /** Streaming sample count the speed/first-token means fold from; below
+   * {@link MIN_PERF_SAMPLES} the row reads 「样本不足」 instead of a full
+   * figures cell. */
+  samples: number
+}
+
+/** Smallest streaming sample count a performance figures cell trusts; below
+ * it the row still shows its mean speed but annotated 「样本不足」. */
+export const MIN_PERF_SAMPLES = 5
 
 /** One per-day aggregation row, keyed by local date `YYYY-MM-DD`. */
 export interface UsageDayRow {
@@ -587,13 +625,23 @@ export interface TokenSummary {
 }
 
 /** A per-model row carrying its billed cost (¥); 0 when the model is unpriced. */
-export type CostedModelRow = UsageModelRow & { cost: number }
+export type CostedModelRow = UsageModelRow & { cost: number; perf?: ModelPerf }
 
 /** A per-session aggregation cell carrying its billed cost (¥); 0 when the
  * model is unpriced — priced from the same rate identity the per-model cost
  * folds from, so the session table's cost column reconciles with the
  * summary card for free. */
 export type CostedSessionCell = UsageSessionRow & { cost: number }
+
+/** One project fold over all root-session rows, before the session list's
+ * top-N cut. Directory tails remain the display grouping key. */
+export interface ProjectUsageRow {
+  name: string
+  cwd?: string
+  sessionCount: number
+  totals: UsageTotals
+  cost: number
+}
 
 /** The currency the stats page renders cost figures in. The amounts on the
  * wire stay RMB — this only names the display convention. */
@@ -665,6 +713,8 @@ export type StatsPayload = (CostedSummaryWire & {
   /** The session table's final rows: folded over subagent subtrees,
    * cost-sorted, top-N truncated, metadata attached. */
   sessionRows: readonly SessionUsageRow[]
+  /** Complete project aggregates, independent of the session top-N cut. */
+  projectRows: readonly ProjectUsageRow[]
   /** The display currency the page converts cost figures into. Amounts on
    * the wire (totalCost, byModel[].cost, pricing rates) remain RMB. */
   currency: DisplayCurrency
@@ -699,6 +749,8 @@ export interface UsageSummary extends Omit<CostedSummary, 'bySession'> {
   /** Whole-scope payloads only: the settings page's session table rows
    * (see {@link SessionUsageRow}); absent on session-scoped reads. */
   sessionRows?: readonly SessionUsageRow[]
+  /** Whole-scope complete projects; absent on older host payloads. */
+  projectRows?: readonly ProjectUsageRow[]
   requestSeries?: readonly RequestPoint[]
   children?: Readonly<Record<string, ChildUsageSummary>>
   sessionIds?: readonly string[]

@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Token 用量 — 模型卡性能入口重设计</title>
+<style>
+  /* 与 v3 大屏同一套实测 token */
+  :root {
+    --bg: #151517;
+    --layer: #232324;
+    --layer-2: #2c2c2e;
+    --border: #ffffff0f;
+    --border-2: #ffffff1f;
+    --fg: #f9fafb;
+    --fg-2: #cfd3d6;
+    --fg-3: #81858c;
+    --hover: #ffffff14;
+    --ok: #22c55e;
+    --err: #f25a5a;
+    --radius: 12px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font: 13px/1.5 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .page { max-width: 1200px; margin: 0 auto; padding: 28px clamp(24px, 4vw, 48px) 64px; }
+  .section { display: flex; flex-direction: column; gap: 16px; }
+
+  .title { font-size: 20px; line-height: 28px; font-weight: 500; }
+  .muted { font-size: 12px; color: var(--fg-2); }
+  .muted3 { font-size: 12px; color: var(--fg-3); }
+
+  .brief {
+    background: var(--layer); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 14px 16px; display: flex; flex-direction: column; gap: 6px;
+  }
+  .brief h2 { font-size: 13px; font-weight: 600; }
+  .brief ul { list-style: none; display: flex; flex-direction: column; gap: 4px; }
+  .brief li { font-size: 12px; color: var(--fg-2); padding-left: 14px; position: relative; }
+  .brief li::before { content: "·"; position: absolute; left: 2px; color: var(--fg-3); }
+  .brief b { color: var(--fg); font-weight: 600; }
+  .brief code {
+    font-family: Consolas, "Courier New", monospace; font-size: 11px;
+    background: var(--layer-2); border: 1px solid var(--border-2); border-radius: 4px; padding: 0 4px;
+  }
+
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: start; }
+  .panel {
+    background: var(--layer); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 14px 16px; display: flex; flex-direction: column; gap: 4px; min-width: 0;
+  }
+  .panelHead { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+  .panelHeadLeft { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .panelTitle { font-size: 13px; font-weight: 600; color: var(--fg); }
+  .panelCount { font-size: 12px; color: var(--fg-3); font-weight: 400; margin-left: 6px; }
+  .panelHeadRight { display: flex; align-items: center; gap: 8px; }
+
+  .segmented {
+    display: inline-flex; align-items: stretch; gap: 2px; padding: 2px;
+    border: 1px solid var(--border); border-radius: 8px;
+  }
+  .segBtn {
+    border: none; background: transparent; color: var(--fg-3);
+    font-size: 12px; font-weight: 500; padding: 3px 10px; border-radius: 6px; cursor: pointer;
+    white-space: nowrap;
+  }
+  .segBtn:hover:not(.segActive) { color: var(--fg-2); background: #ffffff0f; }
+  .segActive { background: #ffffff29; color: var(--fg); font-weight: 600; }
+
+  /* 性能 toggle：与排序 segmented 分离的独立按钮——一个「视图开关」，
+   * 不是第三个排序项。激活态与 segActive 同色语言。 */
+  .perfToggle {
+    border: 1px solid var(--border-2); background: transparent; color: var(--fg-2);
+    font-size: 12px; font-weight: 500; padding: 3px 10px; border-radius: 8px; cursor: pointer;
+    white-space: nowrap; display: inline-flex; align-items: center; gap: 5px;
+  }
+  .perfToggle:hover:not(.perfOn) { color: var(--fg); background: #ffffff0f; }
+  .perfToggle:focus-visible { outline: 2px solid var(--border-2); outline-offset: 1px; }
+  .perfOn {
+    background: #ffffff29; border-color: transparent; color: var(--fg); font-weight: 600;
+  }
+  .perfToggle .gauge { font-size: 11px; line-height: 1; }
+
+  .rows { display: flex; flex-direction: column; overflow-y: auto; max-height: 400px; min-height: 120px; padding-right: 2px; }
+  .row { display: flex; align-items: center; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--border); }
+  .row:last-child { border-bottom: none; }
+  .rowName { flex: none; width: 138px; color: var(--fg); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .track { flex: 1; height: 3px; border-radius: 2px; background: #ffffff0f; overflow: hidden; min-width: 0; }
+  .fill { display: block; height: 100%; border-radius: 2px; background: rgba(249, 250, 251, .55); }
+  .rowNums { flex: none; width: 118px; text-align: right; font-size: 12px; color: var(--fg-2); font-variant-numeric: tabular-nums; }
+  .rowCost { flex: none; width: 64px; text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+  .perfNums { flex: none; width: 260px; text-align: right; font-size: 12px; color: var(--fg-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .perfNums b { color: var(--fg); font-weight: 600; }
+  .perfNums.dim { color: var(--fg-3); }
+  .perfNums.dim b { color: var(--fg-3); font-weight: 400; }
+  .nameGrow { flex: 1; width: auto; }
+
+  .perfNote { margin-top: 6px; padding-top: 8px; border-top: 1px solid var(--border); font-size: 11px; color: var(--fg-3); }
+  .panelBox { max-width: 560px; }
+
+  /* 歧义对照：现状的混排 segmented（打叉示意） */
+  .ambig { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px dashed var(--border-2); border-radius: 10px; }
+  .ambig .strike { position: relative; }
+  .ambig .strike::after { content: ""; position: absolute; left: -4px; right: -4px; top: 50%; height: 1.5px; background: var(--err); transform: rotate(-8deg); opacity: .8; }
+  .tag { font-size: 11px; color: var(--fg-3); }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="section">
+
+    <div>
+      <h1 class="title">模型卡 · 性能入口重设计（示意）</h1>
+      <p class="muted">排序归排序，视图归视图：性能不再是第三个「排序项」，而是卡头的独立开关。</p>
+    </div>
+
+    <div class="brief">
+      <h2>问题与设计</h2>
+      <ul>
+        <li><b>歧义</b>：「token｜费用｜最近活跃」是同一份数据的<b>排序方式</b>，「性能」是<b>另一份数据的展示</b>——三者并排在一个 segmented 里，性能看起来像「按性能排序」，实际却换了整个卡的内容。</li>
+        <li><b>方案</b>：排序 segmented 保持纯粹（模型卡 = token｜费用）；「性能」独立成卡头右侧的 toggle 按钮（带仪表符号，与排序组视觉分离）——语义是「看另一面」，不是第三个排序项。</li>
+        <li><b>性能视图内无排序控件</b>：它的顺序本身就是定义（有效行按速度降序，样本不足/无计时沉底）——没有第二种排法，不出现空的选择。</li>
+        <li><b>对照</b>：会话卡「token｜费用｜最近活跃」三个都是排序，保持 segmented 不动；项目卡同理。只有模型卡多一个性能开关。</li>
+      </ul>
+      <div class="ambig">
+        <span class="tag">现状（歧义）：</span>
+        <span class="segmented strike">
+          <button class="segBtn">token</button>
+          <button class="segBtn">费用</button>
+          <button class="segBtn segActive">性能</button>
+        </span>
+        <span class="tag">← 三者并列，「性能」读起来像排序项</span>
+      </div>
+    </div>
+
+    <!-- 大屏：模型卡（可切换体验） -->
+    <div class="panel" id="modelPanel">
+      <div class="panelHead">
+        <span class="panelHeadLeft">
+          <span class="panelTitle">模型<span class="panelCount" id="perfCount">6 个 · 按总 token</span></span>
+        </span>
+        <span class="panelHeadRight">
+          <span class="segmented" id="sortSeg">
+            <button class="segBtn segActive" data-sort="tokens">token</button>
+            <button class="segBtn" data-sort="cost">费用</button>
+          </span>
+          <button class="perfToggle" id="perfToggle" aria-pressed="false"><span class="gauge">◷</span>性能</button>
+        </span>
+      </div>
+      <div class="rows" id="perfRows">
+
+        <!-- 用量视图：token / 费用排序（条与序同口径） -->
+        <div class="viewUsage" id="viewTokens">
+          <div class="row"><span class="rowName">MiniMax-M3.1-Flash</span><span class="track"><span class="fill" style="width:100%"></span></span><span class="rowNums">51M · 缓 90.1%</span><span class="rowCost">41.06￥</span></div>
+          <div class="row"><span class="rowName">glm-5.3</span><span class="track"><span class="fill" style="width:64%"></span></span><span class="rowNums">33M · 缓 96.2%</span><span class="rowCost">70.03￥</span></div>
+          <div class="row"><span class="rowName">group/glm-5.3-flashx</span><span class="track"><span class="fill" style="width:22%"></span></span><span class="rowNums">11M · 缓 92.7%</span><span class="rowCost">19.44￥</span></div>
+          <div class="row"><span class="rowName">glm-5.3-flash</span><span class="track"><span class="fill" style="width:6%"></span></span><span class="rowNums">3.1M · 缓 90.8%</span><span class="rowCost">2.21￥</span></div>
+        </div>
+        <div class="viewUsage" id="viewCost" hidden>
+          <div class="row"><span class="rowName">glm-5.3</span><span class="track"><span class="fill" style="width:100%"></span></span><span class="rowNums">33M · 缓 96.2%</span><span class="rowCost">70.03￥</span></div>
+          <div class="row"><span class="rowName">MiniMax-M3.1-Flash</span><span class="track"><span class="fill" style="width:59%"></span></span><span class="rowNums">51M · 缓 90.1%</span><span class="rowCost">41.06￥</span></div>
+          <div class="row"><span class="rowName">group/glm-5.3-flashx</span><span class="track"><span class="fill" style="width:28%"></span></span><span class="rowNums">11M · 缓 92.7%</span><span class="rowCost">19.44￥</span></div>
+          <div class="row"><span class="rowName">glm-5.3-flash</span><span class="track"><span class="fill" style="width:3%"></span></span><span class="rowNums">3.1M · 缓 90.8%</span><span class="rowCost">2.21￥</span></div>
+        </div>
+
+        <!-- 性能视图：固定速度序，无排序控件 -->
+        <div class="viewPerf" hidden>
+          <div class="row">
+            <span class="rowName">MiniMax-M3.1-Flash</span>
+            <span class="track"><span class="fill" style="width:100%"></span></span>
+            <span class="perfNums"><b>161 tok/s</b> · 首 6.1s · 耗时 11.3s · 1659 次</span>
+          </div>
+          <div class="row">
+            <span class="rowName">group/glm-5.3-flashx</span>
+            <span class="track"><span class="fill" style="width:99%"></span></span>
+            <span class="perfNums"><b>160 tok/s</b> · 首 2.8s · 耗时 6.1s · 925 次</span>
+          </div>
+          <div class="row">
+            <span class="rowName">glm-5.3</span>
+            <span class="track"><span class="fill" style="width:55%"></span></span>
+            <span class="perfNums"><b>88 tok/s</b> · 首 4s · 耗时 11.3s · 797 次</span>
+          </div>
+          <div class="row">
+            <span class="rowName">glm-5.3-flash</span>
+            <span class="track"><span class="fill" style="width:43%"></span></span>
+            <span class="perfNums"><b>69 tok/s</b> · 首 3.6s · 耗时 11.5s · 156 次</span>
+          </div>
+          <div class="row">
+            <span class="rowName nameGrow">MiniMax-M3</span>
+            <span class="perfNums dim">252 tok/s · 样本不足 · 2 次</span>
+          </div>
+          <div class="row">
+            <span class="rowName nameGrow">deepseek-v4.1-flash</span>
+            <span class="perfNums dim">238 tok/s · 样本不足 · 5 次</span>
+          </div>
+        </div>
+
+      </div>
+      <div class="perfNote" id="perfNote" style="display:none">口径：均为平均值——输出速度与首字只统计流式请求；请求耗时为全部请求平均。</div>
+    </div>
+
+    <!-- 会话卡对照：三个都是排序，segmented 不动 -->
+    <div class="grid2">
+      <div class="panel panelBox">
+        <div class="panelHead">
+          <span class="panelTitle">会话<span class="panelCount">最近 43 条</span></span>
+          <span class="segmented">
+            <button class="segBtn">token</button>
+            <button class="segBtn segActive">费用</button>
+            <button class="segBtn">最近活跃</button>
+          </span>
+        </div>
+        <div class="rows">
+          <div class="row"><span class="rowName" style="flex:1;width:auto">magpie 与 dsh 记录去重排查</span><span class="rowNums" style="width:auto">89M · 缓 98.4%</span><span class="rowCost">71.35￥</span></div>
+          <div class="row"><span class="rowName" style="flex:1;width:auto">Magpie 配额查询适配插件</span><span class="rowNums" style="width:auto">12M · 缓 97.1%</span><span class="rowCost">27.78￥</span></div>
+        </div>
+        <div class="perfNote">会话卡的三个选项都是排序——segmented 语义纯粹，不动。</div>
+      </div>
+
+      <!-- 设置面板 tab 同构（窄容器） -->
+      <div class="panel panelBox">
+        <div class="panelHead">
+          <span class="panelHeadLeft">
+            <span class="panelTitle">模型<span class="panelCount">6 个 · 按输出速度</span></span>
+          </span>
+          <span class="panelHeadRight">
+            <button class="perfToggle perfOn"><span class="gauge">◷</span>性能</button>
+          </span>
+        </div>
+        <div class="rows">
+          <div class="row">
+            <span class="rowName">MiniMax-M3.1-Flash</span>
+            <span class="track"><span class="fill" style="width:100%"></span></span>
+            <span class="perfNums"><b>161 tok/s</b> · 首 6.1s · 耗时 11.3s · 1659 次</span>
+          </div>
+          <div class="row">
+            <span class="rowName">group/glm-5.3-flashx</span>
+            <span class="track"><span class="fill" style="width:99%"></span></span>
+            <span class="perfNums"><b>160 tok/s</b> · 首 2.8s · 耗时 6.1s · 925 次</span>
+          </div>
+          <div class="row">
+            <span class="rowName">glm-5.3</span>
+            <span class="track"><span class="fill" style="width:55%"></span></span>
+            <span class="perfNums"><b>88 tok/s</b> · 首 4s · 耗时 11.3s · 797 次</span>
+          </div>
+        </div>
+        <div class="perfNote">设置面板 tab 同构：性能激活时排序控件让位，速度即顺序。</div>
+      </div>
+    </div>
+
+    <p class="muted3">性能开关记忆在会话内：切走再切回，用量视图恢复之前的 token / 费用排序选择。</p>
+
+  </div>
+</div>
+
+<script>
+  ;(function () {
+    'use strict';
+    var toggle = document.getElementById('perfToggle');
+    var sortSeg = document.getElementById('sortSeg');
+    var count = document.getElementById('perfCount');
+    var note = document.getElementById('perfNote');
+    var views = { tokens: document.getElementById('viewTokens'), cost: document.getElementById('viewCost') };
+    var perfView = document.querySelector('.viewPerf');
+    var sort = 'tokens';
+    var COUNTS = { tokens: '6 个 · 按总 token', cost: '6 个 · 按费用', perf: '6 个 · 按输出速度' };
+
+    toggle.addEventListener('click', function () {
+      var on = !toggle.classList.contains('perfOn');
+      toggle.classList.toggle('perfOn', on);
+      toggle.setAttribute('aria-pressed', String(on));
+      sortSeg.style.visibility = on ? 'hidden' : '';
+      views.tokens.hidden = on || sort !== 'tokens';
+      views.cost.hidden = on || sort !== 'cost';
+      perfView.hidden = !on;
+      note.style.display = on ? '' : 'none';
+      count.textContent = on ? COUNTS.perf : COUNTS[sort];
+    });
+
+    sortSeg.querySelectorAll('.segBtn').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        sortSeg.querySelectorAll('.segBtn').forEach(function (b) { b.classList.remove('segActive'); });
+        btn.classList.add('segActive');
+        sort = btn.getAttribute('data-sort');
+        views.tokens.hidden = sort !== 'tokens';
+        views.cost.hidden = sort !== 'cost';
+        count.textContent = COUNTS[sort];
+      });
+    });
+  })();
+</script>
+</body>
+</html>

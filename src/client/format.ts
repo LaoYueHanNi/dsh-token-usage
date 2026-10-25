@@ -10,7 +10,7 @@
  */
 
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
-import type { UsageSummary, UsageTotals } from '../wire.ts'
+import type { UsageAuxKindRow, UsageSummary, UsageTotals } from '../wire.ts'
 import type { TokenUsageKey } from './locales.ts'
 
 /** Known `LlmFailure.code`s that have a `fail.*` locale label. An unknown
@@ -260,4 +260,26 @@ function failureCodeLabel(code: string, t: TranslateNS<'token-usage'>): string {
     return t(FAILURE_CODE_LABEL_KEYS[code as keyof typeof FAILURE_CODE_LABEL_KEYS])
   }
   return code
+}
+
+/**
+ * The overhead pill's hover tooltip text: one `label ×count` line per
+ * auxiliary kind, count descending, newline-joined — the same shape as
+ * {@link failuresTooltip}. An absent breakdown yields '' and the caller
+ * suppresses the tooltip (the pill itself still shows its count).
+ * @param byKind - the per-kind rows of the aux summary (may be undefined).
+ * @param t - locale lookup (`aux.kind.*`; the kind is a closed union, so
+ *   every value has a key).
+ * @returns the multi-line tooltip label, or '' when there is nothing to show.
+ */
+export function overheadTooltip(
+  byKind: readonly UsageAuxKindRow[] | undefined,
+  t: TranslateNS<'token-usage'>,
+): string {
+  if (byKind === undefined) return ''
+  return byKind
+    .filter(row => row.totals.requests > 0)
+    .sort((left, right) => right.totals.requests - left.totals.requests)
+    .map(row => `${t(`aux.kind.${row.auxKind}`)} ×${row.totals.requests.toLocaleString()}`)
+    .join('\n')
 }

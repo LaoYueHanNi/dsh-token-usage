@@ -1,0 +1,148 @@
+/* The runtime-overhead card's rows: kind disclosure rows + the total line.
+ * The list container (height cap, fade scrollbar, empty hint) is the same
+ * one the flat row lists use — this module only carries the overhead
+ * chrome. Tokens only, no literal colors. */
+
+/* Empty hint (no aux data, or a host predating the field). */
+.muted {
+  padding: 12px 0;
+  font-size: 12px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* One kind row: the toggle + aggregate figures on one line, the drill-in
+ * lines indented beneath. */
+.orow {
+  display: block;
+}
+
+.orowTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.kindToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  font-size: 12px;
+  color: inherit;
+  text-align: left;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.kindToggle:focus-visible {
+  outline: 2px solid var(--dsw-alias-border-l1);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.chevron {
+  flex: none;
+  font-size: 9px;
+  line-height: 1;
+  color: var(--dsw-alias-label-tertiary);
+  transition: transform 0.12s ease;
+  display: inline-block;
+}
+
+.kindToggle[aria-expanded="true"] .chevron {
+  transform: rotate(90deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chevron {
+    transition: none;
+  }
+}
+
+/* The kind's aggregate figures: calls · cost (bold) · tokens. */
+.onums {
+  flex: none;
+  text-align: right;
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.onumsCost {
+  color: var(--dsw-alias-label-primary);
+  font-weight: 600;
+}
+
+/* The drill-in: per-model lines indented under the toggle. */
+.adetail {
+  padding: 2px 0 4px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.dline {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.dmodelName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The total line beneath the list. */
+.asum {
+  margin-top: 6px;
+  padding-top: 8px;
+  border-top: 1.5px solid var(--dsw-alias-border-l1);
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.compact .orow {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+}
+
+.compact .orow:last-child {
+  border-bottom: none;
+}
+
+.compact .kindToggle {
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.compact .onums,
+.compact .dline,
+.compact .asum {
+  font-size: 11px;
+}
+
+.compact .adetail {
+  gap: 6px;
+  margin: 8px 0 0 4px;
+  padding: 0 0 0 12px;
+  border-left: 1px solid var(--dsw-alias-border-l1);
+}
+
+.compact .asum {
+  margin-top: 0;
+  padding: 10px 0 4px;
+  border-top-width: 1px;
+}

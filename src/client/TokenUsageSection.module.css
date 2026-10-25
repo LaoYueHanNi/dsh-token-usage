@@ -1,11 +1,25 @@
 /* Token-usage settings page: tokens only (--dsw-* alias tokens from the web
- * theme), no literal colors. */
+ * theme), no literal colors. The detail rows live in their own modules
+ * (UsageRows / OverheadRows / OverviewBoard / DashboardCards); this file
+ * carries the section shell, the filter row, and the dimension switch. */
 
 .section {
   display: flex;
   flex-direction: column;
   gap: 16px;
   width: 100%;
+  min-width: 0;
+  container-type: inline-size;
+}
+
+/* Main-column page variant (UsagePanelPage): the settings-panel layout is
+ * untouched; the variant restyles only what a full first-level page needs —
+ * the official pageTitle step (20px/28px/500, the literal the first-level
+ * pages state) on the heading. */
+.pageVariant .title {
+  font-size: 20px;
+  line-height: 28px;
+  font-weight: 500;
 }
 
 .head {
@@ -34,33 +48,59 @@
   color: var(--dsw-alias-state-error-primary);
 }
 
-.subtitle {
-  margin: 0;
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--dsw-alias-label-secondary);
+/* Settings puts tabs and sorting in one compact toolbar; the page keeps
+ * its own card heads. */
+.sortRow {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.sortHidden {
+  visibility: hidden;
+}
+
+.detailPanel {
+  min-width: 0;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 9px;
+  background: var(--dsw-alias-fill-container, transparent);
+}
+
+.detailToolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+}
+
+.detailBody {
+  padding: 2px 12px 6px;
+  min-width: 0;
 }
 
 /* Dimension switch: a track with an inset selected pill, the same
  * vocabulary as the usage tab's scope switch. The selected segment names
- * the table below — it IS the block title, no separate heading. */
+ * the rows below — it IS the block title, no separate heading. */
 .segmented {
   display: inline-flex;
   align-items: stretch;
   gap: 2px;
-  padding: 2px;
-  border: 1px solid var(--dsw-alias-border-l1);
-  border-radius: 8px;
-  background: var(--dsw-alias-fill-container, transparent);
+  padding: 0;
 }
 
 .segBtn {
   border: none;
   background: transparent;
   color: var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary));
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 500;
-  padding: 4px 12px;
+  padding: 4px 8px;
   border-radius: 6px;
   cursor: pointer;
 }
@@ -79,130 +119,6 @@
   background: color-mix(in srgb, var(--dsw-alias-label-primary) 16%, transparent);
   color: var(--dsw-alias-label-primary);
   font-weight: 600;
-}
-
-/* Scroll shell: the table keeps its natural single-line width and scrolls
- * horizontally when the panel is narrower, instead of squeezing cells into
- * wrapped or clipped content. Vertically the shell is capped and scrolls
- * on its own, so a long model list stays inside the panel while the sticky
- * header keeps the column titles in view. */
-.tableWrap {
-  overflow: auto;
-  max-height: 420px;
-}
-
-.table {
-  width: 100%;
-  /* Tighter min-width: the model column + 8 numeric columns + their cell
-   * padding fit in 500px so the table stops pushing its rightmost column
-   * behind the scroll shell at typical panel widths. */
-  min-width: 500px;
-  border-collapse: collapse;
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-}
-
-.table th,
-.table td {
-  /* Tighter cell padding keeps numeric columns narrow enough that the
-   * whole table fits without horizontal scrolling at the standard panel
-   * width; the model column also benefits from the smaller side padding. */
-  padding: 4px 6px;
-  text-align: right;
-  border-bottom: 1px solid var(--dsw-alias-border-l1);
-  /* Cells never wrap; the scroll shell absorbs the overflow. */
-  white-space: nowrap;
-}
-
-/* The model column of the per-model table: capped at layout level because
- * auto layout would otherwise pour every spare pixel into the
- * longest-content column, freezing the table at the container width (no
- * scroll) with a bloated model column. The cap tracks the longest realistic
- * model name (e.g. `deepseek-v4-flash`, ~95px at 12px) plus the unpriced
- * tag and the cell padding, so the column stays one line wide and never
- * grows past that budget. (An explicit class, not :first-child — the
- * pricing tables below have their own left column with other needs.) */
-.table th.modelHead,
-.table td.modelCol {
-  text-align: left;
-  width: 150px;
-  max-width: 150px;
-}
-
-/* A per-model detail line nested under its auxiliary kind row: indented one
- * level inside the same 150px model column and slightly dimmed, so the kind
- * row above it reads as the parent aggregate. */
-.table td.auxModelCell {
-  padding-left: 18px;
-  color: var(--dsw-alias-label-secondary);
-}
-
-/* The kind row's disclosure toggle: chevron + category name as one button.
- * The per-model detail lines stay hidden until it is activated; the name
- * doubles as the accessible name, `aria-expanded` carries the state. */
-.auxKindToggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  max-width: 100%;
-  padding: 0;
-  margin: 0;
-  font: inherit;
-  color: inherit;
-  text-align: left;
-  background: none;
-  border: none;
-  cursor: pointer;
-}
-
-.auxKindToggle:focus-visible {
-  outline: 2px solid var(--dsw-alias-border-l2);
-  outline-offset: 1px;
-}
-
-.auxChevron {
-  flex: none;
-  font-size: 9px;
-  line-height: 1;
-  color: var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary));
-  transition: transform 0.12s ease;
-}
-
-.auxKindToggle[aria-expanded='true'] .auxChevron {
-  transform: rotate(90deg);
-}
-
-.table th {
-  font-weight: 600;
-  color: var(--dsw-alias-label-secondary);
-  /* Sticky header: an opaque plate so scrolled rows pass under it, lifted
-   * above the cells (the scroll shell scrolls both axes). */
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  background: var(--dsw-alias-bg-layer-2);
-  border-bottom: 1.5px solid var(--dsw-alias-border-l2);
-}
-
-.table tbody tr {
-  transition: background-color 0.12s ease;
-}
-
-.table tbody tr:hover {
-  background-color: var(--dsw-interactive-bg-hover);
-}
-
-.costCol {
-  font-weight: 600;
-}
-
-.zeroDim {
-  color: var(--dsw-alias-label-tertiary);
-  opacity: 0.55;
-}
-
-.table td {
-  color: var(--dsw-alias-label-primary);
 }
 
 .empty {
@@ -236,51 +152,6 @@
   gap: 8px;
 }
 
-.cards {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
-  gap: 8px;
-}
-
-/* Model cell: the name, plus (only for unpriced models) the warning tag,
- * one line, ellipsized. A priced name is itself the price-dialog
- * affordance — no trailing chip, so ids line up and the 150px column
- * budget stays with the id. The inner cap tracks the column's
- * `width: 150px` minus the cell padding (6px on each side, 12px total)
- * so the inline-flex children never force the outer `<td>` to grow. */
-.modelCell {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  max-width: 138px;
-}
-
-.modelName {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* Priced-row name: a text-looking control. Hover picks up the same
- * link colour the filter-row “定价表” action uses, so the table does
- * not read as a list of links at rest. */
-button.modelName {
-  padding: 0;
-  margin: 0;
-  max-width: 100%;
-  font: inherit;
-  color: inherit;
-  text-align: left;
-  background: none;
-  border: none;
-  cursor: pointer;
-}
-
-button.modelName:hover {
-  color: var(--dsw-alias-link-primary, var(--dsw-alias-label-primary));
-}
-
 /* The filter row's tail action: opens the filter-free pricing overview.
  * A link-styled label (the “opens another view” vocabulary the usage tab's
  * drill-in links already use), sized like the row's other triggers with a
@@ -301,4 +172,10 @@ button.modelName:hover {
 
 .pricingLink:hover {
   background: var(--dsw-interactive-bg-hover);
+}
+
+@container (max-width: 480px) {
+  .filters {
+    flex-wrap: wrap;
+  }
 }

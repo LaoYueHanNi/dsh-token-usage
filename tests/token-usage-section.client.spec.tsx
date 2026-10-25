@@ -2,10 +2,11 @@
 /**
  * Token-usage settings page component tests: renders the loading, error, and
  * ready states over a stubbed fetch, exercises the filter bar (the range
- * date picker popover, model select, quick range buttons), pins the per-model
- * table column order,
- * pins the token-abbreviation and cache-hit-rate formatting, and covers the
- * per-model pricing dialog (open/close, full rule-chain rows).
+ * date picker popover, model select, quick range buttons), pins the overview
+ * board's cards and the detail tabs' row lists (by project default, by
+ * model, by session, runtime overhead), pins the token-abbreviation and
+ * cache-hit-rate formatting, and covers the per-model pricing dialog (open
+ * from a model row, full rule-chain rows).
  */
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
@@ -144,6 +145,7 @@ beforeAll(() => {
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
+  vi.restoreAllMocks()
 })
 
 describe('formatTokens', () => {
@@ -195,17 +197,52 @@ describe('totalTokens / formatHitRate', () => {
   })
 })
 
+/** Wait for the ready branch (the by-project fold is the default tab),
+ * then switch to the by-model tab and return its row list. */
+async function openModelTab(): Promise<HTMLElement> {
+  await screen.findByRole('list', { name: t('byProject.title') })
+  fireEvent.click(screen.getByRole('button', { name: t('byModel.title') }))
+  return screen.getByRole('list', { name: t('byModel.title') })
+}
+
 describe('TokenUsageSection', () => {
+  it('groups the settings tabs and compact controls in one toolbar above the compact list', async () => {
+    stubFetch(async () => Response.json(SUMMARY))
+    render(<TokenUsageSection t={t} />)
+    const projects = await screen.findByRole('list', { name: t('byProject.title') })
+    const tabs = screen.getByRole('group', { name: t('detail.switch.label') })
+    const sort = screen.getByRole('group', { name: t('byProject.title') })
+    expect(tabs.parentElement).toBe(sort.closest('[class*="detailToolbar"]'))
+    expect(projects.className).toContain('rowsCompact')
+    fireEvent.click(screen.getByRole('button', { name: t('byModel.title') }))
+    expect(screen.getByRole('list', { name: t('byModel.title') }).className).toContain('rowsCompact')
+    fireEvent.click(screen.getByRole('button', { name: t('perf.toggle') }))
+    expect(screen.getByRole('button', { name: t('perf.toggle') }).getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByRole('group', { name: t('byModel.title') }).parentElement?.className).toContain('sortHidden')
+  })
+
+  it.each(['panel', 'page'] as const)('uses authoritative project rows instead of folding the truncated sessions (%s)', async variant => {
+    stubFetch(async () => Response.json({
+      ...SUMMARY,
+      sessionRows: [{ sessionId: 's', cwd: '/work/partial', totals: SUMMARY.total, cost: 1, firstTime: 0, lastTime: 0 }],
+      projectRows: [{ name: 'complete-project', cwd: '/work/complete-project', sessionCount: 1001, totals: SUMMARY.total, cost: 9 }],
+    }))
+    render(<TokenUsageSection t={t} variant={variant} />)
+    const projects = await screen.findByRole('list', { name: t('byProject.title') })
+    expect(within(projects).getByText('complete-project')).toBeTruthy()
+    expect(within(projects).queryByText('partial')).toBeNull()
+  })
+
   it('offers the runtime-overhead dimension in the detail switch and renders its empty hint', async () => {
     stubFetch(async () => Response.json(SUMMARY))
     render(<TokenUsageSection close={() => {}} t={t} />)
-    await screen.findByRole('table', { name: t('byModel.title') })
+    await screen.findByRole('list', { name: t('byProject.title') })
     fireEvent.click(screen.getByRole('button', { name: t('aux.tab') }))
     expect(await screen.findByText(t('aux.empty'))).toBeTruthy()
-    // The dimension switch swaps the table, never the page.
-    expect(screen.queryByRole('table', { name: t('byModel.title') })).toBeNull()
+    // The dimension switch swaps the rows, never the page.
+    expect(screen.queryByRole('list', { name: t('byProject.title') })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: t('byModel.title') }))
-    expect(screen.getByRole('table', { name: t('byModel.title') })).toBeTruthy()
+    expect(screen.getByRole('list', { name: t('byModel.title') })).toBeTruthy()
   })
 
   it('renders the auxiliary breakdown when the summary carries runtime overhead', async () => {
@@ -222,18 +259,20 @@ describe('TokenUsageSection', () => {
     }
     stubFetch(async () => Response.json({ ...SUMMARY, aux }))
     render(<TokenUsageSection close={() => {}} t={t} />)
-    await screen.findByRole('table', { name: t('byModel.title') })
-    fireEvent.click(screen.getByRole('button', { name: t('aux.tab') }))
-    const table = await screen.findByRole('table', { name: t('aux.tab') })
-    // Collapsed by default: header + the auto-review kind row + the total row.
-    expect(within(table).getAllByRole('row')).toHaveLength(3)
-    expect(within(table).getByText('自动审查')).toBeTruthy()
-    expect(within(table).queryByText('deepseek-flash')).toBeNull()
-    // Expanding the kind's disclosure reveals its per-model line.
-    fireEvent.click(within(table).getByRole('button', { name: '自动审查' }))
-    expect(within(table).getAllByRole('row')).toHaveLength(4)
-    expect(within(table).getByText('deepseek-flash')).toBeTruthy()
-    expect(within(table).getByText(t('aux.total'))).toBeTruthy()
+    await screen.findByRole('list', { name: t('byProject.title') })
+    // The aux layer also lights the composite card's overhead pill.
+    fireEvent.click(screen.getByRole('button', { name: t('stat.overheadPill', { count: '2' }) }))
+    const list = await screen.findByRole('list', { name: t('aux.tab') })
+    // Expanded by default (the user's pick): the per-model line shows
+    // beneath its kind row.
+    expect(within(list).getAllByRole('listitem')).toHaveLength(1)
+    expect(within(list).getByText('自动审查')).toBeTruthy()
+    expect(within(list).getByText('deepseek-flash')).toBeTruthy()
+    // Folding the kind's disclosure hides its per-model line.
+    fireEvent.click(within(list).getByRole('button', { name: '自动审查' }))
+    expect(within(list).queryByText('deepseek-flash')).toBeNull()
+    // The total line sits beneath the list.
+    expect(screen.getByText(t('aux.totalCount', { count: '2' }))).toBeTruthy()
   })
 
   it('saves from an unpriced row, retains filters, marks origins and updates overview usage', async () => {
@@ -255,17 +294,18 @@ describe('TokenUsageSection', () => {
         byModel: [{ ...SUMMARY.byModel[0]!, model: saved ? targetModelId : rawName, cost: saved ? 7 : 0 }] })
     })
     render(<TokenUsageSection close={() => {}} t={t} />)
-    await screen.findByRole('table', { name: t('byModel.title') })
+    const list = await openModelTab()
     fireEvent.click(screen.getByRole('button', { name: '快捷区间' }))
     fireEvent.click(screen.getByRole('option', { name: '7d' }))
-    await screen.findByRole('table', { name: t('byModel.title') })
+    // The tab pick survives the refetch (session-local state).
+    await screen.findByRole('list', { name: t('byModel.title') })
     fireEvent.click(screen.getByRole('button', { name: '模型' }))
     fireEvent.click(screen.getByRole('option', { name: rawName }))
-    const table = await screen.findByRole('table', { name: t('byModel.title') })
+    const modelList = await screen.findByRole('list', { name: t('byModel.title') })
     const beforeQueries = fetch.mock.calls.filter(call => String(call[0]).startsWith('/token-usage/stats'))
     const filterUrl = String(beforeQueries.at(-1)![0])
-    expect(within(table).queryByRole('button', { name: t('association.choose') })).toBeNull()
-    fireEvent.click(within(table).getByRole('button', { name: t('pricing.unpriced') }))
+    expect(within(modelList).queryByRole('button', { name: t('association.choose') })).toBeNull()
+    fireEvent.click(within(modelList).getByRole('button', { name: t('pricing.unpriced') }))
     fireEvent.click(screen.getByRole('button', { name: t('association.choose') }))
     const dialog = await screen.findByRole('dialog', { name: t('association.title') })
     const search = await within(dialog).findByRole('searchbox')
@@ -279,14 +319,14 @@ describe('TokenUsageSection', () => {
     expect(String(afterQueries.at(-1)![0])).toBe(filterUrl)
     expect(screen.getByRole('button', { name: '快捷区间' }).textContent).toBe('7d')
     expect(screen.getByRole('button', { name: '模型' }).textContent).toBe(rawName)
-    const nextTable = screen.getByRole('table', { name: t('byModel.title') })
-    expect(within(nextTable).getByText('7.00￥')).toBeTruthy()
-    const associationIcon = within(nextTable).getByRole('img', { name: associationTip })
+    const nextList = screen.getByRole('list', { name: t('byModel.title') })
+    expect(within(nextList).getByText('7.00￥')).toBeTruthy()
+    const associationIcon = within(nextList).getByRole('img', { name: associationTip })
     expect(associationIcon.hasAttribute('title')).toBe(false)
     fireEvent.mouseEnter(associationIcon)
     expect(screen.getByRole('tooltip').textContent).toBe(associationTip)
     fireEvent.mouseLeave(associationIcon)
-    expect(within(nextTable).queryByText('含手动关联')).toBeNull()
+    expect(within(nextList).queryByText('含手动关联')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: '定价表' }))
     const overview = await screen.findByRole('dialog', { name: '定价表' })
     await within(overview).findByText(targetModelId)
@@ -315,7 +355,7 @@ describe('TokenUsageSection', () => {
       return Response.json(SUMMARY)
     })
     render(<TokenUsageSection close={() => {}} t={t} />)
-    await screen.findByRole('table', { name: '按模型' })
+    await screen.findByRole('list', { name: '按项目' })
     expect(screen.queryByRole('button', { name: '模型别名关联' })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: '定价表' }))
     const overview = screen.getByRole('dialog', { name: '定价表' })
@@ -328,7 +368,7 @@ describe('TokenUsageSection', () => {
     fireEvent.click(within(manager).getByRole('button', { name: t('association.confirmRevoke') }))
     await within(manager).findByText(t('association.revoked'))
     await waitFor(() => expect(fetch.mock.calls.filter(call => String(call[0]).startsWith('/token-usage/stats')).length).toBeGreaterThan(1))
-    await screen.findByRole('table', { name: '按模型' })
+    await screen.findByRole('list', { name: '按项目' })
     expect(screen.getByRole('dialog', { name: '定价表' })).toBe(overview)
     expect(screen.getByRole('dialog', { name: '模型别名关联' })).toBe(manager)
     fireEvent.click(within(manager).getByRole('button', { name: t('association.close') }))
@@ -350,7 +390,11 @@ describe('TokenUsageSection', () => {
     await screen.findByRole('status')
     expect(screen.getByRole('status').textContent).toBe(t(costState === 'history-incomplete' ? 'pricing.historyIncomplete' : 'pricing.unavailable'))
     expect(document.body.textContent).not.toContain('9876.54')
-    expect(screen.getByRole('table', { name: t('byModel.title') })).toBeTruthy()
+    // The model tab still lists the rows (their cost cells dash).
+    fireEvent.click(screen.getByRole('button', { name: t('byModel.title') }))
+    expect(screen.getByRole('list', { name: t('byModel.title') })).toBeTruthy()
+    expect(screen.getByText('deepseek-reasoner')).toBeTruthy()
+    expect(document.body.textContent).not.toContain('9876.54')
   })
   it('hides identification details and row actions until the unpriced tag is clicked', async () => {
     stubFetch(async () => ({ ok: true, json: async () => ({ ...SUMMARY, modelResolutions: [
@@ -360,36 +404,38 @@ describe('TokenUsageSection', () => {
       { ...SUMMARY.byModel[0]!, model: 'p/unknown' }, { ...SUMMARY.byModel[0]!, model: 'collision' },
     ] }) }))
     render(<TokenUsageSection close={() => {}} t={t} />)
-    const table = await screen.findByRole('table', { name: t('byModel.title') })
+    const list = await openModelTab()
     expect(screen.queryByText(t('pricing.identificationDetails'))).toBeNull()
     expect(screen.queryByRole('button', { name: t('association.choose') })).toBeNull()
     expect(screen.queryByRole('link', { name: t('association.issue') })).toBeNull()
-    fireEvent.click(within(table).getAllByRole('button', { name: '未定价' })[1]!)
+    // The unpriced tag rides beside its model's name; the rows re-sort by
+    // token size (a tie folds to the name), so address the row by its
+    // model, not by index.
+    const collisionRow = within(list).getByText('collision').closest('div')!
+    fireEvent.click(within(collisionRow).getByRole('button', { name: '未定价' }))
     const dialog = screen.getByRole('dialog', { name: t('association.unpricedTitle') })
     expect(within(dialog).getByText('collision')).toBeTruthy()
     expect(within(dialog).getByText(/one, two/)).toBeTruthy()
     expect(within(dialog).getByRole('button', { name: t('association.choose') })).toBeTruthy()
     expect(within(dialog).getByRole('link', { name: t('association.issue') })).toBeTruthy()
   })
-  it('shows loading then the two metric rows and the per-model table', async () => {
+  it('shows loading, then the overview board and the default by-project rows', async () => {
     stubFetch(async () => ({ ok: true, json: async () => SUMMARY }))
     render(<TokenUsageSection close={() => {}} t={t} />)
     expect(screen.getByText('加载中…')).toBeTruthy()
-    // '总 token' appears twice: the card label and the table column header.
-    expect(await screen.findAllByText('总 token')).toHaveLength(2)
-    // Row 1 cards: successful requests (failure pill) / cost / total
-    // tokens (47) / hit rate (9.1%). The label also heads the table column.
-    expect(screen.getAllByText('成功请求数').length).toBeGreaterThan(0)
+    // '总 token' heads exactly one card now (the board's).
+    expect(await screen.findAllByText('总 token')).toHaveLength(1)
+    // Board cards: the composite lead (请求数, failure + overhead
+    // pills), cost / total tokens (47) / hit rate (9.1%), and the four
+    // buckets — the panel's compact two-rows-of-four layout.
+    expect(screen.getByText('请求数')).toBeTruthy()
     expect(screen.getByText('4')).toBeTruthy()
     expect(screen.getByText('失败 1')).toBeTruthy()
-    expect(screen.getByRole('columnheader', { name: '成功/失败' })).toBeTruthy()
-    // The cost card and the per-model cost column share the same ¥ figure.
     expect(screen.getAllByText('0.00￥').length).toBeGreaterThan(0)
     expect(screen.getByText('47')).toBeTruthy()
     expect(screen.getByText('9.1%')).toBeTruthy()
     // Same four-bucket colour as the header chip: 9.1% is `critical`.
     expect(document.querySelector('[class*="band_critical"]')?.textContent).toBe('9.1%')
-    // Row 2 cards: the four buckets (labels also head the table columns).
     expect(screen.getAllByText('入').length).toBeGreaterThan(0)
     // '30' matches the card value and possibly a y-axis tick; at least the card is there.
     expect(screen.getAllByText('30').length).toBeGreaterThan(0)
@@ -399,23 +445,29 @@ describe('TokenUsageSection', () => {
     expect(screen.getByText('3')).toBeTruthy()
     expect(screen.getAllByText('写').length).toBeGreaterThan(0)
     expect(screen.getByText('2')).toBeTruthy()
-    // Per-model table: one row with the model's own totals (200 total, 28.6% hit rate).
-    // The dimension switch is the block's only "按模型" label (no separate heading).
-    expect(screen.getAllByText('按模型').length).toBe(1)
-    const table = screen.getByRole('table', { name: '按模型' })
-    expect(within(table).getByText('deepseek-reasoner')).toBeTruthy()
-    expect(within(table).getByText('200')).toBeTruthy()
-    expect(within(table).getByText('28.6%')).toBeTruthy()
-    expect(within(table).getByText('28.6%').className).toMatch(/band_critical/)
-    expect(within(table).getByText('100')).toBeTruthy()
-    expect(within(table).getByText('60')).toBeTruthy()
-    expect(within(table).getByText('40')).toBeTruthy()
-    expect(within(table).getByText('0.00￥')).toBeTruthy()
-    // The priced model row carries the pricing affordance; no dialog yet.
-    expect(within(table).getByRole('button', { name: '查看 deepseek-reasoner 定价' })).toBeTruthy()
+    // The trend card: titled 趋势, the 1d window plotting the day's 24
+    // hours with no plot pick (the hourly/daily segmented is gone).
+    expect(screen.getByText('趋势')).toBeTruthy()
+    expect(screen.getByRole('img', { name: '单日分时 token 曲线' })).toBeTruthy()
+    // The detail switch defaults to 按项目. The fixture carries no session
+    // rows, so the fold renders its empty hint; the switch is the only
+    // "按项目" label (no separate heading).
+    expect(screen.getAllByText('按项目').length).toBe(1)
+    expect(screen.getByText('区间内暂无数据')).toBeTruthy()
+    // Switching to the model tab lists the model row: its own figures and
+    // the pricing affordance (no dialog until clicked).
+    const list = await openModelTab()
+    expect(within(list).getByText('deepseek-reasoner')).toBeTruthy()
+    // The figures cell: total (200) · 缓 28.6% — the same hit rate the old
+    // table column carried.
+    const nums = within(list).getByText(/200 · 缓 28\.6%/)
+    // The figures cell carries no hover tooltip on the model list (the
+    // popup is a session-list affordance only).
+    fireEvent.mouseEnter(nums)
+    await waitFor(() => expect(screen.queryByRole('tooltip')).toBeNull())
+    expect(within(list).getByRole('button', { name: '查看 deepseek-reasoner 定价' })).toBeTruthy()
     expect(screen.queryByRole('dialog')).toBeNull()
     // No per-day / recent sections.
-    expect(screen.queryByText('按日')).toBeNull()
     expect(screen.queryByText('最近请求')).toBeNull()
   })
 
@@ -427,9 +479,70 @@ describe('TokenUsageSection', () => {
     await waitFor(() => expect(screen.getByRole('tooltip').textContent).toBe('限流 ×1'))
     fireEvent.mouseLeave(cardPill)
     await waitFor(() => expect(screen.queryByRole('tooltip')).toBeNull())
-    const table = screen.getByRole('table', { name: '按模型' })
-    fireEvent.mouseEnter(within(table).getByLabelText('失败 1'))
-    await waitFor(() => expect(screen.getByRole('tooltip').textContent).toBe('限流 ×1'))
+  })
+
+  it('renders the page variant as the four-card dashboard without a dimension switch', async () => {
+    const kindTotals = { requests: 2, inputTokens: 300, outputTokens: 30, cacheReadTokens: 0, cacheWriteTokens: 0 }
+    const aux = {
+      total: kindTotals,
+      cost: 0.02,
+      byKind: [{ auxKind: 'auto-review' as const, totals: kindTotals, cost: 0.02, byModel: [] }],
+    }
+    const sessionRows = [
+      { sessionId: 's1', title: 'Token 用量页大屏适配', firstTime: 0, lastTime: Date.now() - 60_000, cost: 4.18, totals: kindTotals, cwd: 'D:\\Code\\dsh-token-usage' },
+      { sessionId: 's2', firstTime: 0, lastTime: Date.now() - 180_000, cost: 2.11, totals: kindTotals, cwd: 'D:\\Code\\deepseek-harness', childCount: 2 },
+    ]
+    const fetchMock = stubFetch(async () => Response.json({ ...SUMMARY, aux, sessionRows }))
+    render(<TokenUsageSection close={() => {}} t={t} variant="page" />)
+    // All four cards render their lists at once — no dimension switch.
+    await screen.findByRole('list', { name: '按项目' })
+    expect(screen.queryByRole('group', { name: t('detail.switch.label') })).toBeNull()
+    expect(screen.getByRole('list', { name: '按会话' })).toBeTruthy()
+    expect(screen.getByRole('list', { name: '按模型' })).toBeTruthy()
+    expect(screen.getByRole('list', { name: '运行开销' })).toBeTruthy()
+    // Card heads: the counts ride beside the titles (two directory tails
+    // fold into two projects; one model row); every card head carries a
+    // sort — sessions default to cost (its 费用 pick pressed), projects
+    // and models to tokens, so address the sessions card's own control.
+    expect(screen.getByText('2 个 · 按总 token')).toBeTruthy()
+    expect(screen.getByText('1 个 · 按总 token')).toBeTruthy()
+    expect(screen.getByText('共 2 条')).toBeTruthy()
+    expect(screen.getByText('辅助模型请求')).toBeTruthy()
+    const sessionCard = screen.getByText('共 2 条').closest('div')!.parentElement!
+    expect(within(sessionCard).getByRole('button', { name: '费用' }).getAttribute('aria-pressed')).toBe('true')
+    fireEvent.click(within(screen.getByRole('group', { name: t('board.projects') })).getByRole('button', { name: '费用' }))
+    fireEvent.click(within(screen.getByRole('group', { name: t('board.models') })).getByRole('button', { name: '费用' }))
+    expect(screen.getByText('2 个 · 按费用')).toBeTruthy()
+    expect(screen.getByText('1 个 · 按费用')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: t('perf.toggle') }))
+    expect(screen.getByText('1 个 · 按输出速度')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: t('perf.toggle') }))
+    expect(screen.getByText('1 个 · 按费用')).toBeTruthy()
+    expect(screen.getByText('Token 用量页大屏适配')).toBeTruthy()
+    // The composite card's overhead pill scrolls to (and flashes) the
+    // overhead card. jsdom ships no scrollIntoView; record the calls and
+    // delete the stub afterwards.
+    const scrollCalls: Element[] = []
+    HTMLElement.prototype.scrollIntoView = function (this: Element): void { scrollCalls.push(this) }
+    try {
+      const pill = screen.getByRole('button', { name: t('stat.overheadPill', { count: '2' }) })
+      fireEvent.click(pill)
+      expect(scrollCalls.length).toBeGreaterThan(0)
+      expect(document.querySelector('[class*="flash"]')).toBeTruthy()
+    } finally {
+      // Delete rather than assign undefined: an undefined own property
+      // would still shadow the prototype chain below HTMLElement.
+      delete (HTMLElement.prototype as unknown as Record<string, unknown>).scrollIntoView
+    }
+    // Ctrl+click on a model row toggles the model filter (a single pick):
+    // the affordance flips to the Ctrl hint, and the next stats fetch
+    // carries the model parameter.
+    fireEvent(window, new MouseEvent('mousemove', { ctrlKey: true }))
+    fireEvent.click(screen.getByRole('button', { name: t('model.ctrlHint') }))
+    await waitFor(() => {
+      const last = fetchMock.mock.calls.filter(call => String(call[0]).startsWith('/token-usage/stats')).at(-1)
+      expect(String(last?.[0])).toContain('model=deepseek-reasoner')
+    })
   })
 
   it('shows the empty hint when nothing matches', async () => {
@@ -460,13 +573,13 @@ describe('TokenUsageSection', () => {
       }),
     }))
     render(<TokenUsageSection close={() => {}} t={t} />)
-    const table = await screen.findByRole('table', { name: '按模型' })
+    const list = await openModelTab()
     expect(screen.queryByText(/个模型未定价：/)).toBeNull()
-    expect(within(table).getByText('未定价')).toBeTruthy()
+    expect(within(list).getByText('未定价')).toBeTruthy()
     // Unpriced cost cells render an em dash, not a fake ¥0.00, and the
     // row retains the unpriced action.
-    expect(within(table).getByText('—')).toBeTruthy()
-    expect(within(table).getByRole('button', { name: '未定价' })).toBeTruthy()
+    expect(within(list).getByText('—')).toBeTruthy()
+    expect(within(list).getByRole('button', { name: '未定价' })).toBeTruthy()
   })
 
   it('renders costs and rates in USD under an overseas summary', async () => {
@@ -480,8 +593,9 @@ describe('TokenUsageSection', () => {
     }
     stubFetch(async () => ({ ok: true, json: async () => usdSummary }))
     render(<TokenUsageSection close={() => {}} t={t} />)
-    // The cost card and the per-model cost column both read $1.00.
-    expect(await screen.findAllByText('总 token')).toHaveLength(2)
+    // The cost card and the model row's cost cell both read $1.00.
+    expect(await screen.findAllByText('总 token')).toHaveLength(1)
+    await openModelTab()
     expect(screen.getAllByText('1.00$').length).toBeGreaterThan(0)
 
     // The pricing dialog converts every rate: ¥4/¥16 → $0.5714/$2.2857,
@@ -511,11 +625,11 @@ describe('TokenUsageSection', () => {
       }),
     }))
     render(<TokenUsageSection close={() => {}} t={t} />)
-    const table = await screen.findByRole('table', { name: '按模型' })
+    const list = await openModelTab()
     expect(screen.queryByText(/个模型未定价：/)).toBeNull()
     expect(screen.getByText('1.00$')).toBeTruthy()
-    expect(within(table).getByRole('button', { name: '未定价' })).toBeTruthy()
-    expect(within(table).getByText('—')).toBeTruthy()
+    expect(within(list).getByRole('button', { name: '未定价' })).toBeTruthy()
+    expect(within(list).getByText('—')).toBeTruthy()
   })
 
   it('shows the failure and retries the fetch', async () => {
@@ -527,7 +641,7 @@ describe('TokenUsageSection', () => {
 
     fetch.mockResolvedValueOnce({ ok: true, json: async () => SUMMARY })
     fireEvent.click(screen.getByText('重试'))
-    expect(await screen.findAllByText('总 token')).toHaveLength(2)
+    expect(await screen.findAllByText('总 token')).toHaveLength(1)
     expect(fetch).toHaveBeenCalledTimes(2)
   })
 
@@ -695,15 +809,6 @@ describe('TokenUsageSection filtering', () => {
     expect(url.searchParams.get('to')).toBe(dayKey(0))
   })
 
-  it('orders the per-model columns with the cost and hit rate last-but-one / last', async () => {
-    stubFetch(async () => ({ ok: true, json: async () => SUMMARY }))
-    render(<TokenUsageSection close={() => {}} t={t} />)
-    await screen.findAllByText('总 token')
-    const headers = within(screen.getByRole('table', { name: '按模型' })).getAllByRole('columnheader')
-    expect(headers.map(cell => cell.textContent)).toEqual(
-      ['模型', '成功/失败', '费用', '总 token', '入', '出', '缓', '写', '命中率'])
-  })
-
   it('opens a pricing dialog from the model row: each billing condition on its own row', async () => {
     // 2026-01-01 / 2026-02-01 at 12:00 UTC: the same local date in every
     // realistic timezone, so the window text is stable on any runner.
@@ -748,7 +853,7 @@ describe('TokenUsageSection filtering', () => {
       }),
     }))
     render(<TokenUsageSection close={() => {}} t={t} />)
-    await screen.findAllByText('总 token')
+    await openModelTab()
 
     // The unused priced model never surfaces an affordance.
     expect(screen.queryByRole('button', { name: /unused-model/ })).toBeNull()
@@ -812,7 +917,7 @@ describe('TokenUsageSection filtering', () => {
       }),
     }))
     render(<TokenUsageSection close={() => {}} t={t} />)
-    await screen.findAllByText('总 token')
+    await openModelTab()
     fireEvent.click(screen.getByRole('button', { name: '查看 deepseek-reasoner 定价' }))
     const dialog = await screen.findByRole('dialog')
     // “~ <end>”, not “1970-01-01 ~ <end>”.
@@ -840,7 +945,7 @@ describe('TokenUsageSection filtering', () => {
       }),
     }))
     render(<TokenUsageSection close={() => {}} t={t} />)
-    await screen.findAllByText('总 token')
+    await openModelTab()
     fireEvent.click(screen.getByRole('button', { name: '查看 deepseek-reasoner 定价' }))
     const dialog = await screen.findByRole('dialog')
     const table = within(dialog).getByRole('table')

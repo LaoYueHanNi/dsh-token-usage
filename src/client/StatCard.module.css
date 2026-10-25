@@ -18,6 +18,72 @@
   min-width: 0;
 }
 
+/* The page's wide-column variant, at the v3 demo's figures: 20px values
+ * over 12px labels in a roomier 12/14 tile — the 18px/11px compact
+ * figures read small and hollow in a 1200px nine-track row. */
+.cardLg {
+  gap: 4px;
+  padding: 12px 14px;
+}
+
+.cardLg .cardLabel {
+  font-size: 12px;
+}
+
+.cardLg .cardValue {
+  font-size: 20px;
+  line-height: 26px;
+}
+
+/* Settings has a fixed four-by-two overview, independent of page reflow. */
+.cardSm {
+  gap: 3px;
+  padding: 8px 9px;
+  border-radius: 7px;
+}
+
+.cardSm .cardLabel {
+  font-size: 10px;
+  line-height: 14px;
+}
+
+.cardSm .cardValue {
+  gap: 4px;
+  flex-wrap: nowrap;
+  font-size: 16px;
+  line-height: 22px;
+}
+
+.cardSm .cardLabelRow {
+  gap: 4px;
+}
+
+.cardSm .cardLabelRow .pillNeutral {
+  font-size: 9px;
+  line-height: 12px;
+  padding-inline: 4px;
+}
+
+.cardSm .failBare {
+  font-size: 10px;
+}
+
+/* The label row that carries an extra node (the compact lead card's
+ * overhead pill — the narrow tile wraps it onto the value line
+ * otherwise, stretching the whole grid row). The label keeps its
+ * ellipsis; the extra rides beside it, never shrinking. */
+.cardLabelRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.cardLabelRow > .cardLabel {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
 /* The label: small, secondary color, ellipsized when the card narrows. */
 .cardLabel {
   font-size: 11px;
@@ -113,8 +179,10 @@
   justify-self: stretch;
 }
 
-/* Failure count sitting beside the successful-request figure on the card. */
-.pill {
+/* Count pills sitting beside the successful-request figure on the card.
+ * Both share the capsule chrome; the ink differs per pill. */
+.pill,
+.pillNeutral {
   flex-shrink: 0;
   font-size: 12px;
   font-weight: 400;
@@ -123,8 +191,59 @@
   padding: 1px 7px;
   border-radius: 999px;
   white-space: nowrap;
+}
+
+.pill {
   color: var(--dsw-alias-state-error-primary);
   background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 12%, transparent);
   border: 1px solid color-mix(in srgb, var(--dsw-alias-state-error-primary) 28%, transparent);
+}
+
+/* The overhead pill: a real <button> in neutral ink (it scrolls to / opens
+ * the runtime-overhead section). Reset the UA button font; darken slightly
+ * on hover so it reads as clickable. */
+.pillNeutral {
+  font-family: inherit;
+  color: var(--dsw-alias-label-secondary);
+  background: color-mix(in srgb, var(--dsw-alias-label-secondary) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--dsw-alias-label-secondary) 26%, transparent);
+  cursor: pointer;
+}
+
+.pillNeutral:hover {
+  background: color-mix(in srgb, var(--dsw-alias-label-secondary) 16%, transparent);
+}
+
+/* A pill parked on the label row (the compact lead card's overhead chip)
+ * rides beside an 11px label: at the full pill height (~20px) it stands
+ * above the 15px label line and lifts the whole grid row — the sibling
+ * cards get stretched by the difference. Tighten it to the label's own
+ * line so the lead card stays exactly as tall as its neighbours. */
+.cardLabelRow .pill,
+.cardLabelRow .pillNeutral {
+  font-size: 10px;
+  line-height: 13px;
+  padding: 0 6px;
+}
+
+/* The compact lead card's value line must stay one line: a wrap there is
+ * a third card row, and the grid stretches every sibling to match. The
+ * `~` sibling scopes this to cards carrying a label row (the compact
+ * lead card only) — the page's wide tiles keep the wrapping value row. */
+.cardLabelRow ~ .cardValue {
+  flex-wrap: nowrap;
+  gap: 6px;
+}
+
+/* The failure count as bare red text (the compact lead card's value
+ * line): the capsule chrome — padding, border, 12px type — is what
+ * overruns the ~113px tile beside a six-digit count. Same treatment the
+ * per-model tables give a tight numeric column: ink, no chrome. */
+.failBare {
+  font-size: 11px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  color: var(--dsw-alias-state-error-primary);
+  white-space: nowrap;
 }
 

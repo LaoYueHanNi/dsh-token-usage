@@ -430,7 +430,7 @@ describe('UsageView', () => {
     })
     renderView({ byId: { root: SESSION_STATE.byId.root! } })
     expect(await screen.findByText('失败 2')).toBeTruthy()
-    expectText('成功请求数')
+    expectText('请求数')
     expectText('0')
   })
 

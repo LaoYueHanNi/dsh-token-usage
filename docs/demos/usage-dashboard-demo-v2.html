@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Token 用量 — 大屏 v2（设置页骨架扩展）</title>
+<style>
+  /* 宿主实测 token（--dsw 采样值）：纯中性灰阶，白色即强调 */
+  :root {
+    --bg: #151517;            /* --dsw-alias-bg-base */
+    --layer: #232324;         /* --dsw-alias-bg-layer-1 */
+    --layer-2: #2c2c2e;       /* --dsw-alias-bg-layer-2 */
+    --border: #ffffff0f;      /* --dsw-alias-border-l1 */
+    --border-2: #ffffff1f;    /* --dsw-alias-border-l2 */
+    --fg: #f9fafb;            /* --dsw-alias-label-primary */
+    --fg-2: #cfd3d6;          /* --dsw-alias-label-secondary */
+    --fg-3: #81858c;          /* --dsw-alias-label-caption */
+    --hover: #ffffff14;       /* --dsw-interactive-bg-hover */
+    --active: #ffffff24;
+    --ok: #22c55e;
+    --err: #f25a5a;
+    --link: #7aaaff;
+    --radius: 12px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font: 13px/1.5 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  /* 官方一级页面壳：960px 居中柱 + clamp 内边距 */
+  .page { max-width: 960px; margin: 0 auto; padding: 28px clamp(24px, 4vw, 48px) 64px; }
+  .section { display: flex; flex-direction: column; gap: 16px; }
+
+  .title { font-size: 20px; line-height: 28px; font-weight: 500; }
+  .muted { font-size: 12px; color: var(--fg-2); }
+  .muted3 { font-size: 12px; color: var(--fg-3); }
+
+  /* 过滤行：trigger 与链接，与设置页一致 */
+  .filters { display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; }
+  .trigger {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 12px; font-size: 12px; color: var(--fg);
+    background: transparent; border: 1px solid var(--border-2); border-radius: 8px;
+    white-space: nowrap;
+  }
+  .trigger .caret { font-size: 9px; color: var(--fg-3); }
+  .pricingLink {
+    margin-left: auto; padding: 4px 8px; font-size: 13px; line-height: 20px;
+    color: var(--link); background: none; border: none; border-radius: 6px; cursor: pointer;
+    white-space: nowrap;
+  }
+  .pricingLink:hover { background: var(--hover); }
+
+  /* 指标卡：设置页 .cards 语言，min 收窄到 96px 使 8 卡在大屏一行 */
+  .cards { display: grid; grid-template-columns: repeat(9, 1fr); gap: 8px; }
+  .card {
+    background: var(--layer); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 12px 14px; display: flex; flex-direction: column; gap: 4px; min-width: 0;
+  }
+  .card .label { font-size: 12px; color: var(--fg-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+  .card .val { font-size: 20px; line-height: 26px; font-weight: 600; font-variant-numeric: tabular-nums; display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+  .pill {
+    flex: none; font-size: 10px; line-height: 16px; font-weight: 500; padding: 0 6px;
+    color: var(--err); background: color-mix(in srgb, var(--err) 15%, transparent);
+    border-radius: 999px;
+  }
+  .good { color: var(--ok); }
+
+  /* 维度开关：轨道 + 内嵌选中片；选中段即下方块的标题 */
+  .segmented {
+    display: inline-flex; align-items: stretch; gap: 2px; padding: 2px;
+    border: 1px solid var(--border); border-radius: 8px;
+    align-self: flex-start;
+  }
+  .segBtn {
+    border: none; background: transparent; color: var(--fg-3);
+    font-size: 12px; font-weight: 500; padding: 4px 12px; border-radius: 6px; cursor: pointer;
+    white-space: nowrap;
+  }
+  .segBtn:hover:not(.segActive) { color: var(--fg-2); background: #ffffff0f; }
+  .segActive { background: #ffffff29; color: var(--fg); font-weight: 600; }
+
+  /* 表格：设置页语言（12px tabular-nums、数字右对齐、行底 hairline） */
+  .tableWrap { overflow-x: auto; }
+  .table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+  .table th, .table td { padding: 5px 6px; text-align: right; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  .table th { font-weight: 600; color: var(--fg-2); border-bottom: 1.5px solid var(--border-2); }
+  .table tbody tr:hover { background: var(--hover); }
+  .table th.modelHead, .table td.modelCol { text-align: left; }
+  .costCol { font-weight: 600; }
+  .zeroDim { color: var(--fg-3); opacity: .55; }
+  .tfoot td { border-bottom: none; border-top: 1.5px solid var(--border-2); font-weight: 600; color: var(--fg-2); background: transparent; }
+  .dimName { color: var(--fg-2); }
+  .indent { padding-left: 18px; color: var(--fg-2); }
+
+  /* 会话列：标题 + 副行（目录/子会话徽标） */
+  .sessCell { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+  .sessTitle { color: var(--fg); display: inline-flex; align-items: center; gap: 6px; }
+  .badge {
+    flex: none; font-size: 10px; line-height: 15px; padding: 0 6px;
+    color: var(--fg-2); border: 1px solid var(--border-2); border-radius: 999px;
+  }
+  .sessSub { font-size: 11px; color: var(--fg-3); }
+
+  /* 运行开销的类别折叠钮（沿用设置页 chevron 词汇） */
+  .kindToggle {
+    display: inline-flex; align-items: center; gap: 4px; max-width: 100%;
+    padding: 0; margin: 0; font: inherit; color: inherit; text-align: left;
+    background: none; border: none; cursor: pointer;
+  }
+  .chevron { flex: none; font-size: 9px; line-height: 1; color: var(--fg-3); transition: transform .12s ease; display: inline-block; }
+  .kindToggle[aria-expanded="true"] .chevron { transform: rotate(90deg); }
+
+  /* 热力图（按时段 tab）：白色不透明度阶梯 */
+  .heatWrap { display: flex; flex-direction: column; gap: 10px; padding: 4px 0 8px; }
+  .heatGrid { display: grid; grid-template-columns: 34px 1fr; gap: 6px; align-items: center; }
+  .heatRows { display: flex; flex-direction: column; gap: 3px; }
+  .heatRow { display: grid; grid-template-columns: 34px repeat(24, 1fr); gap: 3px; align-items: center; }
+  .heatRow .rl { font-size: 11px; color: var(--fg-3); }
+  .cell { aspect-ratio: 1; border-radius: 3px; min-width: 0; }
+  .c0 { background: #ffffff0a; } .c1 { background: #ffffff1c; } .c2 { background: #ffffff38; }
+  .c3 { background: #ffffff63; } .c4 { background: #ffffff9c; }
+  .colHeads { display: grid; grid-template-columns: 34px repeat(24, 1fr); gap: 3px; }
+  .colHeads span { grid-column: span 6; font-size: 11px; color: var(--fg-3); }
+  .heatFoot { display: flex; align-items: center; justify-content: space-between; font-size: 12px; color: var(--fg-2); }
+  .legend { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--fg-3); }
+  .legend .cell { width: 10px; aspect-ratio: 1; }
+
+  /* 面板切换 */
+  .panel { display: none; }
+  .panel.on { display: block; }
+
+  /* 趋势（设置页 TrendChart 语言：Y 刻度 + 网格虚线 + 纯线条） */
+  .trendWrap { position: relative; }
+  .trendWrap svg { display: block; width: 100%; height: auto; }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="section">
+
+    <div>
+      <h1 class="title">Token 用量</h1>
+      <p class="muted">数据目录：D:\document\dsh-token-usage</p>
+    </div>
+
+    <div class="filters">
+      <button class="trigger">近 1 天 <span class="caret">▾</span></button>
+      <button class="trigger">2026-10-24 至 2026-10-24 <span class="caret">▾</span></button>
+      <button class="trigger">全部模型 <span class="caret">▾</span></button>
+      <button class="pricingLink">定价表</button>
+    </div>
+
+    <!-- 指标一行：8 卡（窄容器 auto-fit 自然回落换行，语言与设置页相同） -->
+    <div class="cards">
+      <div class="card" style="grid-column: span 2;"><span class="label">成功请求数</span><span class="val">1,086 <span class="pill">失败 6</span></span></div>
+      <div class="card"><span class="label">费用</span><span class="val">¥107.70</span></div>
+      <div class="card"><span class="label">总 token</span><span class="val">131M</span></div>
+      <div class="card"><span class="label">命中率</span><span class="val good">98%</span></div>
+      <div class="card"><span class="label">入</span><span class="val">2.6M</span></div>
+      <div class="card"><span class="label">出</span><span class="val">618K</span></div>
+      <div class="card"><span class="label">缓</span><span class="val">128M</span></div>
+      <div class="card"><span class="label">写</span><span class="val">0</span></div>
+    </div>
+
+    <p class="muted3">定价状态：已关联 3 个模型的定价规则，费用为估算值。</p>
+
+    <!-- 趋势：设置页 TrendChart 语言；按日 / 按小时 与过滤联动 -->
+    <div class="trendWrap">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+        <span class="muted">趋势</span>
+        <span class="segmented" style="align-self:center;">
+          <button class="segBtn segActive" data-trend="hour">按小时</button>
+          <button class="segBtn" data-trend="day">按日</button>
+        </span>
+      </div>
+      <svg id="trend" viewBox="0 0 960 170" role="img" aria-label="token 趋势"></svg>
+    </div>
+
+    <!-- 维度开关：选中段即标题；在原 3 个 tab 上扩展 2 个 -->
+    <div class="segmented" role="group" aria-label="明细维度" id="dimSwitch">
+      <button class="segBtn segActive" data-panel="model">按模型</button>
+      <button class="segBtn" data-panel="session">按会话</button>
+      <button class="segBtn" data-panel="project">按项目</button>
+      <button class="segBtn" data-panel="hour">按时段</button>
+      <button class="segBtn" data-panel="aux">运行开销</button>
+    </div>
+
+    <!-- 按模型：原列不变 + 费用占比列 + 合计行 -->
+    <div class="panel on" id="panel-model">
+      <div class="tableWrap">
+        <table class="table">
+          <thead><tr>
+            <th class="modelHead">模型</th><th>成功 / 失败</th><th>费用</th><th>费用占比</th>
+            <th>总 token</th><th>入</th><th>出</th><th>缓</th><th>写</th><th>命中率</th>
+          </tr></thead>
+          <tbody>
+            <tr><td class="modelCol">glm-5.3-flashx</td><td>726 / <span style="color:var(--err)">6</span></td><td class="costCol">¥69.42</td><td class="dimName">64.5%</td><td>114M</td><td>1.6M</td><td>368K</td><td>112M</td><td class="zeroDim">0</td><td>98.6%</td></tr>
+            <tr><td class="modelCol">glm-5.3</td><td>237</td><td class="costCol">¥37.07</td><td class="dimName">34.4%</td><td>14M</td><td>664K</td><td>192K</td><td>13M</td><td class="zeroDim">0</td><td>95.2%</td></tr>
+            <tr><td class="modelCol">glm-5.3-flash</td><td>123</td><td class="costCol">¥1.20</td><td class="dimName">1.1%</td><td>3.7M</td><td>365K</td><td>59K</td><td>3.2M</td><td class="zeroDim">0</td><td>89.9%</td></tr>
+          </tbody>
+          <tfoot><tr class="tfoot"><td class="modelCol">合计</td><td>1,086 / <span style="color:var(--err)">6</span></td><td>¥107.70</td><td>100%</td><td>131M</td><td>2.6M</td><td>618K</td><td>128M</td><td>0</td><td>98.0%</td></tr></tfoot>
+        </table>
+      </div>
+    </div>
+
+    <!-- 按会话：目录分组模式，组头聚合即目录级汇总（细化） -->
+    <div class="panel" id="panel-session">
+      <div class="tableWrap">
+        <table class="table">
+          <thead><tr>
+            <th class="modelHead">会话</th><th>请求</th><th>总 token</th><th>费用</th><th>最近活跃</th>
+          </tr></thead>
+          <tbody>
+            <tr><td class="modelCol" style="font-weight:600">maggie <span class="muted3">· 18 个会话</span></td><td style="font-weight:600">214</td><td style="font-weight:600">41.2M</td><td class="costCol" style="font-weight:600">¥38.60</td><td class="dimName">2 分钟前</td></tr>
+            <tr><td class="modelCol"><span class="sessCell"><span class="sessTitle">与 dsh 记录去重排查</span><span class="sessSub">glm-5.3-flashx</span></span></td><td>36</td><td>1.7M</td><td class="costCol">¥1.52</td><td class="dimName">3 小时前</td></tr>
+            <tr><td class="modelCol"><span class="sessCell"><span class="sessTitle">查上游仓库 Claude Desktop 相关 issue</span><span class="sessSub">glm-5.3-flashx</span></span></td><td>28</td><td>461K</td><td class="costCol">¥0.41</td><td class="dimName">1 小时前</td></tr>
+            <tr><td class="modelCol"><span class="sessCell"><span class="sessTitle">侧边栏入口回归清单 <span class="badge">子会话</span></span><span class="sessSub">glm-5.3-flashx</span></span></td><td>12</td><td>250K</td><td class="costCol">¥0.22</td><td class="dimName">6 分钟前</td></tr>
+            <tr><td class="modelCol" style="font-weight:600">dsh-token-usage <span class="muted3">· 9 个会话</span></td><td style="font-weight:600">142</td><td style="font-weight:600">28.9M</td><td class="costCol" style="font-weight:600">¥24.66</td><td class="dimName">6 分钟前</td></tr>
+            <tr><td class="modelCol"><span class="sessCell"><span class="sessTitle">DeepSeek 侧边栏入口可行性评估</span><span class="sessSub">glm-5.3-flashx</span></span></td><td>31</td><td>872K</td><td class="costCol">¥0.78</td><td class="dimName">6 分钟前</td></tr>
+            <tr><td class="modelCol"><span class="sessCell"><span class="sessTitle">查端糖数据源去重方案与实现</span><span class="sessSub">glm-5.3-flashx</span></span></td><td>22</td><td>404K</td><td class="costCol">¥0.36</td><td class="dimName">5 小时前</td></tr>
+            <tr><td class="modelCol" style="font-weight:600">deepseek-harness <span class="muted3">· 14 个会话</span></td><td style="font-weight:600">156</td><td style="font-weight:600">22.4M</td><td class="costCol" style="font-weight:600">¥17.03</td><td class="dimName">1 小时前</td></tr>
+            <tr><td class="modelCol"><span class="sessCell"><span class="sessTitle">排查模型归一化并实现双字段记录</span><span class="sessSub">glm-5.3-flashx</span></span></td><td>26</td><td>355K</td><td class="costCol">¥0.31</td><td class="dimName">3 小时前</td></tr>
+            <tr><td class="modelCol"><span class="sessCell"><span class="sessTitle">运行开销模型明细按 canonical 归一折叠</span><span class="sessSub">glm-5.3-flash</span></span></td><td>19</td><td>312K</td><td class="costCol">¥0.24</td><td class="dimName">2 小时前</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="muted3">其余 6 个目录 · 23 个会话未展示；列表模式可在「分组 / 列表」间切换。</p>
+    </div>
+
+    <!-- 按项目（新）：sessionRows 按目录聚合 -->
+    <div class="panel" id="panel-project">
+      <div class="tableWrap">
+        <table class="table">
+          <thead><tr>
+            <th class="modelHead">项目</th><th>会话数</th><th>请求</th><th>总 token</th><th>费用</th><th>费用占比</th>
+          </tr></thead>
+          <tbody>
+            <tr><td class="modelCol" title="D:\document\maggie">maggie</td><td>18</td><td>214</td><td>41.2M</td><td class="costCol">¥38.60</td><td class="dimName">35.8%</td></tr>
+            <tr><td class="modelCol" title="D:\Code\dsh-token-usage">dsh-token-usage</td><td>9</td><td>142</td><td>28.9M</td><td class="costCol">¥24.66</td><td class="dimName">22.9%</td></tr>
+            <tr><td class="modelCol" title="D:\Code\deepseek-harness">deepseek-harness</td><td>14</td><td>156</td><td>22.4M</td><td class="costCol">¥17.03</td><td class="dimName">15.8%</td></tr>
+            <tr><td class="modelCol" title="D:\document\cc-switch-analyzer">cc-switch-analyzer</td><td>7</td><td>98</td><td>14.2M</td><td class="costCol">¥11.40</td><td class="dimName">10.6%</td></tr>
+            <tr><td class="modelCol" title="D:\document\claude-desktop-issues">claude-desktop-issues</td><td>5</td><td>64</td><td>9.8M</td><td class="costCol">¥6.12</td><td class="dimName">5.7%</td></tr>
+            <tr><td class="modelCol" title="D:\document\ai-test">ai-test</td><td>4</td><td>41</td><td>6.4M</td><td class="costCol">¥4.09</td><td class="dimName">3.8%</td></tr>
+            <tr><td class="modelCol" title="D:\document\cc-switch">cc-switch</td><td>3</td><td>22</td><td>3.1M</td><td class="costCol">¥2.51</td><td class="dimName">2.3%</td></tr>
+            <tr><td class="modelCol" title="D:\document\model-price-table">model-price-table</td><td>2</td><td>18</td><td>2.9M</td><td class="costCol">¥2.06</td><td class="dimName">1.9%</td></tr>
+            <tr><td class="modelCol" title="D:\document\kimi-webbridge">kimi-webbridge</td><td>1</td><td>9</td><td>1.8M</td><td class="costCol">¥1.23</td><td class="dimName">1.1%</td></tr>
+          </tbody>
+          <tfoot><tr class="tfoot"><td class="modelCol">合计 · 9 个项目</td><td>63</td><td>764</td><td>130.7M</td><td>¥107.70</td><td>100%</td></tr></tfoot>
+        </table>
+      </div>
+    </div>
+
+    <!-- 按时段（新）：byHour 推导的星期×小时热力 -->
+    <div class="panel" id="panel-hour">
+      <div class="heatWrap">
+        <div class="heatGrid">
+          <span></span>
+          <div class="colHeads" id="heatCols"></div>
+        </div>
+        <div class="heatRows" id="heatRows"></div>
+        <div class="heatFoot">
+          <span>最忙：周六 11:00</span>
+          <span class="legend">少 <span class="cell c0"></span><span class="cell c1"></span><span class="cell c2"></span><span class="cell c3"></span><span class="cell c4"></span> 多</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 运行开销：原类别折叠 + 按模型明细，加费用占比（细化） -->
+    <div class="panel" id="panel-aux">
+      <div class="tableWrap">
+        <table class="table">
+          <thead><tr>
+            <th class="modelHead">类别</th><th>次数</th><th>费用</th><th>费用占比</th>
+            <th>总 token</th><th>入</th><th>出</th><th>缓</th><th>写</th>
+          </tr></thead>
+          <tbody>
+            <tr>
+              <td class="modelCol"><button class="kindToggle" aria-expanded="true" data-aux="1"><span class="chevron">▸</span> 自动审查</button></td>
+              <td>28</td><td class="costCol">¥0.72</td><td class="dimName">53.7%</td><td>612K</td><td>88K</td><td>94K</td><td>430K</td><td class="zeroDim">0</td>
+            </tr>
+            <tr data-aux-detail="1">
+              <td class="modelCol indent">group/glm-5.3-flashx</td><td>19</td><td>¥0.49</td><td></td><td>401K</td><td>57K</td><td>63K</td><td>281K</td><td class="zeroDim">0</td>
+            </tr>
+            <tr data-aux-detail="1">
+              <td class="modelCol indent">auto/GLM-5.3</td><td>9</td><td>¥0.23</td><td></td><td>211K</td><td>31K</td><td>31K</td><td>149K</td><td class="zeroDim">0</td>
+            </tr>
+            <tr>
+              <td class="modelCol"><button class="kindToggle" aria-expanded="false" data-aux="0"><span class="chevron">▸</span> 标题生成</button></td>
+              <td>15</td><td class="costCol">¥0.31</td><td class="dimName">23.1%</td><td>148K</td><td>96K</td><td>18K</td><td>34K</td><td class="zeroDim">0</td>
+            </tr>
+            <tr data-aux-detail="0" hidden>
+              <td class="modelCol indent">glm-5.3-flash</td><td>15</td><td>¥0.31</td><td></td><td>148K</td><td>96K</td><td>18K</td><td>34K</td><td class="zeroDim">0</td>
+            </tr>
+            <tr>
+              <td class="modelCol"><button class="kindToggle" aria-expanded="false" data-aux="0"><span class="chevron">▸</span> 推理翻译</button></td>
+              <td>9</td><td class="costCol">¥0.31</td><td class="dimName">23.1%</td><td>96K</td><td>58K</td><td>12K</td><td>26K</td><td class="zeroDim">0</td>
+            </tr>
+            <tr data-aux-detail="0" hidden>
+              <td class="modelCol indent">glm-5.3-flash</td><td>9</td><td>¥0.31</td><td></td><td>96K</td><td>58K</td><td>12K</td><td>26K</td><td class="zeroDim">0</td>
+            </tr>
+          </tbody>
+          <tfoot><tr class="tfoot"><td class="modelCol">合计</td><td>52</td><td>¥1.34</td><td>100%</td><td>856K</td><td>242K</td><td>124K</td><td>490K</td><td>0</td></tr></tfoot>
+        </table>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+  ;(function () {
+    'use strict';
+    /* ---------- 趋势：单日按小时（与"近 1 天"过滤一致），Y 轴 M token ---------- */
+    var vals = [0.4, 0.3, 0.2, 0.2, 0.3, 0.6, 1.2, 3.8, 12, 28, 45, 52, 30, 14, 9, 7, 6, 8, 11, 14, 10, 6, 3, 1.5];
+    var svg = document.getElementById('trend');
+    var W = 960;
+    var H = 170;
+    var L = 44;
+    var R = 12;
+    var TOP = 10;
+    var BOTTOM = 24;
+    var max = 60; /* 固定 60M 刻度，与设置页一致 */
+    var pt = function (v, i) {
+      return [L + i * (W - L - R) / (vals.length - 1), H - BOTTOM - v / max * (H - TOP - BOTTOM)];
+    };
+    var grid = '';
+    [20, 40, 60].forEach(function (g) {
+      var y = H - BOTTOM - g / max * (H - TOP - BOTTOM);
+      grid += '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + y + '" y2="' + y + '" stroke="#ffffff0f" stroke-dasharray="4 5"/>';
+      grid += '<text x="' + (L - 8) + '" y="' + (y + 4) + '" text-anchor="end" font-size="11" fill="#81858c">' + g + 'M</text>';
+    });
+    var line = '';
+    vals.forEach(function (v, i) {
+      line += (i ? 'L' : 'M') + pt(v, i).join(',');
+    });
+    var axis = '';
+    [[0, '00:00'], [11, '11:00'], [23, '23:00']].forEach(function (pair) {
+      var x = pt(0, pair[0])[0];
+      var anchor = pair[0] === 0 ? 'start' : (pair[0] === 23 ? 'end' : 'middle');
+      axis += '<text x="' + x + '" y="' + (H - 6) + '" text-anchor="' + anchor + '" font-size="11" fill="#81858c">' + pair[1] + '</text>';
+    });
+    svg.innerHTML = grid + '<path d="' + line + '" fill="none" stroke="#f9fafb" stroke-width="1.5" stroke-linejoin="round"/>' + axis;
+
+    /* ---------- 趋势切换：按小时 / 按日 ---------- */
+    var dayVals = [2, 5, 9, 14, 11, 18, 22, 19, 24, 31, 26, 21]; /* 近 12 日 M token */
+    var trendBtns = document.querySelectorAll('[data-trend]');
+    var drawTrend = function (mode) {
+      var data = mode === 'day' ? dayVals : vals;
+      var pts = function (v, i) {
+        return [L + i * (W - L - R) / (data.length - 1), H - BOTTOM - v / max * (H - TOP - BOTTOM)];
+      };
+      var d = '';
+      data.forEach(function (v, i) { d += (i ? 'L' : 'M') + pts(v, i).join(','); });
+      var ax = '';
+      var labels = mode === 'day' ? [[0, '10-13'], [5, '10-18'], [11, '10-24']] : [[0, '00:00'], [11, '11:00'], [23, '23:00']];
+      labels.forEach(function (pair) {
+        var x = L + pair[0] * (W - L - R) / (data.length - 1);
+        var anchor = pair[0] === 0 ? 'start' : (pair[0] === data.length - 1 ? 'end' : 'middle');
+        ax += '<text x="' + x + '" y="' + (H - 6) + '" text-anchor="' + anchor + '" font-size="11" fill="#81858c">' + pair[1] + '</text>';
+      });
+      svg.innerHTML = grid + '<path d="' + d + '" fill="none" stroke="#f9fafb" stroke-width="1.5" stroke-linejoin="round"/>' + ax;
+    };
+    trendBtns.forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        trendBtns.forEach(function (b) { b.classList.remove('segActive'); });
+        btn.classList.add('segActive');
+        drawTrend(btn.getAttribute('data-trend'));
+      });
+    });
+
+    /* ---------- 热力图：周六 11:00 最忙 ---------- */
+    var levels = [
+      /* 周一 */ [0,0,0,0,0,0,1,1,2,3,2,2,3,2,2,1,1,2,2,1,1,0,0,0],
+      /* 周二 */ [0,0,0,0,0,0,1,2,2,3,3,2,2,2,1,1,2,2,1,1,0,0,0,0],
+      /* 周三 */ [0,0,0,0,0,1,1,2,3,4,3,3,3,2,2,2,1,2,2,1,1,1,0,0],
+      /* 周四 */ [0,0,0,0,0,0,1,1,2,2,3,2,2,3,2,1,1,1,2,1,0,0,0,0],
+      /* 周五 */ [0,0,0,0,0,1,2,2,3,4,3,3,2,2,3,2,2,1,1,1,1,0,0,0],
+      /* 周六 */ [0,0,0,0,0,0,1,2,3,3,4,4,3,2,2,1,1,2,2,2,1,1,0,0],
+      /* 周日 */ [0,0,0,0,0,0,0,1,2,2,3,2,2,2,1,1,1,2,1,1,0,0,0,0]
+    ];
+    var dayNames = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+    var rowsEl = document.getElementById('heatRows');
+    var html = '';
+    levels.forEach(function (row, d) {
+      html += '<div class="heatRow"><span class="rl">' + dayNames[d] + '</span>';
+      row.forEach(function (lv) {
+        html += '<span class="cell c' + lv + '"></span>';
+      });
+      html += '</div>';
+    });
+    rowsEl.innerHTML = html;
+    var colsEl = document.getElementById('heatCols');
+    colsEl.innerHTML = '<span>0</span><span>6</span><span>12</span><span>18</span>';
+
+    /* ---------- 维度开关：选中段即标题 ---------- */
+    var dimBtns = document.querySelectorAll('#dimSwitch .segBtn');
+    dimBtns.forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        dimBtns.forEach(function (b) { b.classList.remove('segActive'); });
+        btn.classList.add('segActive');
+        document.querySelectorAll('.panel').forEach(function (p) { p.classList.remove('on'); });
+        var target = document.getElementById('panel-' + btn.getAttribute('data-panel'));
+        if (target) { target.classList.add('on'); }
+      });
+    });
+
+    /* ---------- 运行开销：类别折叠 ---------- */
+    document.querySelectorAll('.kindToggle').forEach(function (tg) {
+      tg.addEventListener('click', function () {
+        var open = tg.getAttribute('aria-expanded') === 'true';
+        tg.setAttribute('aria-expanded', open ? 'false' : 'true');
+        var group = tg.getAttribute('data-aux');
+        var rows = document.querySelectorAll('tr[data-aux-detail="' + group + '"]');
+        rows.forEach(function (r) {
+          if (open) { r.setAttribute('hidden', ''); } else { r.removeAttribute('hidden'); }
+        });
+      });
+    });
+  })();
+</script>
+</body>
+</html>

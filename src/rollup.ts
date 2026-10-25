@@ -21,6 +21,18 @@ import type { RateKey, UsageAuxRow, UsageDayRow, UsageHourRow, UsageModelRow, Us
 const ROLLUP_FILE = 'rollup.json'
 const TMP_FILE = 'rollup.json.tmp'
 
+/**
+ * The aggregate shape this build writes and expects. Bump when a totals
+ * dimension gains a field the folding must carry (the timing accumulators
+ * behind the performance view made shape 2, and its valid latency count
+ * made shape 3): a stored rollup under an older
+ * value — or without the key, the pre-field shape 1 — is discarded and
+ * rebuilt from the day files on the next stats read, the same path a
+ * pricing-fingerprint change takes. Shape 1 carried every token dimension,
+ * so a rebuild only backfills the new accumulators; usage never changes.
+ */
+export const ROLLUP_AGGREGATE_FORMAT = 3
+
 /** The rollup file name, exported so callers (e.g. the post-sync
  * invalidation in index.ts) can drop the derived state by one authority. */
 export { ROLLUP_FILE as ROLLUP_FILE_NAME }
@@ -32,6 +44,13 @@ export interface RollupFile {
   requiresRebuild?: true
   /** Identification algorithm and feed rules used to select stored RateKeys. */
   pricingFingerprint?: string
+  /** Aggregate-shape version the rollup was written under
+   * ({@link ROLLUP_AGGREGATE_FORMAT}). Absent on rollups written before the
+   * field existed (shape 1: totals without the timing accumulators) — a
+   * mismatch makes the next stats read rebuild the rollup from the day
+   * files, so a new aggregate dimension backfills over the absorbed
+   * history without waiting for every frozen file to age past `upto`. */
+  aggregateFormat?: number
   /** Files absorbed into this snapshot, used to detect unavailable history. */
   sourceFiles?: string[]
   /** Inclusive upper date (`YYYY-MM-DD`) of the day files already absorbed. */
@@ -142,6 +161,7 @@ function isRollupFile(value: unknown): value is StoredRollupFile {
   const rollup = value as Record<string, unknown>
   return typeof rollup.upto === 'string' && DAY_KEY.test(rollup.upto)
     && (rollup.pricingFingerprint === undefined || typeof rollup.pricingFingerprint === 'string')
+    && (rollup.aggregateFormat === undefined || (typeof rollup.aggregateFormat === 'number' && Number.isInteger(rollup.aggregateFormat)))
     && (rollup.sourceFiles === undefined || (Array.isArray(rollup.sourceFiles)
       && rollup.sourceFiles.every(name => typeof name === 'string' && /^usage-\d{4}-\d{2}-\d{2}\.jsonl$/u.test(name))))
     && isTotals(rollup.total)

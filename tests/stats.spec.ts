@@ -2,7 +2,7 @@ import { mkdtemp, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { readRollup, writeRollup } from '../src/rollup.ts'
+import { readRollup, writeRollup, ROLLUP_AGGREGATE_FORMAT } from '../src/rollup.ts'
 import { clearRecordCache, readCachedRecords } from '../src/record-cache.ts'
 import { RECENT_LIMIT, attachCosts, buildSummary, filterRecordsBySessions, filterSummary, mergeSummaries, readAllRecords, requestSeriesOf, summarizeRecords } from '../src/stats.ts'
 import type { RateResolver } from '../src/stats.ts'
@@ -285,6 +285,105 @@ describe('summarizeRecords', () => {
   })
 })
 
+describe('performance accumulators', () => {
+  const at = new Date(2026, 0, 15, 12).getTime()
+  /** A streaming sample: 100 output tokens over 1.5s of generation. */
+  const stream = { latencyMs: 2000, firstTokenLatencyMs: 500 }
+
+  it('folds timing into the accumulators: streaming samples rank, one-shot rows only count latency', () => {
+    const summary = summarizeRecords([
+      { ...record(at, 'm1', { input: 10, output: 100 }), ...stream },
+      // A second streaming sample: 50 tokens over 0.5s, first token at 1s.
+      { ...record(at + 1, 'm1', { input: 10, output: 50 }), latencyMs: 1500, firstTokenLatencyMs: 1000 },
+      // Non-streaming: the whole response landed inside the threshold —
+      // the latency mean takes it, the speed mean never sees it.
+      { ...record(at + 2, 'm1', { input: 10, output: 500 }), latencyMs: 3000, firstTokenLatencyMs: 2900 },
+      // No timing at all moves nothing.
+      record(at + 3, 'm1', { input: 10, output: 10 }),
+      // A failure row never joins a mean.
+      record(at + 4, 'm1', undefined, 'failure'),
+    ])
+    const totals = summary.byModel[0]!.totals
+    expect(totals.perfStreamCount).toBe(2)
+    expect(totals.perfLatencyMsSum).toBe(2000 + 1500 + 3000)
+    expect(totals.perfLatencyCount).toBe(3)
+    expect(totals.perfStreamTpsSum).toBeCloseTo(100 / 1.5 + 50 / 0.5, 6)
+    expect(totals.perfStreamFirstMsSum).toBe(500 + 1000)
+  })
+
+  it('leaves the performance keys unwritten when no record carries timing', () => {
+    const summary = summarizeRecords([
+      record(at, 'm1', { input: 1, output: 1 }),
+      record(at + 1, 'm1', undefined, 'failure'),
+    ])
+    const totals = summary.byModel[0]!.totals
+    expect(totals.perfStreamCount).toBeUndefined()
+    expect(totals.perfLatencyMsSum).toBeUndefined()
+    expect(totals.perfLatencyCount).toBeUndefined()
+  })
+
+  it('merges across summaries and survives the rate-row re-fold of filterSummary', () => {
+    const left = summarizeRecords([{ ...record(at, 'm1', { input: 10, output: 100 }), ...stream }])
+    const right = summarizeRecords([
+      { ...record(at + 86_400_000, 'm1', { input: 10, output: 100 }), ...stream },
+      record(at + 86_400_000 + 1, 'm2', { input: 1, output: 1 }),
+    ])
+    const merged = mergeSummaries(left, right)
+    expect(merged.byModel.find(row => row.model === 'm1')!.totals.perfStreamCount).toBe(2)
+    // filterSummary rebuilds byModel from the rate rows — the accumulators
+    // survive because they ride inside every cell's totals.
+    const filtered = filterSummary({ dataDir: '/x', ...merged }, '2026-01-16', '2026-01-16')
+    const cell = filtered.byModel.find(row => row.model === 'm1')!.totals
+    expect(cell.perfStreamCount).toBe(1)
+    expect(cell.perfLatencyMsSum).toBe(2000)
+    expect(cell.perfLatencyCount).toBe(1)
+    expect(merged.byModel.find(row => row.model === 'm1')!.totals.perfLatencyCount).toBe(2)
+  })
+
+  it('derives per-model perf means at the cost layer, over the folded family', () => {
+    const summary = summarizeRecords([
+      { ...record(at, 'auto/GLM-5.3', { input: 10, output: 100 }), responseModel: 'glm-5.3', ...stream },
+      { ...record(at + 1, 'glm-5.3', { input: 10, output: 50 }), latencyMs: 1500, firstTokenLatencyMs: 1000 },
+      // One-shot latency joins only the request-latency mean.
+      { ...record(at + 2, 'glm-5.3', { input: 10, output: 500 }), latencyMs: 3000, firstTokenLatencyMs: 2900 },
+      // No streaming samples → no perf at all.
+      record(at + 3, 'cold-model', { input: 1, output: 1 }),
+    ])
+    // An empty pricing table: perf derives from the timing accumulators,
+    // never from prices — the rows all read unpriced and that is fine.
+    const costed = attachCosts({ dataDir: '/x', ...summary }, {})
+    const glm = costed.byModel.find(row => row.model === 'glm-5.3')!
+    expect(glm.perf).toEqual({
+      tokensPerSec: (100 / 1.5 + 50 / 0.5) / 2,
+      firstTokenMs: (500 + 1000) / 2,
+      latencyMs: (2000 + 1500 + 3000) / 3,
+      timedRequests: 3,
+      samples: 2,
+    })
+    expect(costed.byModel.find(row => row.model === 'cold-model')!.perf).toBeUndefined()
+  })
+
+  it('excludes untimed and invalid-timing requests from every performance mean and count', () => {
+    const timed = Array.from({ length: 5 }, (_, i) => ({
+      ...record(at + i, 'm1', { input: 10, output: 100 }),
+      latencyMs: 10_000, firstTokenLatencyMs: 1000,
+    }))
+    const untimed = Array.from({ length: 95 }, (_, i) => record(at + 5 + i, 'm1', { input: 10, output: 100 }))
+    const summary = summarizeRecords([
+      ...timed, ...untimed,
+      { ...record(at + 100, 'm1'), latencyMs: -1 },
+      { ...record(at + 101, 'm1'), latencyMs: NaN },
+      { ...record(at + 102, 'm1', undefined, 'failure'), latencyMs: 10_000 },
+    ])
+    const model = attachCosts({ dataDir: '/x', ...summary }, {}).byModel[0]!
+    expect(model.totals.requests).toBe(102)
+    expect(model.perf).toEqual({
+      tokensPerSec: 100 / 9, firstTokenMs: 1000, latencyMs: 10_000,
+      samples: 5, timedRequests: 5,
+    })
+  })
+})
+
 describe('mergeSummaries', () => {
   it('adds totals and folds per-day and per-model rows by key', () => {
     const dayOne = new Date(2026, 0, 15, 12).getTime()
@@ -559,6 +658,43 @@ describe('buildSummary rollup (cold/hot split)', () => {
     const summary = await buildSummary(dir, today)
     expect(summary.total.requests).toBe(2)
     await expect(readRollup(dir)).resolves.toMatchObject({ upto: '2026-01-15', total: { requests: 2 } })
+  })
+
+  it.each([undefined, 2])('rebuilds aggregate format %s so valid timing counts backfill over history', async (aggregateFormat) => {
+    const dir = await mkdtemp(join(tmpdir(), 'token-usage-split-'))
+    const frozenAt = new Date(2026, 0, 15, 12).getTime()
+    await writeDayFile(dir, 'usage-2026-01-15.jsonl', [
+      { ...record(frozenAt, 'deepseek-chat', { input: 10, output: 100 }), latencyMs: 2000, firstTokenLatencyMs: 500 },
+    ])
+    await writeDayFile(dir, 'usage-2026-01-16.jsonl', [record(new Date(2026, 0, 16, 12).getTime(), 'deepseek-chat')])
+    // A rollup written before the performance feature existed: shape 1 —
+    // no aggregateFormat key, no timing accumulators, valid otherwise.
+    await writeFile(join(dir, 'rollup.json'), JSON.stringify({
+      upto: '2026-01-15',
+      ...summarizeRecords([record(frozenAt, 'deepseek-chat', { input: 10, output: 100 })]),
+      ...(aggregateFormat === undefined ? {} : { aggregateFormat }),
+    }))
+    await buildSummary(dir, today)
+    const stored = await readRollup(dir)
+    // The rebuild rewrites the rollup under the new format with the timing
+    // the day files carried all along.
+    expect(stored?.aggregateFormat).toBe(ROLLUP_AGGREGATE_FORMAT)
+    expect(stored?.total.perfStreamCount).toBe(1)
+    expect(stored?.total.perfLatencyCount).toBe(1)
+  })
+
+  it('keeps a current-format rollup: absorbed files stay unread, timing intact', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'token-usage-split-'))
+    await writeDayFile(dir, 'usage-2026-01-15.jsonl', [
+      { ...record(new Date(2026, 0, 15, 12).getTime(), 'deepseek-chat', { input: 10, output: 100 }), latencyMs: 2000, firstTokenLatencyMs: 500 },
+    ])
+    await writeDayFile(dir, 'usage-2026-01-16.jsonl', [record(new Date(2026, 0, 16, 12).getTime(), 'deepseek-chat')])
+    await buildSummary(dir, today)
+    // Corrupt an absorbed frozen file: a current-format rollup must serve
+    // from the rollup alone and keep its backfilled timing.
+    await writeFile(join(dir, 'usage-2026-01-15.jsonl'), 'garbage that would parse to nothing')
+    const summary = await buildSummary(dir, today)
+    expect(summary.total.perfStreamCount).toBe(1)
   })
 
   it('folds a yesterday-keyed record from today’s file into yesterday’s bucket', async () => {

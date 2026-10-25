@@ -1,35 +1,33 @@
 // @vitest-environment jsdom
 /**
- * Runtime-overhead tab content: the settings page's read-only breakdown of the
- * auxiliary (bypass) model requests, rendered inside the detail dimension
- * switch. Pins the visible contract — kind rows are collapsed by default and
- * their per-model detail lines appear only through the kind's disclosure
- * toggle, the rows carry the same columns, an unavailable pricing table
- * renders the cost cells as a dash, and a summary without auxiliary data
- * (including an older host payload with no `aux` field at all) shows the
- * tab's empty hint.
+ * Runtime-overhead card rows: the settings page's read-only breakdown of the
+ * auxiliary (bypass) model requests, in the dashboards' row shape. Pins the
+ * visible contract — kind rows are collapsed by default and their per-model
+ * detail lines appear only through the kind's disclosure toggle, each row
+ * reads calls · cost · tokens, an unavailable pricing table dashes every
+ * cost, and a summary without auxiliary data (including an older host
+ * payload with no `aux` field at all) shows the empty hint.
  */
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
-import { AuxOverheadSection } from '../src/client/TokenUsageSection.tsx'
+import { OverheadRows } from '../src/client/OverheadRows.tsx'
 import { formatCost, formatTokens } from '../src/client/format.ts'
 import type { CurrencyView } from '../src/client/format.ts'
 import { zh } from '../src/client/locales.ts'
 import type { AuxSummary, UsageTotals } from '../src/wire.ts'
 
-// TokenUsageSection imports the shell primitives (CSS-backed); the content
-// under test never renders them, so a bare stand-in keeps the module loadable.
-vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
-  Toast: ({ text }: { text: string }) => <div role="alert">{text}</div>,
-  IconWarningOutlineRegular: () => <span data-testid="icon-warning" />,
-  Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-}))
-
 const VIEW: CurrencyView = { symbol: '￥', rate: 1 }
 
-/** Locale lookup over the real zh dictionary (the key set source of truth). */
-const t = ((key: keyof typeof zh) => zh[key]) as unknown as TranslateNS<'token-usage'>
+/** Locale lookup over the real zh dictionary (the key set source of truth),
+ * with the `{name}` interpolation the real shell t applies. */
+const t = ((key: keyof typeof zh, vars?: Record<string, string>) => {
+  let text: string = zh[key]
+  if (vars !== undefined) {
+    for (const [name, value] of Object.entries(vars)) text = text.replace(`{${name}}`, value)
+  }
+  return text
+}) as unknown as TranslateNS<'token-usage'>
 
 function totals(requests: number, inputTokens: number, outputTokens: number): UsageTotals {
   return { requests, inputTokens, outputTokens, cacheReadTokens: 0, cacheWriteTokens: 0 }
@@ -58,74 +56,71 @@ const AUX: AuxSummary = {
   ],
 }
 
-describe('AuxOverheadSection', () => {
+describe('OverheadRows', () => {
   afterEach(() => { cleanup() })
 
-  it('collapses each kind by default and reveals its per-model lines through the toggle', () => {
-    render(<AuxOverheadSection aux={AUX} costState="ready" view={VIEW} t={t} />)
-    const table = screen.getByRole('table', { name: zh['aux.tab'] })
-    // Collapsed by default: header + two kind rows + the total row; no
-    // per-model line is visible yet.
-    const rows = within(table).getAllByRole('row')
-    expect(rows).toHaveLength(4)
-    expect(within(table).queryByText('deepseek-flash')).toBeNull()
-    expect(within(table).queryByText('glm-4.7')).toBeNull()
-    // The kind row carries the aggregate figures: 2 calls, priced cost,
-    // 110 total tokens.
-    const autoReview = rows.find(row => row.textContent?.includes('自动审查'))!
-    expect(within(autoReview).getByText('2')).toBeTruthy()
-    expect(within(autoReview).getByText(formatCost(0.1, VIEW))).toBeTruthy()
-    expect(within(autoReview).getByText(formatTokens(110))).toBeTruthy()
-    // Total row: 3 calls and the summed cost.
-    const totalRow = rows.find(row => row.textContent?.includes(zh['aux.total']))!
-    expect(within(totalRow).getByText('3')).toBeTruthy()
-    expect(within(totalRow).getByText(formatCost(0.123, VIEW))).toBeTruthy()
-    // Activating the kind's disclosure reveals its per-model line with the
-    // same figures; `aria-expanded` tracks the state.
-    const toggle = within(table).getByRole('button', { name: '自动审查' })
-    expect(toggle.getAttribute('aria-expanded')).toBe('false')
-    fireEvent.click(toggle)
+  it('expands each kind by default and folds its per-model lines through the toggle', () => {
+    render(<OverheadRows aux={AUX} costState="ready" view={VIEW} t={t} />)
+    const list = screen.getByRole('list', { name: zh['aux.tab'] })
+    // Expanded by default (the user's pick): every kind's per-model line
+    // shows beneath its aggregate row.
+    const kinds = within(list).getAllByRole('listitem')
+    expect(kinds).toHaveLength(2)
+    expect(within(list).getByText('deepseek-flash')).toBeTruthy()
+    expect(within(list).getByText('glm-4.7')).toBeTruthy()
+    // The kind row carries the aggregate: calls · cost · tokens (the row's
+    // text nodes interleave the separators, so assert on the joined text).
+    const autoReview = kinds[0]!
+    expect(autoReview.textContent).toContain(zh['aux.requestCount'].replace('{count}', '2'))
+    expect(autoReview.textContent).toContain(formatCost(0.1, VIEW))
+    expect(autoReview.textContent).toContain(formatTokens(110))
+    // Activating the disclosure folds its per-model line away;
+    // `aria-expanded` tracks the state.
+    const toggle = within(autoReview).getByRole('button', { name: zh['aux.kind.auto-review'] })
     expect(toggle.getAttribute('aria-expanded')).toBe('true')
-    const modelRow = within(table).getAllByRole('row').find(row => row.textContent?.includes('deepseek-flash'))!
-    expect(within(modelRow).getByText('2')).toBeTruthy()
-    expect(within(modelRow).getByText(formatCost(0.1, VIEW))).toBeTruthy()
-    // The other kind stays collapsed until its own toggle fires.
-    expect(within(table).queryByText('glm-4.7')).toBeNull()
-    // A second activation collapses the model line again.
-    fireEvent.click(within(table).getByRole('button', { name: '自动审查' }))
-    expect(within(table).queryByText('deepseek-flash')).toBeNull()
+    fireEvent.click(toggle)
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(within(list).queryByText('deepseek-flash')).toBeNull()
+    expect(within(list).getByText('glm-4.7')).toBeTruthy()
+    // A second activation re-expands the model line.
+    fireEvent.click(within(list).getByRole('button', { name: zh['aux.kind.auto-review'] }))
+    expect(within(list).getByText('deepseek-flash')).toBeTruthy()
   })
 
-  it('expands every kind independently, each model line sharing the kind row columns', () => {
-    render(<AuxOverheadSection aux={AUX} costState="ready" view={VIEW} t={t} />)
-    const table = screen.getByRole('table', { name: zh['aux.tab'] })
-    fireEvent.click(within(table).getByRole('button', { name: '自动审查' }))
-    fireEvent.click(within(table).getByRole('button', { name: '推理翻译' }))
-    // Header + two kind rows + their two per-model lines + the total row.
-    const rows = within(table).getAllByRole('row')
-    expect(rows).toHaveLength(6)
-    expect(within(table).getByText('deepseek-flash')).toBeTruthy()
-    expect(within(table).getByText('glm-4.7')).toBeTruthy()
-    expect(within(table).getByText(zh['aux.total'])).toBeTruthy()
+  it('folds every kind independently through its own toggle', () => {
+    render(<OverheadRows aux={AUX} costState="ready" view={VIEW} t={t} />)
+    fireEvent.click(screen.getByRole('button', { name: zh['aux.kind.auto-review'] }))
+    const list = screen.getByRole('list', { name: zh['aux.tab'] })
+    expect(within(list).queryByText('deepseek-flash')).toBeNull()
+    expect(within(list).getByText('glm-4.7')).toBeTruthy()
+    // The total line sits beneath the list: calls, then cost · tokens.
+    expect(screen.getByText(zh['aux.totalCount'].replace('{count}', '3'))).toBeTruthy()
+    const asumText = screen.getByText(zh['aux.totalCount'].replace('{count}', '3')).parentElement!.textContent
+    expect(asumText).toContain(formatCost(0.123, VIEW))
+    expect(asumText).toContain(formatTokens(165))
   })
 
   it('renders the empty hint when there is no auxiliary data or the host predates the field', () => {
-    const empty = render(<AuxOverheadSection aux={{ ...AUX, total: totals(0, 0, 0), byKind: [] }} costState="ready" view={VIEW} t={t} />)
+    const empty = render(<OverheadRows aux={{ ...AUX, total: totals(0, 0, 0), byKind: [] }} costState="ready" view={VIEW} t={t} />)
     expect(screen.getByText(zh['aux.empty'])).toBeTruthy()
-    expect(screen.queryByRole('table', { name: zh['aux.tab'] })).toBeNull()
+    expect(screen.queryByRole('list', { name: zh['aux.tab'] })).toBeNull()
     empty.unmount()
-    render(<AuxOverheadSection aux={undefined} costState="ready" view={VIEW} t={t} />)
+    render(<OverheadRows aux={undefined} costState="ready" view={VIEW} t={t} />)
     expect(screen.getByText(zh['aux.empty'])).toBeTruthy()
   })
 
-  it('renders a dash for every cost cell when pricing is unavailable', () => {
-    render(<AuxOverheadSection aux={AUX} costState="pricing-unavailable" view={VIEW} t={t} />)
-    // Collapsed: the two kind rows and the total row.
+  it('dashes every cost when pricing is unavailable', () => {
+    render(<OverheadRows aux={AUX} costState="pricing-unavailable" view={VIEW} t={t} />)
+    // Both kind rows and the total line read a dash for their cost.
     expect(screen.getAllByText('—')).toHaveLength(3)
-    // Expanding every kind adds its per-model dash cells too.
-    fireEvent.click(screen.getByRole('button', { name: '自动审查' }))
-    fireEvent.click(screen.getByRole('button', { name: '推理翻译' }))
-    expect(screen.getAllByText('—')).toHaveLength(5)
+    // Expanding every kind dashes the per-model costs too, and no priced
+    // figure survives anywhere.
+    fireEvent.click(screen.getByRole('button', { name: zh['aux.kind.auto-review'] }))
+    fireEvent.click(screen.getByRole('button', { name: zh['aux.kind.translation'] }))
+    const list = screen.getByRole('list', { name: zh['aux.tab'] })
+    for (const kind of within(list).getAllByRole('listitem')) {
+      expect(kind.textContent).toContain('—')
+    }
     expect(screen.queryByText(formatCost(0.1, VIEW))).toBeNull()
   })
 })

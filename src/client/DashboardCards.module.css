@@ -1,0 +1,98 @@
+/* The main page's four-card dashboard: two rows of equal-height panels
+ * (projects | sessions, models | runtime overhead), each panel a card head
+ * over the shared flat row list. Tokens only, no literal colors. */
+
+/* Two equal columns; the panels stretch to the row's tallest card, and a
+ * tall list scrolls inside its panel instead of growing the card. */
+.grid2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+/* Use the available main-column width, not the viewport: sidebars and
+ * split panes can leave a desktop window with a narrow content column. */
+@container (max-width: 959px) {
+  .grid2 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.panel {
+  background: var(--dsw-alias-fill-container, transparent);
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 8px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  min-height: 0;
+}
+
+.panelHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+/* Head halves: the title+count cluster and the controls cluster (the
+ * models card carries the sort control and the performance toggle
+ * side by side). */
+.panelHeadLeft {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.panelHeadRight {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* The sort control's seat while the performance view is up: kept
+ * invisible so the head does not jump when the toggle flips. */
+.headHidden {
+  visibility: hidden;
+}
+
+.panelTitle {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.panelCount {
+  font-size: 12px;
+  color: var(--dsw-alias-label-tertiary);
+  font-weight: 400;
+  margin-left: 6px;
+}
+
+/* The overhead card's flash: a brief outline while the metric card's pill
+ * scroll lands here (dropped by the section's timer). */
+.flash {
+  outline: 2px solid color-mix(in srgb, var(--dsw-alias-label-primary) 33%, transparent);
+  outline-offset: 2px;
+}
+
+@container (max-width: 480px) {
+  .panel {
+    padding: 12px;
+  }
+
+  .panelHead {
+    flex-wrap: wrap;
+  }
+
+  .panelHeadRight {
+    flex-wrap: wrap;
+  }
+}

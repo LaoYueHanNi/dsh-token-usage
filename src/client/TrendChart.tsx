@@ -19,7 +19,7 @@
  * @module token-usage/client/TrendChart
  */
 
-import { useId, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import type { MouseEvent, ReactNode } from 'react'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { RequestPoint, UsageDayRow, UsageHourRow } from '../wire.ts'
@@ -41,7 +41,11 @@ export type { TrendBucket } from './trend-chart/bucket.ts'
 export type { ChartSeries, ScaleResult } from './trend-chart/index.ts'
 
 
-/** SVG canvas metrics; the element scales to the section width via viewBox. */
+/** SVG canvas metrics. The viewBox width tracks the element's measured
+ * width (ResizeObserver; WIDTH is the fallback where measuring is
+ * unavailable), so the chart fills wide columns at its real scale — a
+ * fixed viewBox would stretch a 1200px column 1.5×, blowing up the
+ * height and the 11px type with it. The height and the type stay fixed. */
 const WIDTH = 800
 const HEIGHT = 190
 const TOP = 12
@@ -127,6 +131,22 @@ export function TrendChart({ rows, hours, requests, from, to, mode = 'interval',
   const isLight = useIsLightMode()
   const gradientId = useId()
   const [active, setActive] = useState<number | null>(null)
+  // The measured canvas width: the viewBox matches it 1:1, so the fixed
+  // 11px type and 190px height render at their true size on any surface.
+  const svgRef = useRef<SVGSVGElement | null>(null)
+  const [width, setWidth] = useState(WIDTH)
+  useEffect(() => {
+    const el = svgRef.current
+    // jsdom has no ResizeObserver; the 800-wide fallback stands there.
+    if (el === null || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(entries => {
+      const next = Math.round(entries[0]?.contentRect.width ?? 0)
+      // Ignore sub-pixel churn; a 0 (display:none) measurement keeps the last width.
+      setWidth(current => (next > 0 && Math.abs(next - current) > 1 ? next : current))
+    })
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [])
 
   const base = buildChartPoints({ rows, hours, requests, from, to })
   if (base === null) {
@@ -146,10 +166,10 @@ export function TrendChart({ rows, hours, requests, from, to, mode = 'interval',
   }))
   const { top, ticks } = tickValues(Math.max(...points.map(p => p.tokens)))
   const innerHeight = HEIGHT - TOP - BOTTOM - X_LABELS
-  // scaleSeries returns absolute viewBox coordinates already offset by LEFT,
+  // scaleSeries returns absolute canvas coordinates already offset by LEFT,
   // so the dots / path / x-axis labels can plug xs[i] straight into the
   // SVG `cx`/`x` attributes without re-adding the y-axis margin.
-  const { xs, xEnds, innerWidth } = scaleSeries(series, LEFT, WIDTH - RIGHT)
+  const { xs, xEnds, innerWidth } = scaleSeries(series, LEFT, width - RIGHT)
   const radius = dotRadius(points.length)
   const activePoint = active === null ? null : points[active] ?? null
   const y = (tokens: number): number => TOP + innerHeight - (tokens / top) * innerHeight
@@ -195,7 +215,7 @@ export function TrendChart({ rows, hours, requests, from, to, mode = 'interval',
     if (points.length <= 1) return
     const rect = event.currentTarget.getBoundingClientRect()
     if (rect.width <= 0) return
-    const svgX = ((event.clientX - rect.left) / rect.width) * WIDTH
+    const svgX = ((event.clientX - rect.left) / rect.width) * width
     let closest = 0
     let minDiff = Math.abs(xs[0]! - svgX)
     for (let i = 1; i < xs.length; i += 1) {
@@ -212,7 +232,8 @@ export function TrendChart({ rows, hours, requests, from, to, mode = 'interval',
     <svg
       role="img"
       aria-label={chartAria}
-      viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
+      viewBox={`0 0 ${width} ${HEIGHT}`}
+      ref={svgRef}
       className={`${styles.chart} ${isLight ? styles.chartLight : ''}`.trim()}
       data-theme={isLight ? 'light' : 'dark'}
       onMouseMove={handleMouseMove}
@@ -241,13 +262,13 @@ export function TrendChart({ rows, hours, requests, from, to, mode = 'interval',
       ) : null}
       {ticks.map(tick => (
         <g key={tick}>
-          <line x1={LEFT} y1={y(tick)} x2={WIDTH - RIGHT} y2={y(tick)} className={styles.grid} />
+          <line x1={LEFT} y1={y(tick)} x2={width - RIGHT} y2={y(tick)} className={styles.grid} />
           <text x={LEFT - 6} y={y(tick) + 3} textAnchor="end" className={styles.tick}>
             {formatTokens(tick)}
           </text>
         </g>
       ))}
-      <line x1={LEFT} y1={y(0)} x2={WIDTH - RIGHT} y2={y(0)} className={styles.axis} />
+      <line x1={LEFT} y1={y(0)} x2={width - RIGHT} y2={y(0)} className={styles.axis} />
       {isLight && area !== '' ? <path d={area} fill={`url(#${gradientId})`} className={styles.area} /> : null}
       <path d={path} className={styles.line} />
       {/* Declutter: render dots only when focused/hovered, or for a lone point */}
@@ -312,7 +333,7 @@ export function TrendChart({ rows, hours, requests, from, to, mode = 'interval',
           const charWidth = 6.2
           const labelWidth = label.length * charWidth + 14
           const center = xs[active!]!
-          const left = Math.min(Math.max(center - labelWidth / 2, LEFT), WIDTH - RIGHT - labelWidth)
+          const left = Math.min(Math.max(center - labelWidth / 2, LEFT), width - RIGHT - labelWidth)
           const labelY = Math.max(y(activePoint.tokens) - 12, TOP + 8)
           return (
             <g className={styles.pointLabel} pointerEvents="none">

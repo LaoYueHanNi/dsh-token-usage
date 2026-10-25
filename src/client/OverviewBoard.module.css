@@ -1,0 +1,91 @@
+/* The dashboards' shared overview board: the metric grid (composite lead
+ * card spanning two tracks), the trend card. Tokens only, no literal
+ * colors — the demo's whites become color-mixes over the label tokens. */
+
+/* Inline-size container so the metric row can reflow to two rows when the
+ * column narrows below the nine-track floor (a narrow window, not a
+ * breakpoint the viewport can express — the sidebar eats into the page). */
+.board {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  container-type: inline-size;
+}
+
+/* Nine tracks so the eight cards sit in one row (the page's wide column):
+ * the composite lead card takes two, the rest one each. minmax(0, 1fr)
+ * lets every tile shrink without pushing the row wide. */
+.metricGrid {
+  display: grid;
+  grid-template-columns: repeat(9, minmax(0, 1fr));
+  gap: 8px;
+}
+
+/* Narrow page: five tracks — nine grid slots (the lead card's two plus
+ * seven singles) wrap into exactly two rows. Nine
+ * tracks below ~100px per tile truncates every label and overlaps the
+ * figures. */
+@container (max-width: 1179px) {
+  .metricGrid {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+}
+
+/* The panel's narrow body: the section's old two-rows-of-four layout —
+ * four tracks, the eight cards wrapping naturally; the composite lead
+ * card takes a single cell there (its pills carry the extra counts).
+ * Grid stretch keeps each row equal-height: the lead card's extras ride
+ * within its two lines (overhead pill on the label row, the failure
+ * count as bare text beside the value) so nothing lifts the row. */
+.metricGridCompact {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-auto-rows: 1fr;
+  gap: 6px;
+}
+
+/* The wrapper of the composite lead card: the grid item itself (spanning
+ * two tracks), with the stat card filling it. It must NOT be
+ * `display: contents` — a contents box generates no box of its own, so
+ * the span would have no host and the lead card would render one track
+ * wide, wrapping its pills. */
+.leadSpan {
+  grid-column: span 2;
+  min-width: 0;
+}
+
+/* The panel's compact grid keeps the wrapper transparent: no span there,
+ * the card is the item. */
+.leadSpanCompact {
+  display: contents;
+}
+
+/* The trend card: the same tile chrome as the metric cards; the title is
+ * the whole head now — a single-day window plots hours, a wider one the
+ * daily rows, no pick in either. */
+.trendCard {
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 8px;
+  background: var(--dsw-alias-fill-container, transparent);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.trendTitle {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@container (max-width: 600px) {
+  .metricGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

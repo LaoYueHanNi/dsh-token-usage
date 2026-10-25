@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Token 用量 · 大屏 Dashboard Demo</title>
+<style>
+  /* ===== 设计 token：与 DeepSeek Harness 官方 --dsw-alias-* 深色主题逐值对齐
+     （色值采样自运行中的宿主页面；纯中性灰阶，白色即强调，彩色只用于状态语义）===== */
+  :root {
+    --bg: #151517;            /* --dsw-alias-bg-base */
+    --card: #232324;          /* --dsw-alias-bg-layer-1 */
+    --card-raised: #2c2c2e;   /* --dsw-alias-bg-layer-2 / settings-card-fill */
+    --border: #ffffff1f;      /* --dsw-alias-border-l2 */
+    --border-soft: #ffffff0f; /* --dsw-alias-border-l1 */
+    --text-1: #f9fafb;        /* --dsw-alias-label-primary */
+    --text-2: #cfd3d6;        /* --dsw-alias-label-secondary */
+    --text-3: #81858c;        /* --dsw-alias-label-caption */
+    --hover: #ffffff14;       /* --dsw-alias-interactive-bg-hover */
+    --active: #ffffff24;      /* --dsw-alias-interactive-bg-active */
+    --fg-bar: rgba(249, 250, 251, .52);
+    --fg-bar-strong: rgba(249, 250, 251, .85);
+    --track: #ffffff0f;
+    --green: #22c55e;         /* --dsw-alias-state-success-primary */
+    --red: #f25a5a;           /* --dsw-alias-state-error-primary */
+    --amber: #f59e0b;         /* --dsw-alias-state-warn-primary */
+    --heat-0: #ffffff0a;
+    --heat-1: #ffffff1c;
+    --heat-2: #ffffff38;
+    --heat-3: #ffffff63;
+    --heat-4: #ffffff9c;
+    --radius: 12px;           /* --dsw-radius-md */
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { color-scheme: dark; }
+  body {
+    background: var(--bg);
+    color: var(--text-1);
+    font: 14px/1.55 system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    font-variant-numeric: tabular-nums;
+    padding: 28px clamp(20px, 3.5vw, 48px) 56px;
+  }
+  .shell { max-width: 1280px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; }
+
+  /* ===== 顶部：标题行 + 过滤条 ===== */
+  .head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+  .head h1 { font-size: 20px; font-weight: 600; letter-spacing: .01em; }
+  .head .dir { color: var(--text-3); font-size: 12px; }
+  .filterbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .seg, .btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    border: 1px solid var(--border); background: var(--card-raised);
+    color: var(--text-2); font: inherit; font-size: 12.5px;
+    padding: 4px 12px; border-radius: 7px; cursor: pointer;
+  }
+  .btn:hover, .seg:hover { color: var(--text-1); border-color: #333a48; }
+  .seg.primary { color: var(--text-1); }
+
+  /* ===== 卡片体系 ===== */
+  .card {
+    background: var(--card); border: 1px solid var(--border-soft);
+    border-radius: var(--radius); padding: 16px 18px 18px;
+    display: flex; flex-direction: column; gap: 12px; min-width: 0;
+  }
+  .card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .card-title { font-size: 13px; font-weight: 600; color: var(--text-1); }
+  .card-note { font-size: 11.5px; color: var(--text-3); }
+  .src { font-size: 10.5px; color: var(--text-3); border: 1px solid var(--border-soft); border-radius: 5px; padding: 1px 6px; cursor: help; white-space: nowrap; }
+
+  /* ===== 指标条 ===== */
+  .metrics { display: grid; grid-template-columns: repeat(6, 1fr); gap: 14px; }
+  .metric { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+  .metric .v { font-size: 24px; font-weight: 650; letter-spacing: -.01em; }
+  .metric .v small { font-size: 13px; font-weight: 500; color: var(--text-2); margin-left: 2px; }
+  .metric .k { font-size: 12px; color: var(--text-2); }
+  .metric .sub { font-size: 11.5px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .metric .sub .pill {
+    display: inline-block; border-radius: 5px; padding: 0 5px; margin-left: 4px;
+    font-size: 10.5px; background: color-mix(in srgb, var(--red) 16%, transparent); color: var(--red);
+  }
+  .metric .sub .pill.green { background: color-mix(in srgb, var(--green) 14%, transparent); color: var(--green); }
+
+  /* ===== 两列网格 ===== */
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; }
+
+  /* ===== 横条列表（项目 / 模型）===== */
+  .barlist { display: flex; flex-direction: column; }
+  .barrow {
+    display: grid; grid-template-columns: 132px 1fr auto; align-items: center;
+    gap: 12px; padding: 7px 0; border-bottom: 1px solid var(--border-soft);
+  }
+  .barrow:last-of-type { border-bottom: none; }
+  .barrow .name { font-size: 13px; color: var(--text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .barrow .track { height: 8px; border-radius: 4px; background: var(--track); overflow: hidden; }
+  .barrow .fill { height: 100%; border-radius: 4px; background: var(--fg-bar); }
+  .barrow .nums { display: flex; gap: 14px; align-items: baseline; justify-content: flex-end; }
+  .barrow .tk { font-size: 13px; color: var(--text-1); min-width: 52px; text-align: right; }
+  .barrow .cost { font-size: 12.5px; color: var(--green); min-width: 74px; text-align: right; }
+  .barrow .cost.zero { color: var(--amber); }
+  .more-link { margin-top: 10px; font-size: 12px; color: var(--text-3); cursor: pointer; align-self: flex-start; }
+  .more-link:hover { color: var(--text-2); }
+
+  /* ===== 热力图 ===== */
+  .heatwrap { display: flex; flex-direction: column; gap: 8px; }
+  .heat { display: grid; grid-template-columns: 34px repeat(24, 1fr); gap: 3px; align-items: center; }
+  .heat .rl { font-size: 11px; color: var(--text-3); }
+  .heat .cell { aspect-ratio: 1; border-radius: 3px; background: var(--heat-0); cursor: default; position: relative; }
+  .heat .c1 { background: var(--heat-1); } .heat .c2 { background: var(--heat-2); }
+  .heat .c3 { background: var(--heat-3); } .heat .c4 { background: var(--heat-4); }
+  .heat .colhead { font-size: 10.5px; color: var(--text-3); text-align: left; }
+  .heatfoot { display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: var(--text-2); }
+  .legend { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--text-3); }
+  .legend i { width: 11px; height: 11px; border-radius: 3px; display: inline-block; }
+
+  /* ===== 最耗会话 ===== */
+  .seggroup { display: inline-flex; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; }
+  .seggroup button {
+    border: none; background: transparent; color: var(--text-3);
+    font: inherit; font-size: 11.5px; padding: 3px 10px; cursor: pointer;
+  }
+  .seggroup button + button { border-left: 1px solid var(--border); }
+  .seggroup button.on { background: var(--active); color: var(--text-1); font-weight: 550; }
+  .sesslist { display: flex; flex-direction: column; }
+  .sessrow { display: flex; gap: 10px; align-items: flex-start; padding: 8px 0; border-bottom: 1px solid var(--border-soft); cursor: pointer; }
+  .sessrow:last-child { border-bottom: none; }
+  .sessrow:hover { background: var(--hover); margin: 0 -8px; padding: 8px; border-radius: 6px; }
+  .sessrow .ico { flex: none; width: 22px; height: 22px; border-radius: 6px; display: grid; place-items: center; font-size: 12px; margin-top: 1px; }
+  .sessrow .body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+  .sessrow .t { font-size: 13px; font-weight: 550; color: var(--text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sessrow .s { font-size: 11.5px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
+  .sessrow .val { font-size: 13px; color: var(--text-1); align-self: center; }
+  .sessrow .dot { flex: none; width: 6px; height: 6px; border-radius: 3px; background: var(--text-3); margin-top: 9px; }
+  .sessrow.harness .dot { background: var(--fg-bar-strong); }
+
+  /* ===== 直方图（会话规模）===== */
+  .hist { display: flex; align-items: flex-end; gap: 14px; height: 150px; padding: 0 6px; }
+  .hist .col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6px; height: 100%; justify-content: flex-end; }
+  .hist .bar { width: 100%; max-width: 52px; background: var(--fg-bar); border-radius: 6px 6px 2px 2px; }
+  .hist .n { font-size: 11.5px; color: var(--text-2); }
+  .hist .lbl { font-size: 11.5px; color: var(--text-3); }
+  .histfoot { font-size: 11.5px; color: var(--text-3); }
+
+  /* ===== 辅助请求构成 ===== */
+  .auxlist { display: flex; flex-direction: column; }
+  .auxrow { display: grid; grid-template-columns: 110px 1fr 120px; gap: 12px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--border-soft); }
+  .auxrow:last-child { border-bottom: none; }
+  .auxrow .kind { font-size: 13px; color: var(--text-1); }
+  .auxrow .kind small { display: block; font-size: 11px; color: var(--text-3); }
+  .auxrow .track { height: 8px; border-radius: 4px; background: var(--track); overflow: hidden; }
+  .auxrow .fill { height: 100%; background: var(--fg-bar); border-radius: 4px; }
+  .auxrow .nums { text-align: right; font-size: 12.5px; color: var(--text-2); }
+  .auxrow .nums b { color: var(--text-1); font-weight: 600; display: block; }
+
+  /* ===== 趋势图 ===== */
+  .trend svg { width: 100%; height: 190px; display: block; }
+
+  /* ===== 明细表 ===== */
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th { text-align: right; font-weight: 550; color: var(--text-3); padding: 6px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; padding-left: 4px; }
+  td { text-align: right; padding: 7px 10px; border-bottom: 1px solid var(--border-soft); color: var(--text-2); white-space: nowrap; }
+  td:first-child { color: var(--text-1); font-weight: 500; }
+  tr:last-child td { border-bottom: none; }
+  td .cost { color: var(--green); }
+  td .fail { color: var(--red); }
+  .tabbar { display: flex; gap: 2px; background: var(--hover); border-radius: 8px; padding: 2px; width: fit-content; }
+  .tabbar button { border: none; background: transparent; color: var(--text-3); font: inherit; font-size: 12px; padding: 4px 14px; border-radius: 6px; cursor: pointer; }
+  .tabbar button.on { background: var(--active); color: var(--text-1); font-weight: 550; }
+
+  /* ===== 响应式 ===== */
+  @media (max-width: 1080px) {
+    .metrics { grid-template-columns: repeat(3, 1fr); }
+    .grid2 { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 640px) { .metrics { grid-template-columns: repeat(2, 1fr); } }
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <!-- 顶部 -->
+  <div class="head">
+    <h1>Token 用量 <span class="dir">D:\document\dsh-token-usage</span></h1>
+    <div class="filterbar">
+      <button class="seg primary">近 1 天 ▾</button>
+      <button class="seg">2026-10-24 至 2026-10-24</button>
+      <button class="seg">全部模型 ▾</button>
+      <button class="btn">定价表</button>
+    </div>
+  </div>
+
+  <!-- 指标条 -->
+  <div class="metrics">
+    <div class="card metric">
+      <span class="v">1,086<small>次</small></span>
+      <span class="k">模型请求</span>
+      <span class="sub"><span class="pill">失败 6</span>成功 1,080 · 失败率 0.55%</span>
+    </div>
+    <div class="card metric">
+      <span class="v">¥107.70</span>
+      <span class="k">费用</span>
+      <span class="sub">3 个模型计价</span>
+    </div>
+    <div class="card metric">
+      <span class="v">131M</span>
+      <span class="k">总 token</span>
+      <span class="sub">输入 2.6M · 输出 618K</span>
+    </div>
+    <div class="card metric">
+      <span class="v">128M</span>
+      <span class="k">缓存读取</span>
+      <span class="sub"><span class="pill green">命中率 98%</span></span>
+    </div>
+    <div class="card metric">
+      <span class="v">9<small>个</small></span>
+      <span class="k">会话</span>
+      <span class="sub">子会话 4 个 · 活跃 14 天</span>
+    </div>
+    <div class="card metric">
+      <span class="v">52<small>次</small></span>
+      <span class="k">辅助调用</span>
+      <span class="sub">运行开销 ¥1.34</span>
+    </div>
+  </div>
+
+  <!-- 行 1：项目 / 模型 -->
+  <div class="grid2">
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">项目</span>
+        <span class="src" title="sessionRows 按 cwd 尾段聚合；stats 接口现有字段，客户端推导">sessionRows · 客户端聚合</span>
+      </div>
+      <div class="barlist" id="projList"></div>
+      <span class="more-link">还有 3 个 ▾</span>
+    </div>
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">模型</span>
+        <span class="src" title="byModel 行（含 cost）；stats 接口现有字段">byModel</span>
+      </div>
+      <div class="barlist" id="modelList"></div>
+    </div>
+  </div>
+
+  <!-- 行 2：接时段热力图 / 最耗会话 -->
+  <div class="grid2">
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">接时段</span>
+        <span class="card-note">Asia/Shanghai</span>
+      </div>
+      <div class="heatwrap">
+        <div class="heat" id="heat"></div>
+        <div class="heatfoot">
+          <span>最忙：周六 11:00</span>
+          <span class="legend">少 <i style="background:var(--heat-0)"></i><i style="background:var(--heat-1)"></i><i style="background:var(--heat-2)"></i><i style="background:var(--heat-3)"></i><i style="background:var(--heat-4)"></i> 多</span>
+        </div>
+      </div>
+      <div class="card-head" style="margin-top:2px">
+        <span class="src" title="由 byHour（键 YYYY-MM-DDTHH）推导星期×小时，聚合区间内全部请求；stats 接口现有字段，客户端推导">byHour · 客户端推导</span>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">最耗会话</span>
+        <span class="seggroup" id="sessSeg">
+          <button class="on" data-k="tk">Token</button>
+          <button data-k="cost">费用</button>
+          <button data-k="req">请求</button>
+        </span>
+      </div>
+      <div class="sesslist" id="sessList"></div>
+      <div class="card-head" style="margin-top:2px">
+        <span class="src" title="sessionRows 按 totals 排序取前 8；Ctrl+点击跳转对应会话（现有 session 座）；stats 接口现有字段">sessionRows</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- 行 3：会话规模 / 辅助请求 -->
+  <div class="grid2">
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">会话规模</span>
+        <span class="card-note">9 个会话</span>
+      </div>
+      <div class="hist" id="hist"></div>
+      <div class="histfoot">横轴：一个会话的模型请求数 · 柱高：会话数</div>
+      <div class="card-head" style="margin-top:2px">
+        <span class="src" title="sessionRows 按 totals.requests 分桶；stats 接口现有字段，客户端推导">sessionRows · 客户端推导</span>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">辅助请求构成</span>
+        <span class="card-note" id="auxNote">52 次 · ¥1.34</span>
+      </div>
+      <div class="auxlist" id="auxList"></div>
+      <div class="card-head" style="margin-top:2px">
+        <span class="src" title="aux.byKind（自动审查 / 标题生成 / 推理翻译）；stats 接口现有字段">aux.byKind</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- 全宽：趋势 -->
+  <div class="card trend">
+    <div class="card-head">
+      <span class="card-title">趋势</span>
+      <span class="seggroup">
+        <button class="on">按日</button>
+        <button>按小时</button>
+      </span>
+    </div>
+    <svg id="trendSvg" viewBox="0 0 1200 190" preserveAspectRatio="none" aria-hidden="true"></svg>
+    <div class="card-head" style="margin-top:2px">
+      <span class="src" title="byDay / byHour（现有 TrendChart 的数据）；stats 接口现有字段">byDay</span>
+    </div>
+  </div>
+
+  <!-- 全宽：明细表 -->
+  <div class="card">
+    <div class="card-head">
+      <div class="tabbar" id="detailTabs">
+        <button class="on">按模型</button>
+        <button>按会话</button>
+        <button>运行开销</button>
+      </div>
+      <span class="src" title="byModel / sessionRows / aux.byKind 三个既有明细视图，与设置页同源">stats 现有字段</span>
+    </div>
+    <table id="detailTable"></table>
+  </div>
+
+</div>
+
+<script>
+/* ===== 假数据：字段名与 stats 接口一致，数值贴近真实记录 ===== */
+const fmtTk = n => n >= 1e6 ? (n/1e6).toFixed(1) + 'M' : n >= 1e3 ? Math.round(n/1e3) + 'K' : String(n)
+const fmtY = n => '¥' + n.toFixed(2)
+
+/* 项目：sessionRows 按 cwd 尾段聚合 */
+const projects = [
+  { name: 'cc-switch-analyzer', tk: 2_064_000, cost: 11.40 },
+  { name: 'dsh-token-usage',    tk:   802_000, cost: 4.27 },
+  { name: 'magpie',             tk:   403_000, cost: 2.22 },
+  { name: 'ai-test',            tk:   235_000, cost: 0.42 },
+  { name: 'cc-switch',          tk:   124_000, cost: 0.44 },
+  { name: 'model-price-table',  tk:    88_300, cost: 0.04 },
+]
+
+/* 模型：byModel */
+const models = [
+  { name: 'group/glm-5.3-flashx', tk: 2_000_000, cost: 10.31 },
+  { name: 'auto/GLM-5.3',         tk:   850_000, cost: 5.53 },
+  { name: 'GLM-5.3-Flash-Trial',  tk:   845_000, cost: 0.25 },
+  { name: 'glm-5.3-flashx',       tk:   697_000, cost: 3.25 },
+  { name: 'glm-5.3',              tk:   446_000, cost: 2.76 },
+  { name: 'auto/GLM-5.3-Flash',   tk:   271_000, cost: 0.15 },
+]
+
+/* 热力图：7×24 伪随机但周五/周六白天偏热 */
+const heat = []
+const rnd = (seed => () => (seed = (seed * 9301 + 49297) % 233280) / 233280)(7)
+for (let d = 0; d < 7; d++) {
+  const row = []
+  for (let h = 0; h < 24; h++) {
+    const workHour = h >= 9 && h <= 23
+    const weekend = d >= 5
+    const base = workHour ? (weekend ? 0.55 : 0.35) : 0.08
+    row.push(rnd() < base + (d === 5 && h >= 10 && h <= 12 ? 0.35 : 0) ? Math.ceil(rnd() * 4) : 0)
+  }
+  heat.push(row)
+}
+
+/* 最耗会话：sessionRows */
+const sessions = [
+  { t: 'magpie 与 dsh 记录去重排查',            s: 'cc-switch-analyzer · DeepSeek Harness · glm-5.3-flashx · 3小时前', tk: '1.7M', cost: '¥9.18', req: '312', w: 1 },
+  { t: 'DeepSeek 侧边栏入口可行性评估',          s: '网关会话 · Claude Desktop · GLM-5.3-Flash-Trial · 6分钟前',        tk: '872K', cost: '¥0.25', req: '156', w: 0 },
+  { t: '查上游仓库 Claude Desktop 相关 issue',   s: '网关会话 · Claude Desktop · GLM-5.3-Flash-Trial · 1小时前',        tk: '461K', cost: '¥0.14', req: '98',  w: 0 },
+  { t: '查询端数据源去重方案与实现',             s: 'cc-switch-analyzer · DeepSeek Harness · glm-5.3-flashx · 5小时前', tk: '404K', cost: '¥2.16', req: '87',  w: 1 },
+  { t: '排查模型归一化并实现双字段记录',          s: 'dsh-token-usage · DeepSeek Harness · glm-5.3-flashx · 3小时前',    tk: '355K', cost: '¥1.90', req: '74',  w: 1 },
+  { t: 'DeepSeek 侧边栏入口可行性评估',          s: 'dsh-token-usage · Claude Code · glm-5.3-flashx · 6分钟前',        tk: '250K', cost: '¥1.34', req: '52',  w: 1 },
+  { t: '查上游仓库 Claude Desktop 相关 issue',   s: 'magpie · Claude Code · glm-5.3 · 51分钟前',                       tk: '200K', cost: '¥1.24', req: '44',  w: 1 },
+  { t: 'DeepSeek 侧边栏入口可行性评估',          s: 'dsh-token-usage · Claude Code · glm-5.3-flashx · 28分钟前',       tk: '196K', cost: '¥1.05', req: '39',  w: 1 },
+]
+
+/* 会话规模分桶：sessionRows.requests */
+const buckets = [
+  { lbl: '1–20',   n: 3 },
+  { lbl: '21–40',  n: 2 },
+  { lbl: '41–60',  n: 2 },
+  { lbl: '61–80',  n: 1 },
+  { lbl: '81–120', n: 0 },
+  { lbl: '121+',   n: 1 },
+]
+
+/* 辅助请求：aux.byKind */
+const aux = [
+  { kind: '自动审查',   en: 'auto review',  req: 28, cost: 0.72, tk: 612_000 },
+  { kind: '标题生成',   en: 'session title', req: 15, cost: 0.31, tk: 148_000 },
+  { kind: '推理翻译',   en: 'translation',  req: 9,  cost: 0.31, tk: 96_000 },
+]
+
+/* 渲染：横条列表 */
+function barlist(el, rows) {
+  const max = Math.max(...rows.map(r => r.tk))
+  el.innerHTML = rows.map(r => `
+    <div class="barrow">
+      <span class="name" title="${r.name}">${r.name}</span>
+      <span class="track"><span class="fill" style="width:${Math.max(2, r.tk / max * 100)}%"></span></span>
+      <span class="nums"><span class="tk">${fmtTk(r.tk)}</span><span class="cost${r.cost === 0 ? ' zero' : ''}">≈${fmtY(r.cost)}</span></span>
+    </div>`).join('')
+}
+barlist(document.getElementById('projList'), projects)
+barlist(document.getElementById('modelList'), models)
+
+/* 渲染：热力图 */
+const DAY = ['周一','周二','周三','周四','周五','周六','周日']
+const heatEl = document.getElementById('heat')
+let html = '<span></span>' + [0,6,12,18].map(h => `<span class="colhead" style="grid-column:span 6">${h}</span>`).join('')
+heat.forEach((row, d) => {
+  html += `<span class="rl">${DAY[d]}</span>` + row.map(v => `<span class="cell c${v}" title="${DAY[d]} ${d}时"></span>`).join('')
+})
+heatEl.innerHTML = html
+
+/* 渲染：最耗会话（segmented 切换） */
+const sessList = document.getElementById('sessList')
+function renderSessions(key) {
+  sessList.innerHTML = sessions.map(r => `
+    <div class="sessrow${r.w ? ' harness' : ''}">
+      <span class="dot"></span>
+      <span class="body"><span class="t">${r.t}</span><span class="s">${r.s}</span></span>
+      <span class="val">${r[key]}</span>
+    </div>`).join('')
+}
+renderSessions('tk')
+document.getElementById('sessSeg').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return
+  document.querySelectorAll('#sessSeg button').forEach(x => x.classList.toggle('on', x === b))
+  renderSessions(b.dataset.k)
+})
+
+/* 渲染：直方图 */
+const maxN = Math.max(...buckets.map(b => b.n))
+document.getElementById('hist').innerHTML = buckets.map(b => `
+  <div class="col">
+    <span class="n">${b.n || ''}</span>
+    <div class="bar" style="height:${Math.max(3, b.n / maxN * 100)}%;${b.n === 0 ? 'background:var(--track)' : ''}"></div>
+    <span class="lbl">${b.lbl}</span>
+  </div>`).join('')
+
+/* 渲染：辅助请求 */
+const auxMax = Math.max(...aux.map(a => a.tk))
+document.getElementById('auxList').innerHTML = aux.map(a => `
+  <div class="auxrow">
+    <span class="kind">${a.kind}<small>${a.en}</small></span>
+    <span class="track"><span class="fill" style="width:${a.tk / auxMax * 100}%"></span></span>
+    <span class="nums"><b>${fmtTk(a.tk)}</b>${a.req} 次 · ≈${fmtY(a.cost)}</span>
+  </div>`).join('');
+
+/* 渲染：趋势（简化面积图） */
+(() => {
+  const svg = document.getElementById('trendSvg')
+  const vals = [8,22,24,21,20,19,20,19,18,20,58,52,24,20,19,18,17,19,16,18,15,17,14,15,13,16,12,14]
+  const W = 1200, H = 190, PAD = 8
+  const max = Math.max(...vals) * 1.1
+  const pt = (v, i) => [PAD + i * (W - PAD * 2) / (vals.length - 1), H - 24 - v / max * (H - 46)]
+  const line = vals.map((v, i) => (i ? 'L' : 'M') + pt(v, i).join(',')).join('')
+  const area = line + `L${W - PAD},${H - 24}L${PAD},${H - 24}Z`
+  svg.innerHTML = `
+    <defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="rgba(249,250,251,.22)"/><stop offset="1" stop-color="rgba(249,250,251,0)"/>
+    </linearGradient></defs>
+    ${[0.25,0.5,0.75].map(f => `<line x1="${PAD}" x2="${W-PAD}" y1="${(H-24)*f}" y2="${(H-24)*f}" stroke="#1e222b" stroke-dasharray="4 5"/>`).join('')}
+    <path d="${area}" fill="url(#g)"/>
+    <path d="${line}" fill="none" stroke="rgba(249,250,251,.78)" stroke-width="2"/>
+    <text x="${PAD}" y="${H-6}" fill="#697180" font-size="12">00:00</text>
+    <text x="${W/2}" y="${H-6}" fill="#697180" font-size="12" text-anchor="middle">11:00</text>
+    <text x="${W-PAD}" y="${H-6}" fill="#697180" font-size="12" text-anchor="end">23:00</text>`
+})()
+
+/* 渲染：明细表（tabs） */
+const detail = {
+  model: { head: ['模型','成功 / 失败','费用','总 token','入','出','缓','写','命中率'], rows: [
+    ['glm-5.3-flashx', '726 <span class="fail">/ 6</span>', '<span class="cost">¥69.42</span>', '114M', '1.6M', '368K', '112M', '0', '98.6%'],
+    ['glm-5.3',        '237', '<span class="cost">¥37.07</span>', '14M', '664K', '192K', '13M', '0', '95.2%'],
+    ['glm-5.3-flash',  '123', '<span class="cost">¥1.20</span>', '3.7M', '365K', '59K', '3.2M', '0', '89.9%'],
+  ]},
+  session: { head: ['会话','工作区','请求','费用','总 token','最近活跃'], rows: [
+    ['magpie 与 dsh 记录去重排查', 'cc-switch-analyzer', '312', '<span class="cost">¥9.18</span>', '1.7M', '3小时前'],
+    ['DeepSeek 侧边栏入口可行性评估', '网关会话', '156', '<span class="cost">¥0.25</span>', '872K', '6分钟前'],
+    ['查询端数据源去重方案与实现', 'cc-switch-analyzer', '87', '<span class="cost">¥2.16</span>', '404K', '5小时前'],
+  ]},
+  aux: { head: ['类别','模型','请求','token','费用'], rows: [
+    ['自动审查', 'glm-5.3-flashx', '28', '612K', '<span class="cost">¥0.72</span>'],
+    ['标题生成', 'glm-5.3-flash', '15', '148K', '<span class="cost">¥0.31</span>'],
+    ['推理翻译', 'glm-5.3-flash', '9', '96K', '<span class="cost">¥0.31</span>'],
+  ]},
+}
+function renderDetail(key) {
+  const d = detail[key]
+  document.getElementById('detailTable').innerHTML =
+    '<thead><tr>' + d.head.map(h => `<th>${h}</th>`).join('') + '</tr></thead>' +
+    '<tbody>' + d.rows.map(r => '<tr>' + r.map(c => `<td>${c}</td>`).join('') + '</tr>').join('') + '</tbody>'
+}
+renderDetail('model')
+document.getElementById('detailTabs').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return
+  document.querySelectorAll('#detailTabs button').forEach(x => x.classList.toggle('on', x === b))
+  renderDetail(['model','session','aux'][[...b.parentElement.children].indexOf(b)])
+})
+</script>
+</body>
+</html>

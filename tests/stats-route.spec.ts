@@ -14,6 +14,8 @@ import { AssociationError } from '../src/pricing-associations.ts'
 import { DEFAULT_PRICING_URL_OVERSEAS } from '../src/pricing.ts'
 import type { UsageRecord } from '../src/usage-record.ts'
 import { messageEvent } from './helpers.ts'
+import { SESSION_ROW_LIMIT } from '../src/stats.ts'
+import type { ProjectUsageRow, SessionUsageRow } from '../src/wire.ts'
 
 /** Captures registrations instead of serving HTTP. */
 class MockWebServer extends Service {
@@ -989,6 +991,37 @@ describe('plugin webServer wiring', () => {
 })
 
 describe('createStatsRoute session table', () => {
+  it('serves complete projects before the session top-N cut, respecting day and model filters', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'token-usage-projects-'))
+    const records = Array.from({ length: SESSION_ROW_LIMIT + 1 }, (_, i) => ({
+      ...dayRecord(1, 'deepseek-chat'), requestId: `root-${i}`, sessionId: `root-${i}`,
+      time: dayRecord(1, 'deepseek-chat').time + i,
+      usage: { inputTokens: i === SESSION_ROW_LIMIT ? 1 : 10, outputTokens: 0 },
+    }))
+    // The oldest and cheapest root must fall outside the bounded session
+    // list, but its project (including its child) must remain complete.
+    records[SESSION_ROW_LIMIT]!.time -= 10_000
+    const child = { ...records[SESSION_ROW_LIMIT]!, requestId: 'child', sessionId: 'child' }
+    await writeFile(join(dir, 'usage-2026-01-11.jsonl'), [...records, child, dayRecord(1, 'other-model')].map(row => JSON.stringify(row)).join('\n') + '\n')
+    await writeFile(join(dir, 'usage-2026-01-12.jsonl'), JSON.stringify(dayRecord(2, 'deepseek-chat')) + '\n')
+    await writeFile(join(dir, 'sessions.json'), JSON.stringify({
+      ...Object.fromEntries(records.map((row, i) => [row.sessionId, { cwd: i === SESSION_ROW_LIMIT ? '/work/omitted' : '/work/main' }])),
+      child: { cwd: '/work/child', parentSession: `root-${SESSION_ROW_LIMIT}` },
+    }))
+    await writeFile(join(dir, 'pricing.ccsa.json'), JSON.stringify({ currency: 'RMB', models: [
+      { modelId: 'deepseek-chat', inputCostPerMillion: 1_000_000, outputCostPerMillion: 0 },
+    ] }))
+    const { res, captured } = fakeResponse()
+    await createStatsRoute(() => dir).handler(fakeRequest({ url: `${STATS_PATH}?from=2026-01-11&to=2026-01-11&model=deepseek-chat` }), res)
+    expect(captured.status).toBe(200)
+    const body = JSON.parse(captured.body) as { sessionRows: SessionUsageRow[]; projectRows: ProjectUsageRow[] }
+    expect(body.sessionRows).toHaveLength(SESSION_ROW_LIMIT)
+    expect(body.sessionRows.some(row => row.sessionId === `root-${SESSION_ROW_LIMIT}`)).toBe(false)
+    expect(body.projectRows.map(row => row.name)).toEqual(['main', 'omitted'])
+    expect(body.projectRows[0]).toMatchObject({ sessionCount: SESSION_ROW_LIMIT, cost: 10 * SESSION_ROW_LIMIT })
+    expect(body.projectRows[1]).toMatchObject({ sessionCount: 1, cost: 2, totals: { requests: 2, inputTokens: 2 } })
+  })
+
   it('serves folded, cost-sorted session rows with metadata attached', async () => {
     const dir = await sessionDataDir()
     await writeFile(join(dir, 'sessions.json'), JSON.stringify({

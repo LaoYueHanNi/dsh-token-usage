@@ -28,6 +28,12 @@ import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 // ('settings.plugin.item') into this program. The value face stays
 // uncompromised: cross-plugin collaboration goes through the slot system.
 import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
+// Type-only: pulls the ui-sidebar SlotMap merge ('sidebar.panellist.actions',
+// dsh 0.2.1-rc.3+) into this program.
+import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
+// Type-only: pulls the ui-layout SlotMap merge ('main' keyed) and the
+// MainPanelId brand the layout service's selectPanel takes.
+import type { MainPanelId } from '@deepseek-ai/dsh-client-ui-layout/client'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface SlotMap {
@@ -66,9 +72,11 @@ interface WorkspacesLike {
 }
 import { CardForm, createFallbackTarget, type CardFormTarget, type SectionValue } from './card-form.ts'
 import { CostPill } from './CostPill.tsx'
+import { PanellistMoreEntry } from './PanellistMoreEntry.tsx'
 import { QuotaButton, type ModelSelectionSource } from './QuotaButton.tsx'
 import { TokenUsageCard } from './TokenUsageCard.tsx'
 import { TokenUsageSection } from './TokenUsageSection.tsx'
+import { UsagePanelPage } from './UsagePanelPage.tsx'
 import { UsageView } from './UsageView.tsx'
 import { en, NS, zh } from './locales.ts'
 
@@ -77,6 +85,13 @@ import { en, NS, zh } from './locales.ts'
  * imported: a client package must not depend on a Host package.
  */
 const TOKEN_USAGE_NS = 'token-usage'
+
+/**
+ * Main-panel id shared by the sidebar "More" menu row and the page it
+ * opens. The `main` slot's key domain is open (keyed); the branded
+ * assertion names the panel for the layout service's selectPanel.
+ */
+const USAGE_PANEL_ID = 'token-usage' as MainPanelId
 
 /**
  * Candidate keys under which the Host may serve this plugin's settings
@@ -178,6 +193,43 @@ export function apply(ctx: ClientContext): void {
     locale: NS,
     inject: () => ({ sessionListed, openSession }),
   }, TokenUsageSection))
+
+  // The sidebar "More" menu row and the main panel it opens (the
+  // navigation-entry slots; `main` is an older shell declaration,
+  // `sidebar.panellist.actions` arrived in dsh 0.2.1-rc.3). Both ride
+  // ctx.slots.inject WAITING on the shell's declarations — a shell without
+  // them never runs these callbacks, so the additions degrade silently and
+  // the settings section above stays the only entry. The layout seat is
+  // resolved at click time (dynamic like configForms below, never a
+  // top-level inject dependency): the row opens this panel, the page's
+  // session jump returns to the conversation.
+  const selectMainPanel = (id: MainPanelId | null): void => {
+    ;(ctx.get?.('layout') as { selectPanel?: (id: MainPanelId | null) => void } | undefined)?.selectPanel?.(id)
+  }
+  ctx.slots.inject('main', () => ctx.slots.register({
+    name: 'main',
+    key: USAGE_PANEL_ID,
+    locale: NS,
+    inject: () => ({ sessionListed, openSession, returnToConversation: () => selectMainPanel(null) }),
+  }, UsagePanelPage))
+  ctx.slots.inject('sidebar.panellist.actions', () => {
+    try {
+      // The returned disposer removes the row when the region's declaration
+      // lifetime folds; a rejected cell returns a no-op instead.
+      return ctx.slots.register({
+        name: 'sidebar.panellist.actions',
+        id: 'token-usage-more',
+        order: 50,
+        locale: NS,
+        inject: () => ({ openPanel: () => selectMainPanel(USAGE_PANEL_ID) }),
+      }, PanellistMoreEntry)
+    } catch {
+      // The row is an optional affordance: a shell that declares the region
+      // but rejects the cell (a same-priority occupant) must not fail
+      // plugin activation.
+      return () => {}
+    }
+  })
 
   // The Usage view tab: one entry of the conversation view ring (beside the
   // built-in Chat tab and the Trajectory tab from ui-trajectory, rendered

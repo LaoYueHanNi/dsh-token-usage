@@ -1,0 +1,413 @@
+/* The dashboards' flat row lists: single-line rows (project / model) and
+ * the two-line session rows, plus the fade scrollbar. Tokens only
+ * (--dsw-* alias tokens), no literal colors — the demo's whites become
+ * color-mixes over the label tokens. */
+
+/* The height-capped scroll container: a short list shrinks to its rows,
+ * a tall one scrolls inside the card. The scrollbar thumb is transparent
+ * while idle and tints in while scrolling (.scrolling, dropped 800ms
+ * after the last scroll event). */
+.rows {
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  max-height: 400px;
+  min-height: 120px;
+  padding-right: 2px;
+  container-type: inline-size;
+}
+
+.rows::-webkit-scrollbar {
+  width: 8px;
+}
+
+.rows::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 4px;
+}
+
+.rows.scrolling::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--dsw-alias-label-primary) 12%, transparent);
+}
+
+.rows::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Single-line row: name | relative bar | tokens · cache share | cost.
+ * The 4px vertical padding and 12px figures match the retired tables'
+ * cell rhythm, so the rows read at the same density as the old page. */
+.row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+}
+
+.row:last-child {
+  border-bottom: none;
+}
+
+.rowName {
+  flex: none;
+  width: 138px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--dsw-alias-label-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Name line inside the cell: the id plus its tags (unpriced mark,
+ * association badge) — the text shrinks first, tags never wrap. */
+.nameLine {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 0;
+  width: 100%;
+}
+
+/* Perf pick, unranked row: no bar renders, so the name takes the width
+ * the track would have held (the session rows' grammar). */
+.nameGrow {
+  flex: 1;
+  width: auto;
+}
+
+.nameText {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  /* Button reset when it is one: plain text until a Ctrl affordance or
+   * the price-dialog affordance styles it. */
+  padding: 0;
+  font: inherit;
+  font-size: 12px;
+  color: inherit;
+  background: none;
+  border: none;
+  border-bottom: 1.5px dashed transparent;
+  text-align: left;
+}
+
+/* Ctrl held (model filter / session jump): dashed underline invite. */
+.jumpable {
+  cursor: pointer;
+  border-bottom-color: var(--dsw-alias-label-secondary);
+  color: var(--dsw-alias-label-primary);
+  text-decoration: none;
+}
+
+.jumpable:hover {
+  border-bottom-color: var(--dsw-alias-label-primary);
+}
+
+.badge {
+  flex: none;
+  font-size: 10px;
+  color: var(--dsw-alias-label-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The relative-token bar: 3px rail, the tallest rendered row = 100%. */
+.track {
+  flex: 1;
+  height: 3px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--dsw-alias-label-primary) 6%, transparent);
+  overflow: hidden;
+  min-width: 0;
+}
+
+.fill {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--dsw-alias-label-primary) 55%, transparent);
+}
+
+/* The figures cell: total tokens · cache share, right-aligned. */
+.rowNums {
+  flex: none;
+  width: 118px;
+  text-align: right;
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The cost cell: fixed width, right-aligned — same reason as the perf
+ * figures column: an auto width would let a longer cost string shrink
+ * that row's bar, and the cost-sorted list would bar its most expensive
+ * row shortest. The session rows (no bar, the compact grammar the user
+ * pinned) keep the auto width via the .srow override. */
+.rowCost {
+  flex: none;
+  width: 64px;
+  text-align: right;
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--dsw-alias-label-primary);
+}
+
+.srow .rowCost {
+  width: auto;
+}
+
+/* The performance view toggle (model card head): a standalone view switch
+ * next to the sort control — not a third sort pick. Pressed, it fills
+ * like an active segment and the sort control yields (the performance
+ * order is speed-fixed, there is nothing to pick). */
+.perfToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 3px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.perfToggle:hover {
+  color: var(--dsw-alias-label-primary);
+}
+
+.perfToggle:focus-visible {
+  outline: 2px solid var(--dsw-alias-border-l1);
+  outline-offset: 1px;
+}
+
+.perfGauge {
+  font-size: 11px;
+  line-height: 1;
+}
+
+.perfOn {
+  background: color-mix(in srgb, var(--dsw-alias-label-primary) 10%, transparent);
+  border-color: transparent;
+  color: var(--dsw-alias-label-primary);
+  font-weight: 600;
+}
+
+/* The performance figures cell (model rows under the performance view):
+ * fixed width, right-aligned — auto width would let a longer figures
+ * string shrink that row's bar, and a faster model would bar shorter
+ * than a slower one. The cell keeps the compact 「值 · 值 · 值」 grammar
+ * inside; the low-sample and no-timing states share the column via the
+ * dim variant. */
+.perfNums {
+  flex: none;
+  width: 260px;
+  text-align: right;
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.perfNums b {
+  color: var(--dsw-alias-label-primary);
+  font-weight: 600;
+}
+
+.perfDim,
+.perfDim b {
+  color: var(--dsw-alias-label-tertiary);
+  font-weight: 400;
+}
+
+/* Session rows: two lines (title + figures, then directory · activity);
+ * the bar track does not render. The figures and cost cells are the same
+ * compact grammar every list reads — the user pinned the three lists to
+ * one figures style, with no hover affordance anywhere. */
+.srow {
+  display: block;
+  cursor: default;
+}
+
+.srow .rowName {
+  flex: 1;
+  width: auto;
+}
+
+.rowTop {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.rowSub {
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--dsw-alias-label-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Empty list. */
+.empty {
+  padding: 16px 0;
+  font-size: 12px;
+  color: var(--dsw-alias-label-tertiary);
+  text-align: center;
+}
+
+/* The session sort: the small segmented the card head carries. */
+.segmented {
+  display: inline-flex;
+  align-items: stretch;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 8px;
+}
+
+.segBtn {
+  border: none;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 3px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.segBtn:hover {
+  color: var(--dsw-alias-label-primary);
+}
+
+.segActive {
+  background: color-mix(in srgb, var(--dsw-alias-label-primary) 10%, transparent);
+  color: var(--dsw-alias-label-primary);
+  font-weight: 600;
+}
+
+/* Settings prioritizes readable names over dashboard ranking bars. */
+.rowsCompact {
+  min-height: 0;
+  max-height: 360px;
+}
+
+.rowsCompact .row {
+  padding: 9px 0;
+}
+
+.rowsCompact .row:not(.srow) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 118px 64px;
+  gap: 10px;
+}
+
+.rowsCompact .rowName {
+  width: auto;
+  min-width: 0;
+  font-size: 11px;
+}
+
+.rowsCompact .track {
+  display: none;
+}
+
+.rowsCompact .row:has(.perfNums) {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.rowsCompact .perfNums {
+  grid-column: 2;
+  width: auto;
+  font-size: 11px;
+}
+
+.rowsCompact .nameText,
+.rowsCompact .rowNums,
+.rowsCompact .rowCost {
+  font-size: 11px;
+}
+
+.controlCompact .segBtn {
+  font-size: 10px;
+  padding: 2px 7px;
+}
+
+.controlCompact {
+  border-radius: 6px;
+  padding: 1px;
+}
+
+.perfCompact {
+  font-size: 10px;
+  padding: 3px 7px;
+  border-radius: 6px;
+}
+
+/* Below the row's fixed-column floor, place identity above the figures
+ * rather than hiding either behind horizontal scrolling. */
+@container (max-width: 440px) {
+  .row:not(.srow) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 6px 10px;
+  }
+
+  .row:not(.srow) > .rowName {
+    grid-column: 1 / -1;
+    width: auto;
+  }
+
+  .track {
+    display: none;
+  }
+
+  .rowNums {
+    width: auto;
+    text-align: left;
+  }
+
+  .perfNums {
+    grid-column: 1 / -1;
+    width: auto;
+    text-align: left;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .rowTop {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 6px 10px;
+  }
+
+  .rowTop > .rowName {
+    grid-column: 1 / -1;
+  }
+
+  .rowsCompact .row:not(.srow),
+  .rowsCompact .row:has(.perfNums) {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 5px 10px;
+  }
+
+  .rowsCompact .row:not(.srow) > .rowName {
+    grid-column: 1 / -1;
+  }
+
+  .rowsCompact .perfNums {
+    grid-column: 1 / -1;
+  }
+}
