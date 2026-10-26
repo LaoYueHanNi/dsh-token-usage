@@ -28,18 +28,18 @@ class MockSessions extends Service {
 }
 
 /** Persisted-session seam; this suite has no conversation history. The
- * inspect seam must exist or the first-run sync reports an unsupported
- * persistence and never writes its initialized marker. */
+ * handle seam must exist or the first-run sync cannot walk sessions and
+ * never writes its initialized marker. */
 class MockPersistence extends Service {
   constructor(ctx: Context) {
     super(ctx, 'sessionPersistence')
   }
 
-  async list(): Promise<Array<{ id: string }>> {
+  async list(): Promise<Array<{ header: { id: string } }>> {
     return []
   }
 
-  async inspect(id: string): Promise<{ events: unknown[] }> {
+  async open(id: string): Promise<{ read(): Promise<{ events: unknown[] }>; close(): Promise<void> }> {
     throw new Error(`missing session ${id}`)
   }
 }

@@ -17,14 +17,17 @@ function persistenceService(sessions: Array<{ id: string; events: unknown[] }>) 
       super(ctx, 'sessionPersistence')
     }
 
-    async list(): Promise<Array<{ id: string }>> {
-      return sessions.map(session => ({ id: session.id }))
+    async list(): Promise<Array<{ header: { id: string } }>> {
+      return sessions.map(session => ({ header: { id: session.id } }))
     }
 
-    async inspect(id: string): Promise<{ events: unknown[] }> {
+    async open(id: string): Promise<{ read(): Promise<{ events: unknown[] }>; close(): Promise<void> }> {
       const session = sessions.find(candidate => candidate.id === id)
       if (session === undefined) throw new Error(`missing session ${id}`)
-      return { events: session.events }
+      return {
+        read: () => Promise.resolve({ events: session.events }),
+        close: () => Promise.resolve(),
+      }
     }
   }
 }
@@ -48,7 +51,7 @@ class MockSessions extends Service {
   }
 }
 
-/** Simulates deepseek-harness 0.1.7+ SettingsForms. */
+/** Simulates the host's SettingsForms. */
 class FakeSettingsForms extends Service {
   public readonly configured: Array<{ auto?: boolean; owner: unknown }> = []
 
@@ -356,7 +359,7 @@ describe('plugin integration', () => {
     const next = new Context()
     await next.plugin(MockSessions)
     await next.plugin(persistenceService(sessions))
-    // In dsh 0.1.7, stored region from profile patch enters as entry config.
+    // A stored region from the profile patch enters as entry config.
     await next.plugin(plugin, { pricingRegion: 'overseas' })
     ctx = next
 

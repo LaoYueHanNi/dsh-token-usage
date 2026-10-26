@@ -6,7 +6,7 @@
 
 [简体中文](./README.zh.md) | English
 
-A dsh usage plugin that displays model token usage right in the Web UI. After installation, open **Settings** (the gear icon in the sidebar) and you'll find the **Token Usage** page — overview cards (with cost), a trend chart, project / model / session / runtime-overhead detail views, and per-model pricing dialogs. On dsh `0.2.1-rc.3` or newer, the sidebar's **More** menu also opens the same statistics in a full-width main-column dashboard. Both surfaces share date-range and model filters; a single-day range uses an hourly trend and wider ranges use daily points.
+A dsh usage plugin that displays model token usage right in the Web UI. After installation, open **Settings** (the gear icon in the sidebar) and you'll find the **Token Usage** page — overview cards (with cost), a trend chart, project / model / session / runtime-overhead detail views, and per-model pricing dialogs. The sidebar's **More** menu also opens the same statistics in a full-width main-column dashboard. Both surfaces share date-range and model filters; a single-day range uses an hourly trend and wider ranges use daily points.
 
 [dsh]: https://github.com/cordiverse/dsh
 
@@ -25,7 +25,7 @@ Repo: <https://github.com/LaoYueHanNi/dsh-token-usage>
 
 - **Live recording**: every provider-billed model call is recorded as it happens — tokens, cost, model, session — conversation requests, context-compaction calls, and auxiliary system calls included: the Auto review authorization reviewer, session-title generation, and reasoning translation. Auxiliary calls bill into the totals and the model breakdown, while the **Runtime overhead** tab in the detail switch splits them out by kind; they carry no session, so the session breakdown stays conversation-only. That history cannot be backfilled — the host keeps no usage record of those calls, and recording starts with the first request after upgrading.
 - **Web stats page**: filters (date range + model + `1d`/`7d`/`30d` shortcuts), eight compact summary cards in two rows in Settings, and a trend chart (hourly for one day, daily for wider ranges; hover a point for its total). The detail block switches between **projects / models / sessions / runtime overhead**. Project rows aggregate every matching root session before the session list is capped; directory-tail grouping intentionally merges folders with the same final segment. Rows sort by total tokens or cost (sessions also by last activity), and **Ctrl+click** on a listed session row opens that conversation (the host restores its last-selected view tab). The runtime-overhead view breaks auxiliary calls down by kind.
-- **Main-column dashboard**: on dsh `0.2.1-rc.3` or newer, the sidebar's **More → Token Usage** entry opens the same filters and metrics in a four-card dashboard (projects / sessions, models / runtime overhead). The cards collapse to one column when the available content width is narrow; **Pin to sidebar** in the settings card moves the entry out of the More menu into a resident sidebar row (switch it off to move it back) — the two never coexist. Older hosts keep the settings-page entry.
+- **Main-column dashboard**: the sidebar's **More → Token Usage** entry opens the same filters and metrics in a four-card dashboard (projects / sessions, models / runtime overhead). The cards collapse to one column when the available content width is narrow; **Pin to sidebar** in the settings card moves the entry out of the More menu into a resident sidebar row (switch it off to move it back) — the two never coexist.
 - **Model performance view**: the model list can switch from usage to mean output speed, time to first token, and request latency. Untimed requests do not enter performance evaluation; speed and first-token means use streaming samples, and models with fewer than five streaming samples are marked rather than ranked. Historical timing is backfilled automatically when the rollup format changes.
 - **Session usage tab**: the conversation pane gains a **Usage** view tab (beside Chat / Trajectory) with the active session's dashboard — six stat cards (successful requests with a failure pill, cost, cache hit rate, average time-to-first-token, generation throughput, total tokens), a 4-bucket token strip, an hourly trend chart, and a per-model table. A scope switch toggles **Session / With subagents**, and the subagent table drills into each child and back. Hovering the failure pill breaks failures down per class (rate limited, server error, context exceeded, …).
 
@@ -88,6 +88,8 @@ A magpie route needs no setup: declare any OpenAI-compatible provider whose base
 Magpie cards follow the selected model immediately, before sending a request. Reads always use `?kept=1`: polling, opening the panel and retrying only read Magpie's own cache, never trigger upstream quota refreshes. Refresh quotas in Magpie when newer readings are needed; an empty cache does not fall back to a live vendor query.
 
 ## Install
+
+Requires dsh `0.2.1-rc.3` or newer.
 
 ```sh
 dsh plugin --profile web add @laoyuehanni/dsh-token-usage

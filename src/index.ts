@@ -6,7 +6,7 @@
  * route backing the web settings page (browser half in `src/client`).
  *
  * The user-editable Config fields (`path`, `pricingRegion`) are declared
- * `.volatile()` so the dsh 0.1.7 settings service projects them into the
+ * `.volatile()` so the settings service projects them into the
  * `token-usage` settings form (the browser card edits them through
  * `configForms`; saves land in the profile patch and commit live through
  * the loader without a plugin reload). A region pick re-resolves the feed
@@ -66,10 +66,10 @@ import {
 import type { AccountBalanceReader, AccountPurseBalance } from './quota/types.ts'
 
 /**
- * Read through the volatile wrapper the dsh 0.1.7 loader places over
- * `.volatile()` Config fields: volatile commits swap the snapshot in place
- * without a reload, so every read resolves at call time. A bare value (test
- * doubles, the pre-wrap apply argument) passes through unchanged.
+ * Read through the volatile wrapper the loader places over `.volatile()`
+ * Config fields: volatile commits swap the snapshot in place without a
+ * reload, so every read resolves at call time. A bare value (test doubles,
+ * the pre-wrap apply argument) passes through unchanged.
  */
 function readVolatile<T>(value: Volatile<T> | T | undefined): T | undefined {
   if (value === undefined) return undefined
@@ -130,7 +130,7 @@ export interface QuotaConfig {
  * Loading-time schema of the composition config (the official Cordis shape:
  * a `Config` type plus a same-named standard schema, validated by the loader
  * before `apply` runs). The `.volatile()` fields (`path`, `pricingRegion`)
- * are what the 0.1.7 settings service projects into the settings form — a
+ * are what the settings service projects into the settings form — a
  * namespace with no volatile field is skipped by `settings.describe()` and
  * its browser card never appears. Keys stay optional — absent keys stay
  * absent, because the plugin's own resolution (`validateConfig` +
@@ -293,8 +293,8 @@ export interface SectionGuard {
  * `turn/end`). Existence alone must not count — an idle open tab stays in the
  * store while its conversation ended, and events only append while a turn is
  * open, which is exactly the window that makes a migration unsafe.
- * dsh 0.1.2 made `Session.events` private behind `snapshotEvents()`;
- * callers pass each session's snapshot so this stays a plain duck type.
+ * Callers pass each session's `snapshotEvents()` snapshot so this stays a
+ * plain duck type.
  * @param eventLogs - each live session's event snapshot (order irrelevant).
  * @returns how many of them are mid-conversation right now.
  */
@@ -632,9 +632,9 @@ export function apply(ctx: Context, config: Config = {}) {
   })
   ctx.inject(['settings'], (settingsCtx) => {
     settingsCtx.effect(() => {
-      // 0.1.7 SettingsForms serves every live namespace value through
-      // describe() (the per-namespace get is gone); the credentials chain
-      // reads provider sections (e.g. an apiKeyEnv placement) through it.
+      // SettingsForms serves every live namespace value through describe();
+      // the credentials chain reads provider sections (e.g. an apiKeyEnv
+      // placement) through it.
       quotaReadSettings = (ns) => settingsCtx.settings.describe().find(entry => entry.ns === ns)?.value
       return () => { quotaReadSettings = () => undefined }
     }, 'token-usage: quota settings reader')
@@ -712,18 +712,13 @@ export function apply(ctx: Context, config: Config = {}) {
    * Live request observation for the conversation usage tab's request pool
    * (最新请求 / 实时请求). Registered independently of `recordAux` — the
    * pool is a display feature, not an auxiliary-billing one, so turning
-   * auxiliary recording off must not silently disable it. Without the llm
-   * service the observer stays empty and the pool degrades to settled-only
-   * (persisted records alone), which the route reports honestly.
+   * auxiliary recording off must not silently disable it. The host always
+   * ships the llm service, so the route always reports the `lifecycle`
+   * capability.
    */
   const requestObserver = new RequestObserver(Date.now())
-  let liveCapability: 'lifecycle' | 'settled-only' = 'settled-only'
   ctx.inject(['llm'], (llmCtx) => {
-    llmCtx.effect(() => {
-      const detach = requestObserver.attachLlm(llmCtx)
-      liveCapability = 'lifecycle'
-      return () => { detach(); liveCapability = 'settled-only' }
-    }, 'token-usage: live request observer')
+    llmCtx.effect(() => requestObserver.attachLlm(llmCtx), 'token-usage: live request observer')
   })
   requestObserver.attachSessions(ctx)
   ctx.effect(() => () => requestObserver.dispose(), 'token-usage: live request observer dispose')
@@ -931,12 +926,9 @@ export function apply(ctx: Context, config: Config = {}) {
             && currentStep.turn === event.data.turn
             && currentStep.step === event.data.step) {
           const latencyMs = Math.max(0, event.time - currentStep.startTime)
-          // dsh 0.1.7 embeds the timed model stream inside assistant/message
-          // (the assistant/chunk event is gone); the first token delta's
-          // timestamp is read from those compact records.
-          const firstTokenTime = 'stream' in event.data && event.data.stream
-            ? extractFirstTokenTimeFromStream(event.data.stream)
-            : undefined
+          // The timed model stream embedded in assistant/message carries
+          // the first token delta's timestamp.
+          const firstTokenTime = extractFirstTokenTimeFromStream(event.data.stream)
           const firstTokenLatencyMs = firstTokenTime !== undefined
             ? Math.max(0, firstTokenTime - currentStep.startTime)
             : undefined
@@ -1019,7 +1011,7 @@ export function apply(ctx: Context, config: Config = {}) {
               requestObserver.cleanup()
               return requestObserver.snapshot(sessionIds)
             },
-            capability: liveCapability,
+            capability: 'lifecycle',
           }),
         }),
       ), 'token-usage: stats route')
@@ -1070,7 +1062,7 @@ export function apply(ctx: Context, config: Config = {}) {
 
   const startFromSource = (): void => { start(); requestSync() }
 
-  // dsh 0.1.7 settings wiring. The volatile Config fields above are what the
+  // Settings wiring. The volatile Config fields above are what the
   // settings service projects into the `token-usage` form; `auto: false`
   // declares that this plugin renders its own card (the browser half's
   // `plugins.bundle.config` entry) rather than a schema-generated page.

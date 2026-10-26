@@ -7,15 +7,19 @@ import { autoSyncIfNeeded, syncHistory, type SyncLog, type SyncPersistence } fro
 import { isInitialized } from '../src/sync-state.ts'
 import { compactionEvent, messageEvent, retryEvent, turnEndEvent } from './helpers.ts'
 
-function fakePersistence(sessions: Array<{ id: string; events: SessionEvent[]; meta?: { cwd?: string; origin?: 'subagent'; parentSession?: string } }>): SyncPersistence {
+function fakePersistence(sessions: Array<{ id: string; events: SessionEvent[]; header?: { cwd?: string; origin?: 'subagent'; parentSession?: string } }>): SyncPersistence {
   return {
     async list() {
-      return sessions.map(session => ({ id: session.id as SessionId }))
+      return sessions.map(session => ({ header: { id: session.id as SessionId } }))
     },
-    async inspect(id) {
+    async open(id) {
       const session = sessions.find(candidate => candidate.id === id)
       if (session === undefined) throw new Error(`missing session ${id}`)
-      return { events: session.events, ...(session.meta !== undefined ? { meta: session.meta } : {}) }
+      return {
+        header: session.header,
+        read() { return Promise.resolve({ events: session.events }) },
+        close() { return Promise.resolve() },
+      }
     },
   }
 }
@@ -55,8 +59,8 @@ describe('syncHistory', () => {
   it('extracts latencyMs and firstTokenLatencyMs across step boundaries', async () => {
     const log = new FakeLog()
     const msg = messageEvent({ messageId: 'm1', seq: 3, time: 4200, turn: 1, step: 1 })
-    // dsh 0.1.7 embeds the timed stream inside assistant/message (the
-    // standalone chunk event is gone); the first token delta sits at 1420.
+    // The timed stream embedded in assistant/message carries the first
+    // token delta at 1420.
     ;(msg.data as Record<string, unknown>).stream = [
       { type: 'text-chunks', time0: 1420, index: 0, dt: [580], texts: ['Hello', ' world'] },
     ]
@@ -363,22 +367,22 @@ describe('syncHistory', () => {
   })
 
   it('stops mid-sync when the signal fires', async () => {
-    let inspected = 0
+    let opened = 0
     const log = new FakeLog()
     const persistence: SyncPersistence = {
       async list() {
-        return [{ id: 's1' as SessionId }, { id: 's2' as SessionId }]
+        return [{ header: { id: 's1' as SessionId } }, { header: { id: 's2' as SessionId } }]
       },
-      async inspect() {
-        inspected += 1
+      async open() {
+        opened += 1
         const controller = new AbortController()
         controller.abort()
         controller.signal.throwIfAborted()
-        return { events: [] }
+        throw new Error('unreachable')
       },
     }
     await expect(syncHistory({ persistence, log })).rejects.toMatchObject({ name: 'AbortError' })
-    expect(inspected).toBe(1)
+    expect(opened).toBe(1)
   })
 })
 
@@ -436,7 +440,7 @@ describe('syncHistory progress', () => {
 })
 
 describe('syncHistory unreadable sessions', () => {
-  /** Persistence twin whose inspect throws for the listed ids, mimicking a
+  /** Persistence twin whose open throws for the listed ids, mimicking a
    * stored log the current dsh build fails to load or validate. */
   function persistenceWithFailures(
     sessions: Array<{ id: string; events: SessionEvent[] }>,
@@ -445,16 +449,16 @@ describe('syncHistory unreadable sessions', () => {
     const inner = fakePersistence(sessions)
     return {
       ...inner,
-      async inspect(id) {
+      async open(id) {
         if (failingIds.includes(id)) {
           throw new Error(`stored session "${id}" failed validation`)
         }
-        return inner.inspect(id)
+        return inner.open(id)
       },
     }
   }
 
-  it('skips a session whose inspect throws, records it, and continues the walk', async () => {
+  it('skips a session whose open throws, records it, and continues the walk', async () => {
     const log = new FakeLog()
     const failures: Array<{ id: string; message: string }> = []
     const persistence = persistenceWithFailures([
@@ -486,12 +490,12 @@ describe('syncHistory unreadable sessions', () => {
     expect(result).toEqual({ added: 0, skipped: 0, removed: 0, failedSessions: 2 })
   })
 
-  it('re-throws an inspect failure raised after the signal aborts', async () => {
+  it('re-throws a read failure raised after the signal aborts', async () => {
     const log = new FakeLog()
     const controller = new AbortController()
     const persistence: SyncPersistence = {
-      async list() { return [{ id: 's1' as SessionId }] },
-      async inspect() {
+      async list() { return [{ header: { id: 's1' as SessionId } }] },
+      async open() {
         // The caller cancels while the read is failing: the failure is the
         // caller's abort, not a session to skip.
         controller.abort()
@@ -584,7 +588,7 @@ describe('syncHistory metadata capture', () => {
           titleEvent('User rename', 2),
           messageEventWith('m1', 3),
         ] as SessionEvent[],
-        meta: { cwd: '/work/app', origin: 'subagent', parentSession: 'p0' },
+        header: { cwd: '/work/app', origin: 'subagent', parentSession: 'p0' },
       },
       { id: 's2', events: [messageEventWith('m2', 1)] },
     ])
@@ -643,11 +647,10 @@ function titleEvent(title: string, seq: number): SessionEvent<'session/title'> {
 }
 
 /**
- * Persistence twin for the handle generation (`dsh` 0.1.3-alpha.1 and later):
- * `list({ signal })` reports ids under `header`, and `open(id, 'read')` hands
- * back a handle whose `read()` yields the log while `header` carries the
- * identity facts. It deliberately exposes no `inspect`, so a code path that
- * fell back to the old seam would fail loudly here instead of passing.
+ * Persistence twin with observable handle lifecycle: `list({ signal })`
+ * reports ids under `header`, and `open(id, 'read')` hands back a handle
+ * whose `read()` yields the log while `header` carries the identity facts.
+ * The hooks expose open/close failures for the unreadable-session paths.
  */
 function handlePersistence(
   sessions: Array<{
@@ -682,8 +685,8 @@ function handlePersistence(
   }
 }
 
-describe('syncHistory over the handle persistence seam', () => {
-  it('walks list({ signal }) + open/read and lands the same rows', async () => {
+describe('syncHistory handle lifecycle', () => {
+  it('walks list({ signal }) + open/read and closes every handle exactly once', async () => {
     const log = new FakeLog()
     const closed: string[] = []
     const persistence = handlePersistence([
@@ -748,26 +751,6 @@ describe('syncHistory over the handle persistence seam', () => {
     expect(result).toEqual({ added: 1, skipped: 0, removed: 0, failedSessions: 1 })
     expect(failures).toEqual(['broken'])
     expect(log.rows.map(row => row.requestId)).toEqual(['m2'])
-  })
-
-  it('prefers the handle seam when a twin carries both', async () => {
-    const log = new FakeLog()
-    const legacy = fakePersistence([{ id: 's1', events: [messageEventWith('legacy', 1)] }])
-    const persistence: SyncPersistence = {
-      ...handlePersistence([{ id: 's1', events: [messageEventWith('modern', 1)] }]),
-      inspect: legacy.inspect,
-    }
-    const result = await syncHistory({ persistence, log })
-    expect(result.added).toBe(1)
-    expect(log.rows.map(row => row.requestId)).toEqual(['modern'])
-  })
-
-  it('fails loudly when the persistence exposes neither seam', async () => {
-    const log = new FakeLog()
-    const persistence: SyncPersistence = { async list() { return [] } }
-    // A host too old or too new to read must not be reported as a run of
-    // individually unreadable sessions.
-    await expect(syncHistory({ persistence, log })).rejects.toThrow(/neither open\(\)/)
   })
 })
 

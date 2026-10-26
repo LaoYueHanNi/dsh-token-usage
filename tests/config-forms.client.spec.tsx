@@ -44,7 +44,7 @@ class MockService extends Service {
 }
 
 /**
- * Describe-mirror double shaped like the 0.1.7 host's SettingsDescribeMirror:
+ * Describe-mirror double shaped like the host's SettingsDescribeMirror:
  * no view until the first describe read settles, then the served namespaces,
  * with every snapshot replacement notifying subscribers.
  */
@@ -71,8 +71,8 @@ class MockDescribeMirror {
 }
 
 /**
- * Service double shaped like the 0.1.7 host's ConfigForms: `get` creates and
- * caches a controller for ANY key ¡ª it never returns undefined ¡ª and each
+ * Service double shaped like the host's ConfigForms: `get` creates and
+ * caches a controller for ANY key â€” it never returns undefined â€” and each
  * controller derives from the mirror, so a key the mirror does not serve is
  * stuck at 'unavailable' forever. This is the trap the old `get() !==
  * undefined` probe fell into: it bound the package-name key while the mirror
@@ -137,9 +137,9 @@ function cardStoreOf(slots: MockSlots, key: string): { getSnapshot: () => { avai
   return face.hooks.tokenUsageCard
 }
 
-describe('dsh 0.1.7 client compatibility', () => {
-  it('does not require settingsScope in the top-level inject list', () => {
-    expect(client.inject).not.toContain('settingsScope')
+describe('configForms client binding', () => {
+  it('does not require configForms in the top-level inject list', () => {
+    expect(client.inject).not.toContain('configForms')
     expect(client.inject).toContain('slots')
     expect(client.inject).toContain('locale')
     expect(client.inject).toContain('sessions')
@@ -156,7 +156,7 @@ describe('dsh 0.1.7 client compatibility', () => {
     const registeredKeys = slots.registered.map(r => r.key ?? r.id)
     expect(registeredKeys).toContain('@laoyuehanni/dsh-token-usage')
     // The regression this guards: `get()` never returns undefined, so only the
-    // mirror-served key yields a ready controller ¡ª the card must show.
+    // mirror-served key yields a ready controller â€” the card must show.
     expect(cardStoreOf(slots, '@laoyuehanni/dsh-token-usage').getSnapshot().available).toBe(true)
   })
 
@@ -190,32 +190,7 @@ describe('dsh 0.1.7 client compatibility', () => {
     expect(cardStoreOf(slots, '@laoyuehanni/dsh-token-usage').getSnapshot().available).toBe(true)
   })
 
-  it('binds correctly when host provides legacy settingsScope service', () => {
-    const { ctx, slots } = createClientApp()
-
-    const mockTarget: CardFormTarget<SectionValue> = {
-      getSnapshot: () => ({
-        status: 'ready',
-        writable: true,
-        value: { pricingRegion: 'domestic' },
-      }),
-      subscribe: () => () => {},
-      set: vi.fn(async () => true),
-      unset: vi.fn(async () => true),
-    }
-
-    new MockService(ctx, 'settingsScope', {
-      bind: (_spec: { namespace: string }) => mockTarget,
-    })
-
-    client.apply(ctx)
-
-    const registeredKeys = slots.registered.map(r => r.key ?? r.id)
-    expect(registeredKeys).toContain('@laoyuehanni/dsh-token-usage')
-    expect(cardStoreOf(slots, '@laoyuehanni/dsh-token-usage').getSnapshot().available).toBe(true)
-  })
-
-  it('degrades safely without throwing when neither configForms nor settingsScope is present', () => {
+  it('stays inert without throwing while the configForms service has not mounted', () => {
     const { ctx, slots } = createClientApp()
     client.apply(ctx)
 

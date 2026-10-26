@@ -22,8 +22,8 @@ import type { DirectoryGuardView } from '../wire.ts'
 import { DIR_GUARD_PATH, MIGRATION_PATH } from '../wire.ts'
 
 /**
- * Minimal snapshot contract of a configuration scope or form.
- * Matches both pre-0.1.7 SettingsScopeSnapshot and 0.1.7+ ConfigFormSnapshot.
+ * Minimal snapshot contract of a configuration form (the host's
+ * ConfigFormSnapshot shape, as this package consumes it).
  */
 export interface CardFormTargetSnapshot<T = SectionValue> {
   /** Loading, ready, or unavailable state. */
@@ -37,8 +37,8 @@ export interface CardFormTargetSnapshot<T = SectionValue> {
 }
 
 /**
- * Common abstraction over the configuration source backing the card.
- * Structurally compatible with both `SettingsScope<T>` (pre-0.1.7) and `ConfigForm<T>` (0.1.7+).
+ * The configuration source backing the card: the host's `ConfigForm<T>` for
+ * the `token-usage` namespace.
  */
 export interface CardFormTarget<T = SectionValue> {
   /** Current snapshot view. */
@@ -51,7 +51,9 @@ export interface CardFormTarget<T = SectionValue> {
   unset(field: string): Promise<boolean>
 }
 
-/** Fallback target when neither configForms nor settingsScope is present in the host. */
+/** Placeholder target while the configForms service has not mounted (or its
+ * describe mirror does not serve this namespace yet); the card renders
+ * nothing and never throws. */
 export function createFallbackTarget(): CardFormTarget<SectionValue> {
   return {
     getSnapshot: () => ({
@@ -183,7 +185,7 @@ export class CardForm {
   private pollTimer: ReturnType<typeof setInterval> | undefined
 
   /**
-   * @param target - the configuration source backing the card (ConfigForm or SettingsScope).
+   * @param target - the configuration source backing the card (a ConfigForm).
    */
   constructor(private readonly target: CardFormTarget<SectionValue>) {
     this.snapshotValue = this.project()

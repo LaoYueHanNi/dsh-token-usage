@@ -145,8 +145,8 @@ export class RequestObserver {
   /**
    * Register the waterfall watcher. Returns the detach function (the caller
    * wraps it in its effect); the listener is inert after {@link dispose}.
-   * A host without the llm service never calls this, and the snapshot
-   * stays empty (capability `settled-only`).
+   * Until this is wired the snapshot stays empty (capability
+   * `settled-only`).
    */
   attachLlm(llmCtx: Context): () => void {
     const dispose = llmCtx.on('llm/stream', (options, next) => {

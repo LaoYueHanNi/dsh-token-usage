@@ -24,14 +24,17 @@ function persistenceService(sessions: Array<{ id: string; events: unknown[] }>) 
       super(ctx, 'sessionPersistence')
     }
 
-    async list(): Promise<Array<{ id: string }>> {
-      return sessions.map(session => ({ id: session.id }))
+    async list(): Promise<Array<{ header: { id: string } }>> {
+      return sessions.map(session => ({ header: { id: session.id } }))
     }
 
-    async inspect(id: string): Promise<{ events: unknown[] }> {
+    async open(id: string): Promise<{ read(): Promise<{ events: unknown[] }>; close(): Promise<void> }> {
       const session = sessions.find(candidate => candidate.id === id)
       if (session === undefined) throw new Error(`missing session ${id}`)
-      return { events: session.events }
+      return {
+        read: () => Promise.resolve({ events: session.events }),
+        close: () => Promise.resolve(),
+      }
     }
   }
 }
@@ -49,7 +52,7 @@ class MockSessions extends Service {
 /**
  * Settings service whose `describe` answers any namespace another plugin
  * "registered" (the way llm-pi-ai registers its own section on a real
- * host), matching dsh 0.1.7 SettingsForms.
+ * host), matching the host's SettingsForms.
  */
 class FakeSettings extends Service {
   private readonly descriptors = new Map<string, unknown>()
@@ -72,7 +75,7 @@ class FakeSettings extends Service {
   }
 }
 
-/** dsh 0.1.7 host default model service. */
+/** Host default model service. */
 class FakeAgentDefaultModel extends Service {
   constructor(ctx: Context) {
     super(ctx, 'agentDefaultModel')

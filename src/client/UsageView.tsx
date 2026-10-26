@@ -63,10 +63,10 @@ const REFRESH_DEBOUNCE_MS = 250
  * the composer seat overlays instead of stealing clicks over the dashboard. */
 const COMPOSER_OVERLAY = { 'data-conversation-composer-overlay': '' } as const
 
-/** Props: the conversation-view runtime seat (standard kit) plus the locale seat.
- * dsh 0.1.2 narrowed the kit's `useSession` to the Session lifecycle
- * snapshot; the Conversation snapshot is no longer part of it — and this view
- * never read it, so the seat is simply dropped. */
+/** Props: the conversation-view runtime seat (standard kit) plus the locale
+ * seat. The kit's `useSession` covers the Session lifecycle snapshot only;
+ * the Conversation snapshot is not part of it — and this view never read it,
+ * so the seat is simply dropped. */
 export interface UsageViewProps {
   useSessions: SnapshotSelectorHook<SessionListState>
   useProjection: UseProjection

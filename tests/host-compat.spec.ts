@@ -13,12 +13,12 @@ class MockSessionPersistence extends Service {
     super(ctx, 'sessionPersistence')
   }
 
-  async list(): Promise<Array<{ id: string }>> {
+  async list(): Promise<Array<{ header: { id: string } }>> {
     return []
   }
 
-  async inspect(id: string): Promise<{ events: unknown[] }> {
-    return { events: [] }
+  async open(id: string): Promise<{ read(): Promise<{ events: unknown[] }>; close(): Promise<void> }> {
+    throw new Error(`missing session ${id}`)
   }
 }
 
@@ -33,8 +33,8 @@ class MockSessions extends Service {
 }
 
 /**
- * Simulates deepseek-harness 0.1.7+ SettingsForms: configure/describe (no
- * installSection, no get), recording the presentation policy registrations.
+ * Simulates the host's SettingsForms: configure/describe, recording the
+ * presentation policy registrations.
  */
 class FakeSettingsForms extends Service {
   public readonly configured: Array<{ auto?: boolean; owner: unknown }> = []
@@ -61,13 +61,13 @@ class FakeSettingsForms extends Service {
   }
 }
 
-describe('dsh 0.1.7 host compatibility', () => {
+describe('host wiring compatibility', () => {
   let tempHome: string
   let originalEnv: string | undefined
 
   beforeEach(async () => {
     originalEnv = process.env.DSH_HOME
-    tempHome = await mkdtemp(join(tmpdir(), 'token-usage-017-test-'))
+    tempHome = await mkdtemp(join(tmpdir(), 'token-usage-host-compat-'))
     process.env.DSH_HOME = tempHome
   })
 
@@ -95,7 +95,7 @@ describe('dsh 0.1.7 host compatibility', () => {
     }, { timeout: 2_000 })
 
     // A live session event is accepted (the recorder is attached).
-    const session = { id: 'test-session-017', snapshotEvents: () => [] } as any
+    const session = { id: 'test-session-host', snapshotEvents: () => [] } as any
     app.emit('session/event', session, messageEvent())
 
     // The inject callback registers the presentation policy asynchronously.
@@ -105,7 +105,7 @@ describe('dsh 0.1.7 host compatibility', () => {
     app.registry.delete(plugin)
   })
 
-  it('reads quota settings through describe() without any per-namespace get', async () => {
+  it('reads quota settings through describe()', async () => {
     const app = new Context()
     await app.plugin(MockSessionPersistence)
     await app.plugin(MockSessions)

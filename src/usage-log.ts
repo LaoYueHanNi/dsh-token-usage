@@ -482,10 +482,9 @@ export async function backfillDayFilesTiming(
               && openStep.turn === event.data.turn
               && openStep.step === event.data.step) {
               targetRecord.latencyMs = Math.max(0, event.time - openStep.startTime)
-              // dsh 0.1.7 embeds the timed model stream inside assistant/message.
-              const firstTokenTime = 'stream' in event.data && event.data.stream
-                ? extractFirstTokenTimeFromStream(event.data.stream)
-                : undefined
+              // The timed model stream embedded in assistant/message carries
+              // the first token delta's timestamp.
+              const firstTokenTime = extractFirstTokenTimeFromStream(event.data.stream)
               if (firstTokenTime !== undefined) {
                 targetRecord.firstTokenLatencyMs = Math.max(0, firstTokenTime - openStep.startTime)
               }

@@ -195,29 +195,32 @@ describe('UsageLog.backfillTiming', () => {
     )
 
     const fakePersistence = {
-      async list() { return [{ id: 'session-1' as any }] },
-      async inspect(id: string) {
+      async list() { return [{ header: { id: 'session-1' as any } }] },
+      async open(id: string) {
         if (id !== 'session-1') throw new Error('missing')
         return {
-          events: [
-            { type: 'step/start', seq: 1, time: targetDate - 3200, data: { turn: 1, step: 1 } },
-            {
-              type: 'assistant/message',
-              seq: 3,
-              time: targetDate,
-              data: {
-                turn: 1,
-                step: 1,
-                message: { id: 'msg-1', role: 'assistant', content: [], source: { kind: 'model', provider: 'p', model: 'm' } },
-                // dsh 0.1.7 embeds the timed stream inside assistant/message;
-                // the first token delta sits 420ms after the step start.
-                stream: [
-                  { type: 'text-chunks', time0: targetDate - 3200 + 420, index: 0, dt: [], texts: ['hi'] },
-                ],
+          read: () => Promise.resolve({
+            events: [
+              { type: 'step/start', seq: 1, time: targetDate - 3200, data: { turn: 1, step: 1 } },
+              {
+                type: 'assistant/message',
+                seq: 3,
+                time: targetDate,
+                data: {
+                  turn: 1,
+                  step: 1,
+                  message: { id: 'msg-1', role: 'assistant', content: [], source: { kind: 'model', provider: 'p', model: 'm' } },
+                  // The timed stream embedded in assistant/message carries
+                  // the first token delta 420ms after the step start.
+                  stream: [
+                    { type: 'text-chunks', time0: targetDate - 3200 + 420, index: 0, dt: [], texts: ['hi'] },
+                  ],
+                },
               },
-            },
-            { type: 'step/end', seq: 4, time: targetDate + 10, data: { turn: 1, step: 1 } },
-          ],
+              { type: 'step/end', seq: 4, time: targetDate + 10, data: { turn: 1, step: 1 } },
+            ],
+          }),
+          close: () => Promise.resolve(),
         }
       },
     }
@@ -252,33 +255,36 @@ describe('UsageLog.backfillTiming', () => {
     )
 
     const fakePersistence = {
-      async list() { return [{ id: 'session-2' as any }] },
-      async inspect(id: string) {
+      async list() { return [{ header: { id: 'session-2' as any } }] },
+      async open(id: string) {
         if (id !== 'session-2') throw new Error('missing')
         return {
-          events: [
-            { type: 'step/start', seq: 1, time: targetDate - 3200, data: { turn: 1, step: 1 } },
-            {
-              type: 'assistant/message',
-              seq: 2,
-              time: targetDate,
-              data: {
-                turn: 1,
-                step: 1,
-                message: { id: 'msg-2', role: 'assistant', content: [], source: { kind: 'model', provider: 'p', model: 'm' } },
-                stream: [
-                  {
-                    type: 'text-chunks',
-                    time0: targetDate - 3200 + 600,
-                    index: 0,
-                    dt: [],
-                    texts: ['hi'],
-                  },
-                ],
+          read: () => Promise.resolve({
+            events: [
+              { type: 'step/start', seq: 1, time: targetDate - 3200, data: { turn: 1, step: 1 } },
+              {
+                type: 'assistant/message',
+                seq: 2,
+                time: targetDate,
+                data: {
+                  turn: 1,
+                  step: 1,
+                  message: { id: 'msg-2', role: 'assistant', content: [], source: { kind: 'model', provider: 'p', model: 'm' } },
+                  stream: [
+                    {
+                      type: 'text-chunks',
+                      time0: targetDate - 3200 + 600,
+                      index: 0,
+                      dt: [],
+                      texts: ['hi'],
+                    },
+                  ],
+                },
               },
-            },
-            { type: 'step/end', seq: 3, time: targetDate + 10, data: { turn: 1, step: 1 } },
-          ],
+              { type: 'step/end', seq: 3, time: targetDate + 10, data: { turn: 1, step: 1 } },
+            ],
+          }),
+          close: () => Promise.resolve(),
         }
       },
     }

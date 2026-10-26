@@ -13,8 +13,8 @@
  * @module token-usage/client
  */
 
-// dsh 0.1.2 removed dsh-client-runtime; its ClientContext was a plain alias
-// of the cordis Context, so the type now comes from cordis directly.
+// dsh-client-runtime is long gone; its ClientContext was a plain alias of
+// the cordis Context, so the type comes from cordis directly.
 // Type-only: pulls the ctx.slots declaration merge (owned by ui-renderer,
 // whose published types no longer re-declare it through ui-session).
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
@@ -96,9 +96,8 @@ const USAGE_PANEL_ID = 'token-usage' as MainPanelId
 
 /**
  * Candidate keys under which the Host may serve this plugin's settings
- * form. The 0.1.7 host keys `ConfigForms.get` by the plugin's ENTRY ID (the
- * namespace); the full package name stays as a fallback for a host that keyed
- * it by package instead.
+ * form: the entry id (the namespace) first, the full package name as a
+ * fallback for a host that keyed it by package instead.
  */
 const CONFIG_FORM_KEYS = [TOKEN_USAGE_NS, '@laoyuehanni/dsh-token-usage'] as const
 
@@ -111,7 +110,7 @@ interface DescribeMirrorLike {
 
 /** The `configForms` service face as this plugin consumes it. */
 interface ConfigFormsLike {
-  /** Entry-id keyed form controller; the 0.1.7 host NEVER returns undefined. */
+  /** Entry-id keyed form controller; the host NEVER returns undefined. */
   get<T>(entryId: string): CardFormTarget<T>
   /** The shared describe mirror the forms derive from. */
   describe?(): DescribeMirrorLike | undefined
@@ -119,12 +118,12 @@ interface ConfigFormsLike {
 
 /**
  * Resolve the form target from the describe mirror's LIVE namespace list.
- * The 0.1.7 `ConfigForms.get()` unconditionally creates and caches a
- * controller for ANY key — it never returns undefined — so key validity must
- * come from the namespaces the mirror actually serves. A `get()` on a key the
- * mirror does not list yields a controller stuck at 'unavailable' forever,
- * and the card renders nothing. No view yet (mirror still loading) answers
- * undefined so the caller keeps its current target.
+ * `ConfigForms.get()` unconditionally creates and caches a controller for
+ * ANY key — it never returns undefined — so key validity must come from the
+ * namespaces the mirror actually serves. A `get()` on a key the mirror does
+ * not list yields a controller stuck at 'unavailable' forever, and the card
+ * renders nothing. No view yet (mirror still loading) answers undefined so
+ * the caller keeps its current target.
  */
 const resolveConfigFormsTarget = (forms: ConfigFormsLike): CardFormTarget<SectionValue> | undefined => {
   const namespaces = typeof forms.describe === 'function'
@@ -138,8 +137,8 @@ const resolveConfigFormsTarget = (forms: ConfigFormsLike): CardFormTarget<Sectio
 /** Required services: the slot registry, the locale dictionaries, the
  * workspace navigation service (its native directory picker backs the card's
  * browse button), and the session controller (the stats page's Ctrl+click
- * session jump reads the list and opens the target). Configuration sources
- * (`configForms` in dsh 0.1.7+, `settingsScope` in pre-0.1.7) attach dynamically. */
+ * session jump reads the list and opens the target). The configuration
+ * source (`configForms`) attaches dynamically. */
 export const inject = ['slots', 'locale', 'connection', 'remote', 'uiWorkspace', 'sessions', 'workspaces']
 
 /**
@@ -279,22 +278,14 @@ export function apply(ctx: ClientContext): void {
     inject: () => ({ modelDirectory }),
   }, QuotaButton))
 
-  // Configuration source resolution:
-  // - dsh 0.1.7+: ctx.configForms provides ConfigForm (keyed by the entry id
-  //   the describe mirror actually serves; see resolveConfigFormsTarget)
-  // - pre-0.1.7: ctx.settingsScope provides SettingsScope (bound by namespace)
-  // - fallback: unavailable target preventing runtime errors if neither is mounted
+  // Configuration source resolution: ctx.configForms provides the ConfigForm
+  // (keyed by the entry id the describe mirror actually serves; see
+  // resolveConfigFormsTarget). Before the service mounts, the placeholder
+  // target keeps the card inert instead of throwing.
   const lookupCurrentTarget = (): CardFormTarget<SectionValue> | undefined => {
     const configForms = ctx.get('configForms') as ConfigFormsLike | undefined
     if (configForms && typeof configForms.get === 'function') {
-      const byMirror = resolveConfigFormsTarget(configForms)
-      if (byMirror !== undefined) return byMirror
-    }
-    const settingsScope = ctx.get('settingsScope') as {
-      bind<T>(options: { namespace: string }): CardFormTarget<T>
-    } | undefined
-    if (settingsScope && typeof settingsScope.bind === 'function') {
-      return settingsScope.bind<SectionValue>({ namespace: TOKEN_USAGE_NS })
+      return resolveConfigFormsTarget(configForms)
     }
     return undefined
   }
@@ -333,18 +324,6 @@ export function apply(ctx: ClientContext): void {
       const unsubscribe = mirror?.subscribe(() => { resolve() })
       return () => { unsubscribe?.() }
     }, 'token-usage: configForms dynamic target')
-  })
-
-  ctx.inject(['settingsScope'], (scopeCtx) => {
-    scopeCtx.effect(() => {
-      const scopeService = scopeCtx.get('settingsScope') as {
-        bind<T>(options: { namespace: string }): CardFormTarget<T>
-      } | undefined
-      if (scopeService && typeof scopeService.bind === 'function') {
-        switchTarget(scopeService.bind<SectionValue>({ namespace: TOKEN_USAGE_NS }))
-      }
-      return () => {}
-    }, 'token-usage: settingsScope dynamic target')
   })
 
   const dynamicTarget: CardFormTarget<SectionValue> = {

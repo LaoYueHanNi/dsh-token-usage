@@ -11,10 +11,9 @@
  * the run — one unreadable file must not keep the rest of the history
  * out of the ledger.
  *
- * Reads go through whichever persistence seam the running host exposes: the
- * handle generation (`dsh` 0.1.3-alpha.1 and later, `open`/`read`/`close`) or
- * the older inspect generation (`dsh` 0.1.2-rc.1 and earlier, `inspect`). One
- * probe per run picks the seam, so a single build walks history on both.
+ * Reads go through the handle persistence seam the running host exposes:
+ * `list({ signal })` then `open(id, 'read')` / `read()` / `close()` per
+ * session.
  *
  * @module token-usage/sync
  */
@@ -88,15 +87,13 @@ export interface SyncMetaSink {
   upsert(id: string, patch: SessionHeaderFacts & { title?: string }): Promise<void>
 }
 
-/** One stored session as either persistence generation lists it: the handle
- * generation reports `snapshot.header.id`, the older one a bare `header`. */
-export type SyncSessionEntry =
-  | { readonly id: SessionId }
-  | { readonly header: { readonly id: SessionId } }
+/** One stored session as the host's `list` reports it: the id rides the
+ * detached header snapshot. */
+export type SyncSessionEntry = { readonly header: { readonly id: SessionId } }
 
-/** One open read handle of the handle-based generation (`dsh` 0.1.3-alpha.1
- * and later). The host's real handle also carries `append`/`flush` and an
- * `eventState` beside `read`'s events; the sync needs only this much. */
+/** One open read handle onto a stored session. The host's real handle also
+ * carries `append`/`flush` and an `eventState` beside `read`'s events; the
+ * sync needs only this much. */
 export interface SyncSessionHandle {
   /** The immutable stored header, fixed when the handle was opened. */
   readonly header?: SessionHeaderFacts | undefined
@@ -109,29 +106,19 @@ export interface SyncSessionHandle {
 }
 
 /**
- * The persistence surface the sync needs (duck-typed for tests). The host
- * ships two generations of this seam and {@link readerOf} probes which one is
- * live, so one build serves both:
+ * The persistence surface the sync needs (duck-typed for tests; the host
+ * passes its `ctx.sessionPersistence`):
  *
- * - **handle seam** (`dsh` 0.1.3-alpha.1 and later): `list({ signal })` reports
- *   ids under `header.id`, and `open(id, 'read')` yields a handle whose
- *   `read()` returns the log while `header` carries the identity facts.
- * - **inspect seam** (`dsh` 0.1.2-rc.1 and earlier): `list(signal)` reports
- *   bare headers and `inspect(id, signal)` returns log and header at once.
- *
- * Exactly one of `open`/`inspect` exists per host, hence both are optional; a
- * persistence carrying neither is rejected up front (see {@link readerOf})
- * instead of being reported as one unreadable session after another.
+ * - `list({ signal })` reports every stored session as a header snapshot
+ *   (`header.id`).
+ * - `open(id, 'read')` yields a handle whose `read()` returns the log while
+ *   `header` carries the identity facts.
  */
 export interface SyncPersistence {
-  /** Every materialized session, in arbitrary order. The handle generation
-   * takes an options object here, the older one the signal positionally. */
-  list(options?: { signal?: AbortSignal } | AbortSignal): Promise<readonly SyncSessionEntry[]>
-  /** Handle generation: one read handle onto a stored session. */
-  open?(id: SessionId, access: 'read', options?: { signal?: AbortSignal }): Promise<SyncSessionHandle>
-  /** Inspect generation: the immutable logical event log of one session,
-   * with the header the identity facts are projected from. */
-  inspect?(id: SessionId, signal?: AbortSignal): Promise<{ events: readonly SessionEvent[]; meta?: SessionHeaderFacts }>
+  /** Every materialized session, in arbitrary order. */
+  list(options?: { signal?: AbortSignal }): Promise<readonly SyncSessionEntry[]>
+  /** One read handle onto a stored session. */
+  open(id: SessionId, access: 'read', options?: { signal?: AbortSignal }): Promise<SyncSessionHandle>
 }
 
 /**
@@ -173,52 +160,33 @@ export interface SessionReader {
 }
 
 /**
- * Probe which persistence seam the running host exposes and normalize it.
+ * Normalize the handle persistence seam into the generation-free read surface
+ * {@link syncHistory} walks.
  *
- * The probe runs once per sync, never once per session: a host does not change
- * generation mid-process, and probing per session would report a wholesale
- * mismatch as N individually unreadable sessions — precisely the silent
- * failure the two seams invite.
+ * The reader is built once per sync, never once per session.
  * @param persistence - the host's `ctx.sessionPersistence` (or a test twin).
  * @returns the normalized reader.
- * @throws {Error} when the persistence exposes neither seam (a host older or
- * newer than either generation), which must fail loudly rather than report
- * every session as unreadable.
  */
 export function readerOf(persistence: SyncPersistence): SessionReader {
-  const { open, inspect } = persistence
-  const idOf = (entry: SyncSessionEntry): SessionId => 'header' in entry ? entry.header.id : entry.id
-  if (typeof open === 'function') {
-    return {
-      async list(signal) {
-        return (await persistence.list(signal === undefined ? {} : { signal })).map(idOf)
-      },
-      async read(id, signal) {
-        const handle = await open.call(persistence, id, 'read', signal === undefined ? {} : { signal })
-        try {
-          const { events } = await handle.read()
-          return { events, meta: handle.header }
-        } finally {
-          // Best-effort teardown: the rows are already collected, so a failing
-          // close must not turn a good read into an unreadable session. It
-          // still has to run on every path — the host counts a leaked read
-          // handle as a resource leak.
-          await handle.close().catch(() => {})
-        }
-      },
-    }
+  const idOf = (entry: SyncSessionEntry): SessionId => entry.header.id
+  return {
+    async list(signal) {
+      return (await persistence.list(signal === undefined ? {} : { signal })).map(idOf)
+    },
+    async read(id, signal) {
+      const handle = await persistence.open(id, 'read', signal === undefined ? {} : { signal })
+      try {
+        const { events } = await handle.read()
+        return { events, meta: handle.header }
+      } finally {
+        // Best-effort teardown: the rows are already collected, so a failing
+        // close must not turn a good read into an unreadable session. It
+        // still has to run on every path — the host counts a leaked read
+        // handle as a resource leak.
+        await handle.close().catch(() => {})
+      }
+    },
   }
-  if (typeof inspect === 'function') {
-    return {
-      async list(signal) {
-        return (await persistence.list(signal)).map(idOf)
-      },
-      async read(id, signal) {
-        return await inspect.call(persistence, id, signal)
-      },
-    }
-  }
-  throw new Error('token-usage: sessionPersistence exposes neither open() (dsh 0.1.3-alpha.1+) nor inspect() (dsh <= 0.1.2-rc.1)')
 }
 
 /**
@@ -318,11 +286,9 @@ export async function syncHistory(
         && openStep.turn === event.data.turn
         && openStep.step === event.data.step) {
         const latencyMs = Math.max(0, event.time - openStep.startTime)
-        // dsh 0.1.7 embeds the timed model stream inside assistant/message;
-        // the first token delta's timestamp is read from those compact records.
-        const firstTokenTime = 'stream' in event.data && event.data.stream
-          ? extractFirstTokenTimeFromStream(event.data.stream)
-          : undefined
+        // The timed model stream embedded in assistant/message carries the
+        // first token delta's timestamp.
+        const firstTokenTime = extractFirstTokenTimeFromStream(event.data.stream)
         const firstTokenLatencyMs = firstTokenTime !== undefined
           ? Math.max(0, firstTokenTime - openStep.startTime)
           : undefined
