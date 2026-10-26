@@ -1,0 +1,54 @@
+# 推送版本 tag 触发 npm 发布：校验 tag 与 package.json 版本一致，rc 版自动挂 next 标签，启用 provenance。
+name: publish
+
+on:
+  push:
+    tags:
+      - "v*"
+      - "[0-9]*"
+
+permissions:
+  contents: read
+  id-token: write # npm provenance 需要 OIDC
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4 # 从 package.json 的 packageManager 读取 pnpm 版本
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: "https://registry.npmjs.org/"
+          cache: pnpm
+
+      - name: 校验 tag 与 package.json 版本一致
+        run: |
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} 与 package.json 版本 ${PKG_VERSION} 不一致，请修正后重打 tag"
+            exit 1
+          fi
+          echo "PKG_VERSION=$PKG_VERSION" >> "$GITHUB_ENV"
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      # npm publish 会先执行 prepublishOnly：typecheck → test → build:all，产物保证新鲜且全绿。
+      - name: 发布到 npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          ARGS=(--provenance --access public)
+          if [[ "$PKG_VERSION" == *-* ]]; then
+            ARGS+=(--tag next)
+          fi
+          npm publish "${ARGS[@]}"
