@@ -27,8 +27,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          registry-url: "https://registry.npmjs.org/"
           cache: pnpm
+          # 刻意不配 registry-url：setup-node 配了它就会写 .npmrc 并注入占位 NODE_AUTH_TOKEN，
+          # 那个假 token 会盖过 Trusted Publishing 的 OIDC 认证，发布时报 401 token is invalid。
+          # npm 默认 registry 就是 registry.npmjs.org，无需额外指定。
 
       - name: 校验 tag 与 package.json 版本一致
         run: |
@@ -45,11 +47,16 @@ jobs:
 
       # Trusted Publishing 需要 npm CLI 11.5.1 及以上，setup-node 自带的 npm 版本偏旧，固定升级到最新。
       - name: 升级 npm CLI
-        run: npm install -g npm@latest
+        run: |
+          npm install -g npm@latest
+          npm --version
 
       # npm publish 会先执行 prepublishOnly：typecheck → test → build:all，产物保证新鲜且全绿。
-      # 不设 NODE_AUTH_TOKEN：认证由 OIDC 在发布时向 npm 换取短期令牌。
+      # 认证由 OIDC 在发布时向 npm 换取短期令牌，NODE_AUTH_TOKEN 必须为空，
+      # 否则 npm 会优先使用静态 token 而跳过 OIDC。
       - name: 发布到 npm
+        env:
+          NODE_AUTH_TOKEN: ""
         run: |
           ARGS=(--provenance --access public)
           if [[ "$PKG_VERSION" == *-* ]]; then

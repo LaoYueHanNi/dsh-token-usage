@@ -14,6 +14,8 @@ Trusted Publisher（OIDC）可以让 npm 在发布时按"仓库 + 工作流文�
 
 CI 侧 `.github/workflows/publish.yml` 删除 `NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}`，不再向发布步骤注入任何凭据，令牌由 npm CLI 用 OIDC 现场换取；因 setup-node 自带的 npm 版本偏旧，流程在发布前显式执行 `npm install -g npm@latest`（Trusted Publishing 要求 npm CLI 11.5.1 及以上）。`--provenance` 与 `permissions.id-token: write` 保留不变。
 
+`actions/setup-node` 刻意不配置 `registry-url`：一配它，setup-node 就会写入 `.npmrc` 并注入占位 `NODE_AUTH_TOKEN`，那个假 token 会让 npm 认为已有静态凭据而跳过 OIDC 换取流程，发布时报 `401 Unauthorized ... token is invalid`；npm 默认 registry 即 `registry.npmjs.org`，无需额外指定。发布步骤同时显式把 `NODE_AUTH_TOKEN` 置空，确保 OIDC 是唯一认证路径。
+
 本机手动发布的退路不变，且不需要新造长期凭据：npm 官网登录态支持交互式 WebAuthn / OTP 二次认证，本机 `npm publish` 走这条路径即可，无需绕过 2FA 的 token。因此仓库 Secrets 可以保持为空。
 
 ## Alternatives considered
