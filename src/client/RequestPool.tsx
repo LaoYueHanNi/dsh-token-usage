@@ -17,6 +17,7 @@
  * @module token-usage/client/RequestPool
  */
 
+import { useEffect, useRef } from 'react'
 import type { ReactNode } from 'react'
 import { Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
@@ -87,8 +88,10 @@ function HitCell({ cache, t }: { cache: RequestDetailCache; t: TranslateNS<'toke
     : <Tooltip label={tooltip} side="top" delayMs={100}><span tabIndex={0}>{content}</span></Tooltip>
 }
 
-/** The model + label pair as one non-breaking inline group: the model name
- * compresses first, the badge never wraps onto its own line. */
+/** The model + kind-badge pair as one non-breaking inline group: the model
+ * name compresses first, the kind badge (auxiliary subtype or compaction)
+ * never wraps onto its own line. Kind is always the model cell's badge —
+ * the origin column states only whose session issued the request. */
 function ModelCell({ detail, cache, t }: { detail: RequestDetailView; cache: RequestDetailCache; t: TranslateNS<'token-usage'> }): ReactNode {
   const rawModel = detail.responseModel ?? detail.requestedModel
   const model = detail.modelId ?? rawModel
@@ -102,19 +105,21 @@ function ModelCell({ detail, cache, t }: { detail: RequestDetailView; cache: Req
       <span className={styles['modelName']} tabIndex={0}>{model}</span>
     </Tooltip>
   )
-  const auxLabel = detail.kind === 'aux' && detail.auxKind !== undefined
+  const kindLabel = detail.kind === 'aux' && detail.auxKind !== undefined
     ? t(`pool.kind.${detail.auxKind}`)
-    : undefined
+    : detail.kind === 'compaction'
+      ? t('pool.kind.compaction')
+      : undefined
   if (cache.band !== 'loss') {
     return <span className={styles['modelInline']}>
       {name}
-      {auxLabel !== undefined && <span className={styles['auxKind']} aria-label={auxLabel}>{auxLabel}</span>}
+      {kindLabel !== undefined && <span className={styles['auxKind']} aria-label={kindLabel}>{kindLabel}</span>}
     </span>
   }
   return (
     <span className={styles['modelInline']}>
       {name}
-      {auxLabel !== undefined && <span className={styles['auxKind']} aria-label={auxLabel}>{auxLabel}</span>}
+      {kindLabel !== undefined && <span className={styles['auxKind']} aria-label={kindLabel}>{kindLabel}</span>}
       <Tooltip label={hitTooltipOf(cache, t)} side="top" delayMs={100}>
         <span className={styles['cacheLoss']} tabIndex={0}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m10.3 3.8-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.7-3.2l-8-14a2 2 0 0 0-3.4 0Z" /><path d="M12 9v4m0 4h.01" /></svg>
@@ -125,9 +130,9 @@ function ModelCell({ detail, cache, t }: { detail: RequestDetailView; cache: Req
   )
 }
 
-/** The status cell text: lifecycle states first, then the compaction kind
- * marker (kind and state are separate dimensions; the origin column never
- * doubles as either). */
+/** The status cell carries the lifecycle state only: kind is the model
+ * cell's badge, origin stays in the origin column — no dimension doubles
+ * as another. */
 function stateTextOf(detail: RequestDetailView, t: TranslateNS<'token-usage'>): string {
   return t(`pool.state.${detail.state}`)
 }
@@ -194,6 +199,16 @@ function noticeOf(detail: RequestDetailView, t: TranslateNS<'token-usage'>): str
   return ''
 }
 
+/** Fixed-layout column floors in px, in table order (origin, state, time,
+ * model, cache hit, input, output, cache read, first token, latency, speed,
+ * cost): each is the smallest width that column's content ever needs, so
+ * `table-layout: fixed` can treat them as true floors — the pane shares
+ * whatever surplus remains equally across all columns, and once the pane
+ * can no longer fit the floors the table scrolls. The optional cache-write
+ * column carries its own floor. */
+const POOL_COL_FLOORS: readonly number[] = [52, 52, 64, 120, 56, 52, 52, 56, 44, 52, 72, 60]
+const POOL_COL_FLOOR_CACHE_WRITE = 56
+
 /** One history row: the metrics stay in the visible order cache hit, input,
  * output, cache read, optional cache write, first token, latency, speed, cost.
  * Numbers right-aligned via the shared table CSS. */
@@ -204,7 +219,7 @@ function PoolRow({ detail, focusId, view, showCacheWrite, t }: { detail: Request
     : detail.startedAt ?? detail.orderAt
   return (
     <tr>
-      <td data-label={t('pool.col.origin')} className={styles['poolOrigin']}>{t(origin ? 'pool.origin.self' : 'pool.origin.child')}{detail.kind === 'compaction' ? ` · ${t('pool.kind.compaction')}` : ''}</td>
+      <td data-label={t('pool.col.origin')} className={styles['poolOrigin']}>{t(origin ? 'pool.origin.self' : 'pool.origin.child')}</td>
       <td data-label={t('pool.col.state')} className={`${styles['poolState']} ${stateClassOf(detail.state)}`}>{stateTextOf(detail, t)}</td>
       <td data-label={t('pool.col.time')} className={styles['poolTime']}><time dateTime={new Date(time).toISOString()}>{formatTimeOfDay(time)}</time></td>
       <td data-label={t('pool.col.model')} className={styles['poolModel']}><ModelCell detail={detail} cache={detail.cache} t={t} /></td>
@@ -232,7 +247,24 @@ export function RequestPoolSections({ details, focusId, view, staleAt, t }: Requ
   const latest = items[0]
   const history = items.slice(1)
   const showCacheWrite = items.some(item => item.cacheWriteTokens !== undefined)
+  const colFloors = showCacheWrite ? [...POOL_COL_FLOORS, POOL_COL_FLOOR_CACHE_WRITE] : POOL_COL_FLOORS
   const beyond = Math.max(0, activeCount - items.filter(item => item.state === 'waiting' || item.state === 'streaming').length)
+  // Scrollbar fade: the wrapper's thumb tints in only while the pane is
+  // being scrolled, then fades back 800ms after the last event (the timer
+  // dies with the component). Direct classList writes — no re-render.
+  const wrapRef = useRef<HTMLDivElement | null>(null)
+  const wrapTimer = useRef<number | undefined>(undefined)
+  useEffect(() => () => window.clearTimeout(wrapTimer.current), [])
+  const handleWrapScroll = (): void => {
+    const box = wrapRef.current
+    const cls = styles['scrolling']
+    if (box === null || cls === undefined) return
+    box.classList.add(cls)
+    window.clearTimeout(wrapTimer.current)
+    wrapTimer.current = window.setTimeout(() => {
+      box.classList.remove(cls)
+    }, 800)
+  }
 
   const latestPanel = (
     <section className={styles['poolSection']} aria-label={t('pool.latest.title')}>
@@ -253,7 +285,7 @@ export function RequestPoolSections({ details, focusId, view, staleAt, t }: Requ
               return (
                 <div className={styles['latestPanel']}>
                   <div className={styles['requestIdentity']}>
-                    <span className={styles['poolBadge']}>{t(origin ? 'pool.origin.self' : 'pool.origin.child')}{latest.kind === 'compaction' ? ` · ${t('pool.kind.compaction')}` : ''}</span>
+                    <span className={styles['poolBadge']}>{t(origin ? 'pool.origin.self' : 'pool.origin.child')}</span>
                     <span className={`${styles['poolState']} ${stateClassOf(latest.state)}`}><span className={styles['statusDot']} aria-hidden="true" />{stateTextOf(latest, t)}</span>
                     <ModelCell detail={latest} cache={latest.cache} t={t} />
                     <span className={styles['poolContext']}><time dateTime={new Date(time).toISOString()}>{formatTimeOfDay(time)}</time></span>
@@ -322,8 +354,11 @@ export function RequestPoolSections({ details, focusId, view, staleAt, t }: Requ
       {history.length === 0
         ? <div className={styles['poolEmpty']}>{items.length > 0 ? t('pool.emptyHistory') : t('pool.empty')}</div>
         : (
-            <div className={styles['poolTableWrap']} tabIndex={0} role="region" aria-label={t('pool.history.scroll')}>
-              <table className={styles['poolTable']} aria-label={t('pool.title')}>
+            <div ref={wrapRef} onScroll={handleWrapScroll} className={styles['poolTableWrap']} tabIndex={0} role="region" aria-label={t('pool.history.scroll')}>
+              <table className={styles['poolTable']} aria-label={t('pool.title')} style={{ minWidth: `${colFloors.reduce((sum, width) => sum + width, 0)}px` }}>
+                <colgroup>
+                  {colFloors.map((width, index) => <col key={index} style={{ width }} />)}
+                </colgroup>
                 <thead>
                   <tr>
                     <th className={styles['poolModelHead']}>{t('pool.col.origin')}</th>

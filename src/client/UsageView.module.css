@@ -458,19 +458,50 @@
 .poolNoticeNeutral { color: var(--dsw-alias-label-tertiary); }
 
 /* History table: thirteen columns, horizontal scroll when the pane is too
- * narrow (columns are never hidden). */
+ * narrow (columns are never hidden). The scrollbars read like the row
+ * lists' fade bars: no track, no arrow buttons — the thumb only tints in
+ * while the pane is actually being scrolled. (No `scrollbar-width` here:
+ * a non-auto standard value disables the ::-webkit-* rules below and
+ * would fall back to the UA's track-and-arrows default.) */
 .poolTableWrap {
   max-height: 196px;
   overflow: auto;
   overscroll-behavior: contain;
-  scrollbar-width: thin;
+}
+
+.poolTableWrap::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.poolTableWrap::-webkit-scrollbar-track,
+.poolTableWrap::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.poolTableWrap::-webkit-scrollbar-button {
+  display: none;
+}
+
+.poolTableWrap::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 4px;
+}
+
+.poolTableWrap.scrolling::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--dsw-alias-label-primary) 12%, transparent);
 }
 
 .poolTableWrap:focus-visible { outline: 2px solid var(--dsw-alias-border-l2); outline-offset: 2px; }
 
 .poolTable {
+  /* Fixed layout with per-column floors (colgroup in RequestPool.tsx):
+   * every column keeps at least its content-dictated minimum, surplus pane
+   * width is shared equally across all columns (no column balloons), and
+   * the inline min-width (sum of the floors) defers the horizontal scroll
+   * until the pane genuinely cannot fit the full column set. */
   width: 100%;
-  min-width: 1040px;
+  table-layout: fixed;
   border-collapse: collapse;
   font-size: 11px;
   font-variant-numeric: tabular-nums;
@@ -482,6 +513,9 @@
   text-align: right;
   border-bottom: 1px solid var(--dsw-alias-border-l1);
   white-space: nowrap;
+  /* Fixed columns clip instead of overlapping the neighbour: the floors
+   * are sized so real values fit, and the model column ellipsizes. */
+  overflow: hidden;
 }
 
 .poolTable th {
@@ -507,6 +541,8 @@
 }
 
 .poolModel {
+  /* The model cell caps at 200px (long names ellipsis via .modelName); the
+   * column floor comes from the colgroup. */
   max-width: 200px;
 }
 
@@ -590,6 +626,7 @@
 
   .poolModel,
   .poolModel .modelInline {
+    /* Card layout: the cell is a grid item spanning the row. */
     max-width: 100%;
   }
 
