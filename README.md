@@ -2,11 +2,11 @@
 
 [![awesome · DSH plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
 
-![Token Usage stats page](docs/images/token-usage.png)
+![Token Usage dashboard](docs/images/token-usage.png)
 
 [简体中文](./README.zh.md) | English
 
-A dsh usage plugin that displays model token usage right in the Web UI. After installation, open **Settings** (the gear icon in the sidebar) and you'll find the **Token Usage** page — overview cards (with cost), a trend chart, project / model / session / runtime-overhead detail views, and per-model pricing dialogs. The sidebar's **More** menu also opens the same statistics in a full-width main-column dashboard. Both surfaces share date-range and model filters; a single-day range uses an hourly trend and wider ranges use daily points.
+A dsh usage plugin that displays model token usage right in the Web UI. The sidebar's **Token Usage** entry opens a full-width dashboard — summary cards (with cost), a trend chart, and four detail boards (projects / sessions / models / runtime overhead); the same statistics live in **Settings → Token Usage** behind four detail tabs. Both surfaces share date-range and model filters; a single-day range uses an hourly trend and wider ranges use daily points.
 
 [dsh]: https://github.com/cordiverse/dsh
 
@@ -23,15 +23,22 @@ Repo: <https://github.com/LaoYueHanNi/dsh-token-usage>
 
 ## Features
 
-- **Live recording**: every provider-billed model call is recorded as it happens — tokens, cost, model, session — conversation requests, context-compaction calls, and auxiliary system calls included: the Auto review authorization reviewer, session-title generation, and reasoning translation. Auxiliary calls bill into the totals and the model breakdown, while the **Runtime overhead** tab in the detail switch splits them out by kind; they carry no session, so the session breakdown stays conversation-only. That history cannot be backfilled — the host keeps no usage record of those calls, and recording starts with the first request after upgrading.
-- **Web stats page**: filters (date range + model + `1d`/`7d`/`30d` shortcuts), eight compact summary cards in two rows in Settings, and a trend chart (hourly for one day, daily for wider ranges; hover a point for its total). The detail block switches between **projects / models / sessions / runtime overhead**. Project rows aggregate every matching root session before the session list is capped; directory-tail grouping intentionally merges folders with the same final segment. Rows sort by total tokens or cost (sessions also by last activity), and **Ctrl+click** on a listed session row opens that conversation (the host restores its last-selected view tab). The runtime-overhead view breaks auxiliary calls down by kind.
-- **Main-column dashboard**: the sidebar's **More → Token Usage** entry opens the same filters and metrics in a four-card dashboard (projects / sessions, models / runtime overhead). The cards collapse to one column when the available content width is narrow; **Pin to sidebar** in the settings card moves the entry out of the More menu into a resident sidebar row (switch it off to move it back) — the two never coexist.
+- **Live recording**: every provider-billed model call is recorded as it happens — tokens, cost, model, session — conversation requests, context-compaction calls, and auxiliary system calls included: the Auto review authorization reviewer, session-title generation, and reasoning translation. Auxiliary calls bill into the totals and the model breakdown. The ones the host proves belong to a session (session-title generation) also join that session's totals, trend and request pool, tagged with their kind; the rest stay global and are broken out by kind in the **Runtime overhead** board. That history cannot be backfilled — the host keeps no usage record of those calls, and recording starts with the first request after upgrading.
+- **Web stats page**: filters (date range + model + `1d`/`7d`/`30d` shortcuts), eight compact summary cards in two rows, and a trend chart (hourly for one day, daily for wider ranges; hover a point for its total). The request card carries **failed** and **overhead** pills. The detail block is a four-tab switcher — **projects / models / sessions / runtime overhead** — sharing the dashboard's row layout: project rows aggregate every matching root session before the session list is capped; directory-tail grouping intentionally merges folders with the same final segment. Rows sort by total tokens or cost (sessions also by last activity), and **Ctrl+click** on a listed session row opens that conversation (the host restores its last-selected view tab). The runtime-overhead tab breaks auxiliary calls down by kind.
+
+![Token Usage settings page](docs/images/settings-usage.png)
+
+- **Main-column dashboard**: the sidebar's **Token Usage** entry opens the same metrics as a four-board dashboard (projects / sessions, models / runtime overhead). The boards collapse to one column when the available content width is narrow; **Pin to sidebar** in the settings card moves the entry out of the **More** menu into a resident sidebar row (switch it off to move it back) — the two never coexist.
 - **Model performance view**: the model list can switch from usage to mean output speed, time to first token, and request latency. Untimed requests do not enter performance evaluation; speed and first-token means use streaming samples, and models with fewer than five streaming samples are marked rather than ranked. Historical timing is backfilled automatically when the rollup format changes.
-- **Session usage tab**: the conversation pane gains a **Usage** view tab (beside Chat / Trajectory) with the active session's dashboard — six stat cards (successful requests with a failure pill, cost, cache hit rate, average time-to-first-token, generation throughput, total tokens), a 4-bucket token strip, an hourly trend chart, and a per-model table. A scope switch toggles **Session / With subagents**, and the subagent table drills into each child and back. Hovering the failure pill breaks failures down per class (rate limited, server error, context exceeded, …).
+- **Session usage tab**: the conversation pane gains a **Usage** view tab (beside Chat / Trajectory) with the active session's dashboard — six stat cards (successful requests with a failure pill, cost, cache hit rate, average time-to-first-token, generation throughput, total tokens), a 4-bucket token strip, a trend chart (per-interval or cumulative), and a per-model table. A scope switch toggles **Session / With subagents**, and the subagent table drills into each child and back. Hovering the failure pill breaks failures down per class (rate limited, server error, context exceeded, …).
+- **Live request pool**: the same tab adds a **Latest request** panel (cache hit, input, output, first token, latency, speed — cost and cache buckets demoted to the footer) and a **Live requests** table (up to 19 earlier rows; origin, state, time, model, cache hit, input, output, cache read, first token, latency, speed, cost). Waiting, streaming, failed and cancelled requests are visible while they run, every provider attempt is its own row, and a low cache-hit rate is flagged inline with an explanation.
 
 ![Session Usage tab](docs/images/usage-tab.png)
 
-- **Cost figures & model pricing**: per-request cost is computed live from per-model rates (¥ per million tokens); unpriced models warn and count as ¥0. Click a priced model name in the dashboard to open its full price table; holding Ctrl while clicking a priced model filters the view to that model. The filter row carries a **pricing table** entry opening an overview of every model in the cloud feed — searchable, with simulated billing and expandable effective rates. Rates sync from the cloud feed on every startup — see [Model pricing](#model-pricing).
+- **Cost figures & model pricing**: per-request cost is computed live from per-model rates (¥ per million tokens); unpriced models warn and count as ¥0. Click a priced model name in the dashboard to open its full price table; holding Ctrl while clicking a priced model filters the view to that model. The filter row carries a **pricing table** entry opening an overview of every model in the cloud feed — searchable, with simulated billing and expandable effective rates; a second tab manages the local alias→model associations and lets you revoke them. Rates sync from the cloud feed on every startup — see [Model pricing](#model-pricing).
+
+![Pricing table](docs/images/pricing-table.png)
+
 - **Provider quota**: an input-bar button (left of the model chip) shows the selected provider's remaining quota. See [Provider quota](#provider-quota).
 - **History backfill**: the first startup syncs requests that happened before installation (idempotent); unreadable session logs are skipped and counted, never fatal to the sync.
 
@@ -43,7 +50,7 @@ Costs are billed per record at its own timestamp. Identification or pricing-rule
 
 ### Data directory
 
-Editable on the web card (**Settings → Plugins → Token Usage**): saving an absolute path takes effect immediately — history migrates automatically, no restart, no manual move. Blank keeps the default `~/.dsh/token-usage/`. A save is refused while a conversation is in progress; wait for it to end, then save again. Or set it directly:
+Editable on the web card (**Settings → Token Usage**): saving an absolute path takes effect immediately — history migrates automatically, no restart, no manual move. Blank keeps the default `~/.dsh/token-usage/`. A save is refused while a conversation is in progress; wait for it to end, then save again. Or set it directly:
 
 ```yml
 plugins:

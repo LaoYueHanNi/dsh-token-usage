@@ -8,7 +8,7 @@ dsh-market 详情页按仓库根 `screenshots.json` 展示 AppStore 式截图（
 
 ## Decision
 
-仓库根新增 `screenshots.json`（数组形式，路径相对仓库根），列出 5 张 `docs/images/` 下的**中文界面**截图，顺序按卖点主次：统计页（`token-usage_zh`）→ 会话用量页签（`usage-tab_zh`）→ 模型定价弹窗（`model-price_zh`）→ 智谱 GLM 配额（`zhipu-plan-usage_zh`）→ OpenCode Go 配额（`opencode-go-plan-usage_zh`）。之后更新截图只需推送本仓库，市场下一次 nightly 构建自动生效，无需向 awesome-dsh-plugin 提 PR。
+仓库根新增 `screenshots.json`（数组形式，路径相对仓库根），列出 5 张 `docs/images/` 下的**中文界面**截图，顺序按卖点主次：用量大屏（`token-usage_zh`）→ 会话用量页签（`usage-tab_zh`）→ 定价表总览弹窗（`pricing-table_zh`）→ 智谱 GLM 配额（`zhipu-plan-usage_zh`）→ OpenCode Go 配额（`opencode-go-plan-usage_zh`）。之后更新截图只需推送本仓库，市场下一次 nightly 构建自动生效，无需向 awesome-dsh-plugin 提 PR。
 
 ## Alternatives considered
 
@@ -19,4 +19,4 @@ dsh-market 详情页按仓库根 `screenshots.json` 展示 AppStore 式截图（
 ## Consequences
 
 - 代价：`screenshots.json` 与 `docs/images/` 的文件名耦合，截图改名或删除须同步维护该清单；市场展示统一为中文界面，非中文用户看到的截图是中文。
-- 换来：市场详情页的截图选取与顺序完全可控（首图即核心卖点的统计页），不再依赖 README 抽取的回退行为。
+- 换来：市场详情页的截图选取与顺序完全可控（首图即核心卖点的用量大屏），不再依赖 README 抽取的回退行为。
