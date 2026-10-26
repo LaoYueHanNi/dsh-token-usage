@@ -1,4 +1,5 @@
 # 推送版本 tag 触发 npm 发布：校验 tag 与 package.json 版本一致，rc 版自动挂 next 标签，启用 provenance。
+# 认证走 npm Trusted Publishing（OIDC）：包侧已信任本仓库的 publish.yml，无需在 Secrets 存 NPM_TOKEN。
 name: publish
 
 on:
@@ -42,10 +43,13 @@ jobs:
       - name: 安装依赖
         run: pnpm install --frozen-lockfile
 
+      # Trusted Publishing 需要 npm CLI 11.5.1 及以上，setup-node 自带的 npm 版本偏旧，固定升级到最新。
+      - name: 升级 npm CLI
+        run: npm install -g npm@latest
+
       # npm publish 会先执行 prepublishOnly：typecheck → test → build:all，产物保证新鲜且全绿。
+      # 不设 NODE_AUTH_TOKEN：认证由 OIDC 在发布时向 npm 换取短期令牌。
       - name: 发布到 npm
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           ARGS=(--provenance --access public)
           if [[ "$PKG_VERSION" == *-* ]]; then

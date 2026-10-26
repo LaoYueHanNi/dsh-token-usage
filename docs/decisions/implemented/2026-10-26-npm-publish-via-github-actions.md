@@ -8,7 +8,10 @@ Status: implemented
 
 ## Decision
 
-新增 `.github/workflows/publish.yml`：推送 `v*` 或纯数字前缀的 tag 触发（兼容历史上无 `v` 前缀的 tag 习惯），流程为——校验 tag 名（剥去可选 `v` 前缀）与 `package.json` 的 `version` 一致，不一致直接失败；`pnpm install --frozen-lockfile`；`npm publish --provenance --access public`，由 `prepublishOnly` 串联 typecheck → test → 双构建。版本号含 `-`（如 `0.4.12-rc.1`）自动加 `--tag next`，沿用 [next 标签的既有语义](2026-09-28-release-beyond-rc-occupied-number.md)；正式版默认 `latest`。并发用 `concurrency` 按 ref 串行。认证用 npm granular access token 存入仓库 Secret `NPM_TOKEN`，配合 `permissions.id-token: write` 生成 provenance。发版操作收敛为：bump version → commit → 打 tag → 推送 tag；version 何时提升仍由维护者手动决定，workflow 不改版本号。
+> [!NOTE]
+> 本决策中的 CI 发布认证方式已于 2026-10-26 由 [DR: npm 发布改用 Trusted Publishing（OIDC 免 token）](2026-10-26-npm-trusted-publishing-oidc.md) 部分取代：不再使用 granular access token，改为 OIDC 换取短期令牌。其余决策（tag 触发、版本校验、rc 挂 next、发布前质量门）继续有效。
+
+新增 `.github/workflows/publish.yml`：推送 `v*` 或纯数字前缀的 tag 触发（兼容历史上无 `v` 前缀的 tag 习惯），流程为——校验 tag 名（剥去可选 `v` 前缀）与 `package.json` 的 `version` 一致，不一致直接失败；`pnpm install --frozen-lockfile`；`npm publish --provenance --access public`，由 `prepublishOnly` 串联 typecheck → test → 双构建。版本号含 `-`（如 `0.4.12-rc.1`）自动加 `--tag next`，沿用 [next 标签的既有语义](2026-09-28-release-beyond-rc-occupied-number.md)；正式版默认 `latest`。并发用 `concurrency` 按 ref 串行。认证原用 npm granular access token 存入仓库 Secret `NPM_TOKEN`，配合 `permissions.id-token: write` 生成 provenance，现已改为 OIDC（见上方 NOTE）。发版操作收敛为：bump version → commit → 打 tag → 推送 tag；version 何时提升仍由维护者手动决定，workflow 不改版本号。
 
 ## Alternatives considered
 
