@@ -1,0 +1,26 @@
+# PR 必须引用 issue：不满足则检查失败，配合 main 分支保护规则强制执行。
+name: require-issue
+
+on:
+  pull_request:
+    types: [opened, edited, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  require-issue:
+    name: Require linked issue
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检查 PR 标题与描述是否引用 issue
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+          BODY: ${{ github.event.pull_request.body }}
+        run: |
+          if printf '%s\n%s' "$TITLE" "$BODY" | grep -qE '#[0-9]+'; then
+            echo "OK：PR 已引用 issue。"
+          else
+            echo '::error::PR 未关联任何 issue。请先创建 issue，并在 PR 标题或描述中引用（例如：Closes #123）。'
+            exit 1
+          fi
