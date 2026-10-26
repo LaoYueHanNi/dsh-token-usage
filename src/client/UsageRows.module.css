@@ -298,48 +298,6 @@
   font-weight: 600;
 }
 
-/* Settings prioritizes readable names over dashboard ranking bars. */
-.rowsCompact {
-  min-height: 0;
-  max-height: 360px;
-}
-
-.rowsCompact .row {
-  padding: 9px 0;
-}
-
-.rowsCompact .row:not(.srow) {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 118px 64px;
-  gap: 10px;
-}
-
-.rowsCompact .rowName {
-  width: auto;
-  min-width: 0;
-  font-size: 11px;
-}
-
-.rowsCompact .track {
-  display: none;
-}
-
-.rowsCompact .row:has(.perfNums) {
-  grid-template-columns: minmax(0, 1fr) auto;
-}
-
-.rowsCompact .perfNums {
-  grid-column: 2;
-  width: auto;
-  font-size: 11px;
-}
-
-.rowsCompact .nameText,
-.rowsCompact .rowNums,
-.rowsCompact .rowCost {
-  font-size: 11px;
-}
-
 .controlCompact .segBtn {
   font-size: 10px;
   padding: 2px 7px;
@@ -394,20 +352,6 @@
   }
 
   .rowTop > .rowName {
-    grid-column: 1 / -1;
-  }
-
-  .rowsCompact .row:not(.srow),
-  .rowsCompact .row:has(.perfNums) {
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 5px 10px;
-  }
-
-  .rowsCompact .row:not(.srow) > .rowName {
-    grid-column: 1 / -1;
-  }
-
-  .rowsCompact .perfNums {
     grid-column: 1 / -1;
   }
 }

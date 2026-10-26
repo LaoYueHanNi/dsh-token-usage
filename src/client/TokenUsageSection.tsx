@@ -450,10 +450,9 @@ export function TokenUsageSection({ t, close, sessionListed, openSession, varian
                   </div>
                   <div className={styles['detailBody']}>
                     {detailMode === 'aux'
-                      ? <OverheadRows compact aux={state.value.aux} costState={state.value.costState} view={view} t={t} />
+                      ? <OverheadRows aux={state.value.aux} costState={state.value.costState} view={view} t={t} />
                       : <UsageRows
                           key={detailMode}
-                          compact
                           kind={detailMode}
                           projectRows={projectRows}
                           modelRows={state.value.byModel}

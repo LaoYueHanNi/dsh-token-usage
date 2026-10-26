@@ -5,7 +5,7 @@
  * of the v3 demo: name | relative bar (projects/models only) | total
  * tokens · cache share | cost; sessions swap the bar for a second identity
  * line (directory · activity) under the same figures cells, all three
- * lists pinned to one compact figures style (no hover affordance — a
+ * lists rendering one figures style everywhere (no hover affordance — a
  * former four-bucket popup read as clutter and went).
  *
  * The relative bar scales to
@@ -151,8 +151,6 @@ function relativeTimeOf(time: number, t: TranslateNS<'token-usage'>): string {
  * on tests and hosts without them, and the rows then render inert. */
 export interface UsageRowsProps {
   kind: UsageRowsKind
-  /** Settings-specific density; the page keeps its bar-column layout. */
-  compact?: boolean
   /** `kind: 'project'` — the directory-tail folds. */
   projectRows?: readonly ProjectUsageRow[] | undefined
   /** `kind: 'model'` — the priced per-model rows. */
@@ -192,7 +190,6 @@ export interface UsageRowsProps {
  */
 export function UsageRows({
   kind,
-  compact = false,
   projectRows,
   modelRows,
   sessionRows,
@@ -348,7 +345,7 @@ export function UsageRows({
   const ariaLabel = kind === 'project' ? t('byProject.title') : kind === 'model' ? t('byModel.title') : t('bySession.title')
 
   return (
-    <div className={compact ? `${styles['rows']} ${styles['rowsCompact']}` : styles['rows']} ref={scrollRef} onScroll={handleScroll} role="list" aria-label={ariaLabel}>
+    <div className={styles['rows']} ref={scrollRef} onScroll={handleScroll} role="list" aria-label={ariaLabel}>
         {rows.length === 0
           ? <div className={styles['empty']}>{t('chart.empty')}</div>
           : rows.map(row => {

@@ -114,35 +114,3 @@
   font-variant-numeric: tabular-nums;
 }
 
-.compact .orow {
-  padding: 10px 0;
-  border-bottom: 1px solid var(--dsw-alias-border-l1);
-}
-
-.compact .orow:last-child {
-  border-bottom: none;
-}
-
-.compact .kindToggle {
-  font-size: 11px;
-  font-weight: 600;
-}
-
-.compact .onums,
-.compact .dline,
-.compact .asum {
-  font-size: 11px;
-}
-
-.compact .adetail {
-  gap: 6px;
-  margin: 8px 0 0 4px;
-  padding: 0 0 0 12px;
-  border-left: 1px solid var(--dsw-alias-border-l1);
-}
-
-.compact .asum {
-  margin-top: 0;
-  padding: 10px 0 4px;
-  border-top-width: 1px;
-}

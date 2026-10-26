@@ -206,19 +206,30 @@ async function openModelTab(): Promise<HTMLElement> {
 }
 
 describe('TokenUsageSection', () => {
-  it('groups the settings tabs and compact controls in one toolbar above the compact list', async () => {
-    stubFetch(async () => Response.json(SUMMARY))
+  it('groups the settings tabs and compact controls in one toolbar above the page-style usage lists', async () => {
+    stubFetch(async () => Response.json({
+      ...SUMMARY,
+      projectRows: [{ name: 'proj-a', cwd: '/work/proj-a', sessionCount: 2, totals: SUMMARY.total, cost: 0.0014 }],
+    }))
     render(<TokenUsageSection t={t} />)
     const projects = await screen.findByRole('list', { name: t('byProject.title') })
     const tabs = screen.getByRole('group', { name: t('detail.switch.label') })
     const sort = screen.getByRole('group', { name: t('byProject.title') })
     expect(tabs.parentElement).toBe(sort.closest('[class*="detailToolbar"]'))
-    expect(projects.className).toContain('rowsCompact')
+    // All three data tabs render the page's bar-column layout (no compact
+    // class anywhere; projects/models carry the relative bar).
+    expect(projects.className).not.toContain('rowsCompact')
+    expect(projects.querySelector('[class*="track"]')).not.toBeNull()
     fireEvent.click(screen.getByRole('button', { name: t('byModel.title') }))
-    expect(screen.getByRole('list', { name: t('byModel.title') }).className).toContain('rowsCompact')
+    const models = screen.getByRole('list', { name: t('byModel.title') })
+    expect(models.className).not.toContain('rowsCompact')
+    expect(models.querySelector('[class*="track"]')).not.toBeNull()
     fireEvent.click(screen.getByRole('button', { name: t('perf.toggle') }))
     expect(screen.getByRole('button', { name: t('perf.toggle') }).getAttribute('aria-pressed')).toBe('true')
     expect(screen.getByRole('group', { name: t('byModel.title') }).parentElement?.className).toContain('sortHidden')
+    fireEvent.click(screen.getByRole('button', { name: t('bySession.title') }))
+    const sessions = screen.getByRole('list', { name: t('bySession.title') })
+    expect(sessions.className).not.toContain('rowsCompact')
   })
 
   it.each(['panel', 'page'] as const)('uses authoritative project rows instead of folding the truncated sessions (%s)', async variant => {

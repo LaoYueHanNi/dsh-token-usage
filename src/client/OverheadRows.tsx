@@ -28,12 +28,11 @@ import styles from './OverheadRows.module.css'
  * @param props - the aux layer of the summary (possibly absent), the cost
  * state, the display currency view, and the locale translator.
  */
-export function OverheadRows({ aux, costState, view, t, compact = false }: {
+export function OverheadRows({ aux, costState, view, t }: {
   aux: AuxSummary | undefined
   costState: CostState
   view: CurrencyView
   t: TranslateNS<'token-usage'>
-  compact?: boolean
 }): ReactNode {
   // Which kinds are collapsed — inverted so the default is every kind
   // expanded (the user's pick): the aggregate row AND its per-model lines
@@ -69,7 +68,7 @@ export function OverheadRows({ aux, costState, view, t, compact = false }: {
   )
   const content = (
     <>
-      <div className={compact ? `${list['rows']} ${list['rowsCompact']}` : list['rows']} role="list" aria-label={t('aux.tab')}>
+      <div className={list['rows']} role="list" aria-label={t('aux.tab')}>
         {(aux.byKind ?? []).map(kindRow => {
           const expanded = !collapsedKinds.has(kindRow.auxKind)
           return (
@@ -120,5 +119,5 @@ export function OverheadRows({ aux, costState, view, t, compact = false }: {
       </div>
     </>
   )
-  return compact ? <div className={styles['compact']}>{content}</div> : content
+  return content
 }
