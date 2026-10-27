@@ -138,45 +138,24 @@
   max-width: none;
 }
 
-/* Per-model success/fail column: three tracks so every row's slash sits
- * on the same vertical line (the column midline). `minmax(0, 1fr)` on
- * both sides — not `1fr` (= minmax(auto, 1fr)) — otherwise a long A
- * (2,289) would shove that row's slash right of a short row's slash.
- * A right-aligns against the slash; B left-aligns. */
-.split {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-  align-items: baseline;
-  column-gap: 4px;
-  width: 100%;
-}
-
-.splitOk {
-  text-align: right;
-  min-width: 0;
-}
-
+/* Per-model request column: ONE plain column. The successful count and the
+ * failures after the slash are plain inline text, so the head above them
+ * shares the column's alignment and both sit on one edge — no tracks, no
+ * grid, no placeholder. The slash is a quiet separator; the failure
+ * figure rides in the error color and stays hoverable. */
 .splitSep {
   color: var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary));
-}
-
-.splitFailHead {
-  text-align: left;
-  min-width: 0;
+  padding: 0 1px;
 }
 
 .splitFail {
-  display: block;
-  text-align: left;
-  min-width: 0;
   color: var(--dsw-alias-state-error-primary);
 }
 
-/* Tooltip wrap in the B track: fill the half so the figure stays left. */
-.split > .pillWrap {
-  display: block;
-  min-width: 0;
-  justify-self: stretch;
+/* The tooltip wrap around the failure figure stays inline — the column
+ * is one text run, not a track layout. */
+.failWrap {
+  display: inline;
 }
 
 /* Count pills sitting beside the successful-request figure on the card.

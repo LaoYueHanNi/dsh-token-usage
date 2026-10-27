@@ -325,7 +325,10 @@ describe('UsageView', () => {
     expectText('10') // successful requests
     expectText('失败 2')
     expect(screen.getAllByText('失败 2')).toHaveLength(1)
-    expect(screen.getByRole('columnheader', { name: '成功/失败' })).toBeTruthy()
+    // The per-model column header reads 「请求」 (its values still split
+    // success/failure); the success/failure wording survives as its title.
+    const requestHead = screen.getByRole('columnheader', { name: '请求' })
+    expect(requestHead.getAttribute('title')).toBe('成功/失败')
     expectText('12.34￥') // cost
     // hit rate: 40K cache reads / (120K + 40K) served input = 25%.
     expectText('25%')

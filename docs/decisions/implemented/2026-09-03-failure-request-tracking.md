@@ -42,6 +42,9 @@ Status: implemented
 - 零失败不渲染胶囊（`FailurePill` 在 `failures === 0` 时返回 `null`）：多数会话/模型本来没有失败，灰「失败 0」占位把「没有失败」读成一个需要扫视的状态。有失败时可键盘聚焦。
 - Tooltip 包卡片胶囊，以及表里的红色 B。`failuresTooltip` 每行 `含义 ×count`，已知码走 `fail.{CODE}`（限流 / Rate limited 等十七对，2026-09-05 补 `INVALID_REQUEST`/`AUTH`/`MISSING_CREDENTIAL`/`ABORTED`/`REQUEST_EXTENSION`/`FILES_API`/`STREAM_CLOSED`/`MALFORMED_RESPONSE`），未知码原文兜底。排序：计数降序、码名字升序破平。
 - `FailurePill` 只给成功请求卡。**两处按模型表**（用量 tab、设置页 Token 用量）该列不用胶囊，改三轨网格：左 `minmax(0,1fr)` 成功数右对齐、中 `/`、右失败数左对齐且错误色，斜杠落在列几何中线、行行对齐；`B === 0` 只打印成功数、不画 `/` 与 `0`（仍走左轨，与有失败的行对齐）；`B > 0` 可 hover / 聚焦。胶囊在密排数字列里与入/出/费用列不齐，hover 气泡还被单元格挤窄。表头同一套三轨 `成功 / 失败`（`stat.ok` / `stat.fail`），`aria-label` 仍是 `stat.successFail`。单元格仍读该行自己的 `totals.failures` / `failuresByCode`。子会话表不加失败列。
+
+> [!NOTE]
+> 本决策中的表头 `成功 / 失败` 与三轨网格，已于 2026-10-27 由 [DR: 请求列改为一栏文本](../implemented/2026-10-27-requests-column-head.md) 取代：表头改为「请求」，该列退回一栏普通文本（`成功/失败` 斜杠式），不再有轨道与跨行斜杠。失败数语义、hover 分项、无失败不画斜杠等约定仍然有效。
 - 胶囊与气泡都不加粗（字重 400），字号 12px：对齐表内成功请求数，小于卡上 18px 主数字。气泡 `white-space: pre` + `width: max-content`，避免 CJK 在 shrink-to-fit 下按字折成竖条。选择器挂在 `.pillWrap` 上，卡片与表格同一覆盖。
 - 用量 tab 保持六列定宽栅格（900px 断点三列）；失败不再占第七格，不必 auto-fit。
 - 磁盘布局按事件日写入，见 [`2026-09-03-event-day-files`](./2026-09-03-event-day-files.md)。

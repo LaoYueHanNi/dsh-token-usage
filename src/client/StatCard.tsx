@@ -238,23 +238,14 @@ export interface RequestsCellProps {
   t: TranslateNS<'token-usage'>
 }
 
-/** Column header for the per-model success/fail split: same 3-track
- * grid as {@link RequestsCell} so the slash sits on the column midline. */
-export function RequestsSplitHead({ t }: { t: TranslateNS<'token-usage'> }): ReactNode {
-  return (
-    <span className={styles['split']}>
-      <span className={styles['splitOk']}>{t('stat.ok')}</span>
-      <span className={styles['splitSep']} aria-hidden>/</span>
-      <span className={styles['splitFailHead']}>{t('stat.fail')}</span>
-    </span>
-  )
-}
-
-/** One table cell: successful count, and when failures > 0 a slash on
- * the column midline plus the failure count in the error color.
- * Zero failures print only A (same left track, so the figure still
- * lines up with rows that have a B). Hovering B lists the per-code
- * breakdown. */
+/** One table cell: the successful count, and when failures > 0 the
+ * failure count after a slash, in the error color and hoverable for the
+ * per-code breakdown.
+ *
+ * The column is ONE plain column: the figures are plain inline text, so
+ * the head above them inherits the same alignment and the two share one
+ * edge — no tracks, no grid, no placeholder. Zero failures print only
+ * the successful count (no slash, no `0`). */
 export function RequestsCell({
   requests,
   failures,
@@ -262,16 +253,15 @@ export function RequestsCell({
   t,
 }: RequestsCellProps): ReactNode {
   const ok = requests.toLocaleString()
-  const okFigure = <span className={styles['splitOk']}>{ok}</span>
   if (failures === 0) {
-    return <span className={styles['split']}>{okFigure}</span>
+    return <span>{ok}</span>
   }
   const fail = failures.toLocaleString()
   return (
-    <span className={styles['split']}>
-      {okFigure}
+    <span>
+      <span>{ok}</span>
       <span className={styles['splitSep']} aria-hidden>/</span>
-      <span className={styles['pillWrap']}>
+      <span className={styles['failWrap']}>
         <Tooltip
           label={failuresTooltip(failuresByCode, t)}
           side="bottom"

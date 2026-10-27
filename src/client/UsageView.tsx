@@ -44,7 +44,7 @@ import { usePricingAssociationRefresh } from './pricing-associations.ts'
 import { HitRateText } from './HitRateText.tsx'
 import { RequestPoolSections } from './RequestPool.tsx'
 import { aggregateProjections, buildChildIndex, directSubagentIds, subagentParentOf, subtreeIds, buildStatsFreshnessKey } from './session-stats.ts'
-import { RequestsCell, RequestsSplitHead, RequestsStatCard, StatCard } from './StatCard.tsx'
+import { RequestsCell, RequestsStatCard, StatCard } from './StatCard.tsx'
 import { TrendChart } from './TrendChart.tsx'
 import type { TrendChartMode } from './TrendChart.tsx'
 import { useColorSchemeMirror } from './use-color-scheme.ts'
@@ -377,7 +377,7 @@ export function UsageView({ useSessions, useProjection, sessionId, t }: UsageVie
                         <thead>
                           <tr>
                             <th className={styles['modelHead']}>{t('filter.model')}</th>
-                            <th aria-label={t('stat.successFail')}><RequestsSplitHead t={t} /></th>
+                            <th title={t('stat.successFail')}>{t('stat.requestColumn')}</th>
                             <th>{t('stat.input')}</th>
                             <th>{t('stat.output')}</th>
                             <th>{t('stat.cacheRead')}</th>
