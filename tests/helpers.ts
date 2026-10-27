@@ -96,6 +96,97 @@ export function turnEndEvent(overrides: {
   } as SessionEvent<'turn/end'>
 }
 
+/** Minimal but shape-true turn/start event for unit tests: a new turn opens,
+ * so the previous turn's completion no longer describes the conversation. */
+export function turnStartEvent(overrides: {
+  seq?: number
+  time?: number
+  turn?: number
+} = {}): SessionEvent<'turn/start'> {
+  return {
+    type: 'turn/start',
+    seq: SessionSeq(overrides.seq ?? 9),
+    time: overrides.time ?? 1_700_000_000_000,
+    data: { turn: overrides.turn ?? 1 },
+  } as SessionEvent<'turn/start'>
+}
+
+/** Minimal but shape-true llm/retry-started event: the backoff is over and the
+ * next attempt is about to dispatch, so the conversation is no longer waiting
+ * out a retry delay. */
+export function retryStartedEvent(overrides: {
+  seq?: number
+  time?: number
+  turn?: number
+  step?: number
+  retry?: number
+} = {}): SessionEvent<'llm/retry-started'> {
+  return {
+    type: 'llm/retry-started',
+    seq: SessionSeq(overrides.seq ?? 9),
+    time: overrides.time ?? 1_700_000_000_000,
+    data: {
+      retryId: 'retry-1',
+      turn: overrides.turn ?? 1,
+      step: overrides.step ?? 1,
+      retry: overrides.retry ?? 1,
+    },
+  } as SessionEvent<'llm/retry-started'>
+}
+
+/** Minimal but shape-true tool/call event: the model asked for a tool, so the
+ * conversation now waits for that tool's result. */
+export function toolCallEvent(overrides: {
+  seq?: number
+  time?: number
+  turn?: number
+  step?: number
+  callId?: string
+  name?: string
+} = {}): SessionEvent<'tool/call'> {
+  const callId = overrides.callId ?? 'call-1'
+  return {
+    type: 'tool/call',
+    seq: SessionSeq(overrides.seq ?? 5),
+    time: overrides.time ?? 1_700_000_000_000,
+    data: {
+      turn: overrides.turn ?? 1,
+      step: overrides.step ?? 1,
+      callId: callId as SessionEvent<'tool/call'>['data']['callId'],
+      name: overrides.name ?? 'read_file',
+      arguments: '{}',
+    },
+  } as SessionEvent<'tool/call'>
+}
+
+/** Minimal but shape-true tool/result event: the awaited tool answered, so
+ * the conversation is no longer waiting for a tool. */
+export function toolResultEvent(overrides: {
+  seq?: number
+  time?: number
+  turn?: number
+  step?: number
+  callId?: string
+} = {}): SessionEvent<'tool/result'> {
+  const callId = overrides.callId ?? 'call-1'
+  return {
+    type: 'tool/result',
+    seq: SessionSeq(overrides.seq ?? 6),
+    time: overrides.time ?? 1_700_000_000_000,
+    data: {
+      turn: overrides.turn ?? 1,
+      step: overrides.step ?? 1,
+      message: {
+        id: 'tool-msg-1',
+        role: 'tool',
+        content: [],
+        source: { kind: 'tool', callId: callId as SessionEvent<'tool/result'>['data']['message']['source']['callId'] },
+        toolCallId: callId as SessionEvent<'tool/result'>['data']['message']['toolCallId'],
+      },
+    },
+  } as SessionEvent<'tool/result'>
+}
+
 /** Minimal but shape-true llm/retry event for unit tests. The default
  * failure is RATE_LIMIT (the retryable class the user actually sees). */
 export function retryEvent(overrides: {

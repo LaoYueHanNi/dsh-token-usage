@@ -91,6 +91,34 @@ describe('buildSessionRequestDetails — window and order', () => {
     expect(details.items[19]!.id).toBe('r20')
   })
 
+  it('carries the headline session’s conversation state into the snapshot', () => {
+    const details = buildSessionRequestDetails({
+      records: [record({ requestId: 'r1', sessionId: 's1' }), record({ requestId: 'r2', sessionId: 's2', time: 2_000 })],
+      live: {
+        attempts: [],
+        activeCount: 0,
+        conversations: new Map([
+          ['s2', { state: 'awaiting-tool' as const }],
+          ['s1', { state: 'turn-complete' as const }],
+        ]),
+      },
+      pricing: NO_PRICING, asOf: 9_000, liveCapability: 'lifecycle',
+    })
+    // The panel is about the headline row (r2, session s2): the state of THAT
+    // session is the one the note may talk about.
+    expect(details.items[0]!.sessionId).toBe('s2')
+    expect(details.conversation).toEqual({ state: 'awaiting-tool' })
+  })
+
+  it('leaves the conversation state out when the scope has no conclusion', () => {
+    const details = buildSessionRequestDetails({
+      records: [record({ requestId: 'r1', sessionId: 's1' })],
+      live: { attempts: [], activeCount: 0, conversations: new Map([['other', { state: 'turn-complete' as const }]]) },
+      pricing: NO_PRICING, asOf: 9_000, liveCapability: 'lifecycle',
+    })
+    expect(details.conversation).toBeUndefined()
+  })
+
   it('sorts by start time, not completion time — a late finisher cannot steal the top', () => {
     // A starts earlier, B later; B finishes first (R02's shape).
     const a = live({ id: 'live-a', sessionId: 's1', startedAt: 5_000, settledAt: 9_000, state: 'completed' })

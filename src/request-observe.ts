@@ -56,7 +56,7 @@ import type {} from '@deepseek-ai/dsh-compaction/types'
 import type { AuxKind } from './usage-record.ts'
 import { isTokenDelta, type UsageFields, type UsageRecord } from './usage-record.ts'
 import { AUTO_REVIEW_PROMPT_PREFIX } from './aux-request.ts'
-import type { RequestDetailState } from './wire.ts'
+import type { ConversationStatus, RequestDetailState } from './wire.ts'
 
 /** One live attempt observed at the waterfall: the runtime-state shape the
  * stats route merges against the persisted records. */
@@ -108,6 +108,9 @@ export interface LiveSnapshot {
   attempts: readonly LiveAttempt[]
   /** Attempts still waiting/streaming in the scope. */
   activeCount: number
+  /** 每个会话的对话状态（等待工具结果 / 本轮对话已完成 / 正在重试）；缺失的
+   * 会话没有结论（本轮仍在进行中，或本进程从未观察到它的事件）。 */
+  conversations?: ReadonlyMap<string, ConversationStatus>
 }
 
 /** How long a SETTLED live attempt lingers before cleanup (the merge needs
@@ -137,6 +140,15 @@ export class RequestObserver {
    * … `compaction/end`): the lock window a summarize waterfall call
    * dispatches inside, keyed by its `compactionId`. */
   private readonly openCompactions = new Map<string, string>()
+  /** 每个会话尚未回结果的工具调用（`tool/call` 已发生、`tool/result` 未到）。
+   * 非空即「正在等工具结果」。 */
+  private readonly pendingToolCalls = new Map<string, Set<string>>()
+  /** 每个会话最近一轮 turn 的收尾：`true` = 本轮正常结束（`completed`）。
+   * 新一轮 `turn/start` 会清掉它——上一轮的完成不代表现在。 */
+  private readonly endedTurns = new Set<string>()
+  /** 每个会话当前的重试窗口（`llm/retry` 已记录、退避等待中）。退避结束
+   * （`llm/retry-started`）或回合结束时清掉。 */
+  private readonly retryWindows = new Map<string, NonNullable<ConversationStatus['retry']>>()
   private disposed = false
   private disposers: Array<() => void> = []
 
@@ -174,6 +186,9 @@ export class RequestObserver {
     this.activeSteps.clear()
     this.counters.clear()
     this.openCompactions.clear()
+    this.pendingToolCalls.clear()
+    this.endedTurns.clear()
+    this.retryWindows.clear()
     for (const off of this.disposers) off()
     this.disposers = []
   }
@@ -182,13 +197,29 @@ export class RequestObserver {
   snapshot(sessionIds: readonly string[]): LiveSnapshot {
     const wanted = new Set(sessionIds)
     const attempts: LiveAttempt[] = []
+    const conversations = new Map<string, ConversationStatus>()
     let activeCount = 0
     for (const attempt of this.attempts.values()) {
       if (!wanted.has(attempt.sessionId)) continue
       if (attempt.state === 'waiting' || attempt.state === 'streaming') activeCount += 1
       attempts.push(attempt)
     }
-    return { attempts, activeCount }
+    for (const sessionId of wanted) {
+      const state = this.conversationStateOf(sessionId)
+      if (state !== undefined) conversations.set(sessionId, state)
+    }
+    return { attempts, activeCount, conversations }
+  }
+
+  /** 一个会话的对话状态。重试窗口优先于等工具与本轮完成——它是当下正在
+   * 发生的事，其余两者是回合的收尾结论。 */
+  private conversationStateOf(sessionId: string): ConversationStatus | undefined {
+    const retry = this.retryWindows.get(sessionId)
+    if (retry !== undefined) return { state: 'retrying', retry }
+    const pending = this.pendingToolCalls.get(sessionId)
+    if (pending !== undefined && pending.size > 0) return { state: 'awaiting-tool' }
+    if (this.endedTurns.has(sessionId)) return { state: 'turn-complete' }
+    return undefined
   }
 
   /** Persist the exact linked attempt clock without changing the ledger's
@@ -264,6 +295,29 @@ export class RequestObserver {
       this.activeSteps.set(sessionId, { turn: event.data.turn, step: event.data.step })
       return
     }
+    if (event.type === 'turn/start') {
+      // A new turn opens: the previous turn's completion says nothing about
+      // the one now running — and neither does its retry window.
+      this.endedTurns.delete(sessionId)
+      this.retryWindows.delete(sessionId)
+      return
+    }
+    if (event.type === 'tool/call') {
+      // The model asked for a tool: the conversation is now waiting for that
+      // result, whatever the request row's own state says.
+      const pending = this.pendingToolCalls.get(sessionId) ?? new Set<string>()
+      pending.add(event.data.callId)
+      this.pendingToolCalls.set(sessionId, pending)
+      this.endedTurns.delete(sessionId)
+      return
+    }
+    if (event.type === 'tool/result') {
+      const pending = this.pendingToolCalls.get(sessionId)
+      if (pending === undefined) return
+      pending.delete(event.data.message.toolCallId)
+      if (pending.size === 0) this.pendingToolCalls.delete(sessionId)
+      return
+    }
     if (event.type === 'assistant/message') {
       // The durable settlement of this turn/step's LAST attempt: link it so
       // the merge can fold the persisted row into the live one in place.
@@ -289,6 +343,22 @@ export class RequestObserver {
         linked.failureCode ??= event.data.failure.code
         linked.durableRequestId = `failure:${sessionId}:${String(event.seq)}`
       }
+      // The conversation is now waiting out a backoff before the next try:
+      // the panel says so instead of leaving a bare failed row behind. The
+      // `always` policy has no retry ceiling — the count stands alone.
+      this.retryWindows.set(sessionId, {
+        count: event.data.retry,
+        max: 'maxRetries' in event.data ? event.data.maxRetries : 0,
+        delayMs: event.data.delayMs,
+        code: event.data.failure.code,
+      })
+      this.endedTurns.delete(sessionId)
+      return
+    }
+    if (event.type === 'llm/retry-started') {
+      // The backoff is over; the next attempt is about to dispatch. The
+      // conversation is no longer waiting out a retry delay.
+      this.retryWindows.delete(sessionId)
       return
     }
     if (event.type === 'compaction/start') {
@@ -319,6 +389,13 @@ export class RequestObserver {
       // reason is a durable fact: error → failed, abort → cancelled,
       // anything else → interrupted (unknown, never guessed as a success).
       const reason = event.data.reason
+      // The turn is over: a tool result that never came will never come, so
+      // the pending calls are dropped, and no retry window outlives the turn.
+      // Only a normally completed turn reads as 「本轮对话已完成」.
+      this.pendingToolCalls.delete(sessionId)
+      this.retryWindows.delete(sessionId)
+      if (reason.kind === 'completed') this.endedTurns.add(sessionId)
+      else this.endedTurns.delete(sessionId)
       const state: RequestDetailState = reason.kind === 'error' ? 'failed'
         : reason.kind === 'aborted' ? 'cancelled'
           : 'interrupted'

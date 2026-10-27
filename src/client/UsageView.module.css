@@ -432,15 +432,37 @@
 .requestFooter {
   display: flex;
   justify-content: space-between;
+  align-items: baseline;
   gap: 8px 18px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   border-top: 1px solid var(--dsw-alias-border-l1);
   padding-top: 8px;
   font-size: 11px;
   color: var(--dsw-alias-label-secondary);
 }
 
-.requestBuckets { display: flex; gap: 8px 15px; flex-wrap: wrap; }
+.requestBuckets { display: flex; gap: 8px 15px; flex-wrap: wrap; flex: 0 0 auto; }
+
+/* The lifecycle note sits in the footer's right slot — the mirror of the
+ * buckets — so the panel's height never depends on a note appearing or
+ * disappearing (the note used to own a line of its own, which pushed the
+ * history table down and back on every state change). The footer's
+ * space-between carries the note to the right edge; when the pane is too
+ * narrow for the full sentence the note ellipsises and the tooltip keeps
+ * the text. */
+.requestNote {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin: 0;
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: light-dark(#b45309, #d9ac64);
+}
+
+.requestNoteError { color: var(--dsw-alias-state-error-primary); }
+.requestNoteNeutral { color: var(--dsw-alias-label-tertiary); }
 
 .requestFooter b {
   color: var(--dsw-alias-label-primary);
@@ -448,14 +470,13 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* The stale notice in the history section keeps its own line: it is a
+ * panel-wide condition, not a per-request note. */
 .poolNotice {
   margin: 4px 0 0;
   font-size: 11px;
   color: light-dark(#b45309, #d9ac64);
 }
-
-.poolNoticeError { color: var(--dsw-alias-state-error-primary); }
-.poolNoticeNeutral { color: var(--dsw-alias-label-tertiary); }
 
 /* History table: thirteen columns, horizontal scroll when the pane is too
  * narrow (columns are never hidden). The scrollbars read like the row

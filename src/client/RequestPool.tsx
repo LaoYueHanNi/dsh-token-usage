@@ -25,6 +25,7 @@ import type { CurrencyView } from './format.ts'
 import { bandOf, formatCost, formatRequestRate, formatRequestRateExact, formatTimeOfDay, formatTokens, formatTtft } from './format.ts'
 import { bandClassOf } from './HitRateText.tsx'
 import type { RequestDetailCache, RequestDetailView, SessionRequestDetails } from '../wire.ts'
+import type { ConversationStatus } from '../wire.ts'
 import styles from './UsageView.module.css'
 
 export interface RequestPoolProps {
@@ -176,19 +177,21 @@ function MetricValue({ text, unit = '' }: { text: string; unit?: string }): Reac
   return <span>{value}{suffix !== '' && <span className={styles['metricUnit']}>{suffix}</span>}</span>
 }
 
-/** The in-flight notice line under the latest panel, plus the priced /
- * untimed notes the state matrix requires. */
-function noticeOf(detail: RequestDetailView, t: TranslateNS<'token-usage'>): string {
-  switch (detail.state) {
-    case 'waiting': return t('pool.note.waiting')
-    case 'streaming': return t('pool.note.streaming')
-    case 'cancelled': return t('pool.note.cancelled')
-    case 'interrupted': return t('pool.note.interrupted')
-    case 'failed': return t('pool.note.failed', { code: detail.failureCode ?? '' })
-    default: break
-  }
-  // The compact auxiliary marker already explains why this is not a normal
-  // conversation request; do not add a second cache-diagnostics sentence.
+/** The panel's one-line notice: what it shows, how it reads, and the full
+ * text behind the tooltip. `text` is the slot's line; `full` never drops a
+ * fact the reader would otherwise lose. */
+interface PanelNotice {
+  /** 页脚右槽显示的一行文本。 */
+  text: string
+  /** Tooltip 的完整说明（可能比显示的长：会话状态 + 请求自身的诊断）。 */
+  full: string
+  /** 语气：`pending` 进行中（琥珀）、`error` 失败（红）、`neutral` 已结算（灰）。 */
+  tone: 'pending' | 'error' | 'neutral'
+}
+
+/** 已结算请求自身的诊断说明：辅助请求不重复解释（紧凑标记已经说明），
+ * 缓存排除与计时/用量/定价的缺口各自说明自己。 */
+function diagnosticOf(detail: RequestDetailView, t: TranslateNS<'token-usage'>): string {
   if (detail.kind === 'aux') return ''
   if (detail.pricingStatus === 'unpriced') return t('pool.note.unpriced')
   if (detail.inputTokens === undefined || detail.outputTokens === undefined) return t('pool.note.noUsage')
@@ -197,6 +200,64 @@ function noticeOf(detail: RequestDetailView, t: TranslateNS<'token-usage'>): str
     return detail.cache.reason !== undefined ? t(`pool.excluded.${detail.cache.reason}`) : ''
   }
   return ''
+}
+
+/** The panel's notice: the conversation's state first (waiting for a tool
+ * result / this turn is done / retrying after a failure), then the request's
+ * own lifecycle, then the settled request's diagnostic. A lower-priority
+ * fact never disappears — it moves into the tooltip instead, so both stay
+ * reachable. */
+function noticeOf(
+  detail: RequestDetailView,
+  conversation: ConversationStatus | undefined,
+  t: TranslateNS<'token-usage'>,
+): PanelNotice | undefined {
+  const one = (text: string, tone: PanelNotice['tone']): PanelNotice => ({ text, full: text, tone })
+  // The request's own lifecycle note. A settled (successful) row has none.
+  const own = ((): PanelNotice | undefined => {
+    switch (detail.state) {
+      case 'waiting': return one(t('pool.note.waiting'), 'pending')
+      case 'streaming': return one(t('pool.note.streaming'), 'pending')
+      case 'cancelled': return one(t('pool.note.cancelled'), 'pending')
+      case 'interrupted': return one(t('pool.note.interrupted'), 'pending')
+      case 'failed': return one(t('pool.note.failed', { code: detail.failureCode ?? '' }), 'error')
+      default: return undefined
+    }
+  })()
+  // The settled request's own diagnostic — only a successful row carries one
+  // (a failed attempt explains itself in its own note).
+  const diagnostic = detail.state === 'completed' ? diagnosticOf(detail, t) : ''
+  // The conversation's state is the headline; everything it outranks follows
+  // it into the tooltip.
+  const conversationNotice = (text: string, tone: PanelNotice['tone'], rest: string): PanelNotice => ({
+    text,
+    full: [text, rest, own?.text ?? '', diagnostic].filter(part => part !== '').join(' · '),
+    tone,
+  })
+  if (conversation?.state === 'retrying') {
+    const retry = conversation.retry
+    const count = String(retry?.count ?? 1)
+    const text = retry !== undefined && retry.max > 0
+      ? t('pool.note.retrying', { count, max: String(retry.max) })
+      : t('pool.note.retryingAlways', { count })
+    const wait = retry === undefined
+      ? ''
+      : t('pool.note.retryWait', {
+          seconds: String(Math.max(1, Math.round(retry.delayMs / 1000))),
+          code: retry.code ?? '—',
+        })
+    return conversationNotice(text, 'pending', wait)
+  }
+  if (conversation?.state === 'awaiting-tool') {
+    return conversationNotice(t('pool.note.awaitingTool'), 'pending', '')
+  }
+  if (conversation?.state === 'turn-complete') {
+    return conversationNotice(t('pool.note.turnComplete'), 'neutral', '')
+  }
+  if (own !== undefined) {
+    return diagnostic === '' ? own : { ...own, full: `${own.full} · ${diagnostic}` }
+  }
+  return diagnostic === '' ? undefined : one(diagnostic, 'neutral')
 }
 
 /** Fixed-layout column floors in px, in table order (origin, state, time,
@@ -281,7 +342,15 @@ export function RequestPoolSections({ details, focusId, view, staleAt, t }: Requ
               const time = latest.orderBasis === 'record'
                 ? latest.recordTime ?? latest.orderAt
                 : latest.startedAt ?? latest.orderAt
-              const notice = noticeOf(latest, t)
+              const notice = noticeOf(latest, details.conversation, t)
+              // The note's colour follows its tone: failed reads as an error,
+              // a settled note as quiet text, an in-flight / awaiting-tool note
+              // as the amber 「still running」 voice.
+              const noteClass = `${styles['requestNote']} ${notice?.tone === 'error'
+                ? styles['requestNoteError'] ?? ''
+                : notice?.tone === 'neutral'
+                  ? styles['requestNoteNeutral'] ?? ''
+                  : ''}`
               return (
                 <div className={styles['latestPanel']}>
                   <div className={styles['requestIdentity']}>
@@ -322,11 +391,20 @@ export function RequestPoolSections({ details, focusId, view, staleAt, t }: Requ
                       <span>{t('pool.metric.cacheRead')} <b>{tokenTextOf(latest.cacheReadTokens)}</b></span>
                       {showCacheWrite && <span>{t('pool.metric.cacheWrite')} <b>{tokenTextOf(latest.cacheWriteTokens)}</b></span>}
                     </div>
-                    {(staleAt !== undefined || latest.state !== 'completed') && (
-                      <span className={styles['poolContext']}>{staleAt !== undefined ? t('pool.asOf', { time: formatTimeOfDay(staleAt) }) : t(inFlight ? 'pool.pending' : 'pool.ended')}</span>
-                    )}
+                    {/* The note lives in the footer's right slot — the same
+                     * slot the buckets mirror — so the panel keeps one
+                     * height whether a note exists or not. It is one line with
+                     * an ellipsis; the full text is in the tooltip. */}
+                    {notice !== undefined
+                      ? (
+                          <Tooltip label={notice.full} side="top" delayMs={100}>
+                            <span className={noteClass} tabIndex={0}>{notice.text}</span>
+                          </Tooltip>
+                        )
+                      : staleAt !== undefined
+                        ? <span className={styles['poolContext']}>{t('pool.asOf', { time: formatTimeOfDay(staleAt) })}</span>
+                        : null}
                   </div>
-                  {notice !== '' && <div className={`${styles['poolNotice']} ${latest.state === 'failed' ? styles['poolNoticeError'] : latest.state === 'completed' ? styles['poolNoticeNeutral'] : ''}`}>{notice}</div>}
                 </div>
               )
             })()

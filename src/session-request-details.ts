@@ -21,7 +21,7 @@ import type { RateKey } from './wire.ts'
 import { effectiveModelOf, type AuxKind, type UsageRecord } from './usage-record.ts'
 import { assessRequestCache, routeExclusionsOf, settledSpeedOf } from './request-details.ts'
 import type { LiveAttempt } from './request-observe.ts'
-import { REQUEST_POOL_LIMIT, type RequestDetailView, type SessionRequestDetails } from './wire.ts'
+import { REQUEST_POOL_LIMIT, type ConversationStatus, type RequestDetailView, type SessionRequestDetails } from './wire.ts'
 
 /** How per-record pricing reaches the builder: the route's own resolver
  * (request-time pricing, context tiers, currency stay the server's job). */
@@ -240,7 +240,7 @@ function mergeLiveInto(row: MergedAttempt, live: MergedAttempt & { startedAt: nu
  */
 export function buildSessionRequestDetails(input: {
   records: readonly UsageRecord[]
-  live: { attempts: readonly LiveAttempt[]; activeCount: number }
+  live: { attempts: readonly LiveAttempt[]; activeCount: number; conversations?: ReadonlyMap<string, ConversationStatus> }
   pricing: RequestPricing
   asOf: number
   liveCapability: SessionRequestDetails['liveCapability']
@@ -369,11 +369,18 @@ export function buildSessionRequestDetails(input: {
     }
   }
 
+  // The headline row's session carries the conversation state: the panel is
+  // about that request, so the note about where the conversation stands
+  // belongs to the same session. A scope without a headline has no state.
+  const headline = items[0]
+  const conversation = headline !== undefined ? live.conversations?.get(headline.sessionId) : undefined
+
   return {
     items: items.slice(0, REQUEST_POOL_LIMIT),
     limit: REQUEST_POOL_LIMIT,
     asOf,
     activeCount: live.activeCount,
     liveCapability,
+    ...(conversation !== undefined ? { conversation } : {}),
   }
 }

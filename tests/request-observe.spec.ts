@@ -10,7 +10,7 @@ import { Context, Service } from '@deepseek-ai/cordis'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { SessionSeq } from '@deepseek-ai/dsh-session'
 import { RequestObserver } from '../src/request-observe.ts'
-import { compactionEvent, messageEvent, retryEvent, turnEndEvent } from './helpers.ts'
+import { compactionEvent, messageEvent, retryEvent, retryStartedEvent, toolCallEvent, toolResultEvent, turnEndEvent, turnStartEvent } from './helpers.ts'
 import { buildSessionRequestDetails } from '../src/session-request-details.ts'
 import { coerceRecord, recordFromEvent } from '../src/usage-record.ts'
 
@@ -417,6 +417,87 @@ describe('live request observer', () => {
       const { attempts } = observer.snapshot(['s1'])
       expect(attempts).toHaveLength(1)
       expect(attempts[0]!.durableRequestId).toBe('compaction:s1:7')
+    })
+  })
+
+  describe('conversation state — where the dialogue stands right now', () => {
+    it('reports waiting for a tool result between the call and its answer', async () => {
+      const { ctx, observer } = await mounted()
+      expect(observer.snapshot(['s1']).conversations?.get('s1')).toBeUndefined()
+      emit(ctx, toolCallEvent({ callId: 'call-1' }))
+      expect(observer.snapshot(['s1']).conversations?.get('s1')).toEqual({ state: 'awaiting-tool' })
+      // The answer arrives: the conversation is no longer waiting for a tool.
+      emit(ctx, toolResultEvent({ callId: 'call-1' }))
+      expect(observer.snapshot(['s1']).conversations?.get('s1')).toBeUndefined()
+      observer.dispose()
+    })
+
+    it('keeps waiting for a tool while another call is still unanswered', async () => {
+      const { ctx, observer } = await mounted()
+      emit(ctx, toolCallEvent({ callId: 'call-1' }))
+      emit(ctx, toolCallEvent({ callId: 'call-2', seq: 6 }))
+      emit(ctx, toolResultEvent({ callId: 'call-1', seq: 7 }))
+      expect(observer.snapshot(['s1']).conversations?.get('s1')).toEqual({ state: 'awaiting-tool' })
+      emit(ctx, toolResultEvent({ callId: 'call-2', seq: 8 }))
+      expect(observer.snapshot(['s1']).conversations?.get('s1')).toBeUndefined()
+      observer.dispose()
+    })
+
+    it('reports the turn as complete only when it ended normally', async () => {
+      const { ctx, observer } = await mounted()
+      emit(ctx, turnStartEvent({ turn: 3 }))
+      emit(ctx, turnEndEvent({ seq: 9, turn: 3, reason: { kind: 'completed' } }))
+      expect(observer.snapshot(['s1']).conversations?.get('s1')).toEqual({ state: 'turn-complete' })
+      // The next turn opens: the previous turn's completion no longer stands.
+      emit(ctx, turnStartEvent({ seq: 10, turn: 4 }))
+      expect(observer.snapshot(['s1']).conversations?.get('s1')).toBeUndefined()
+      observer.dispose()
+    })
+
+    it('never calls a failed or aborted turn complete, and drops a tool call the turn never answered', async () => {
+      const { ctx, observer } = await mounted()
+      emit(ctx, toolCallEvent({ callId: 'call-1' }))
+      emit(ctx, turnEndEvent({ seq: 9, turn: 3, reason: { kind: 'aborted', reason: { kind: 'user' } } }))
+      expect(observer.snapshot(['s1']).conversations?.get('s1')).toBeUndefined()
+      observer.dispose()
+    })
+
+    it('keeps the state per session', async () => {
+      const { ctx, observer } = await mounted()
+      emit(ctx, turnEndEvent({ seq: 9, turn: 3, reason: { kind: 'completed' } }))
+      ctx.emit('session/event', { id: 's2' }, toolCallEvent({ callId: 'call-9' }))
+      const snapshot = observer.snapshot(['s1', 's2'])
+      expect(snapshot.conversations?.get('s1')).toEqual({ state: 'turn-complete' })
+      expect(snapshot.conversations?.get('s2')).toEqual({ state: 'awaiting-tool' })
+      observer.dispose()
+    })
+
+    it('reports the retry window between the failed attempt and the next try', async () => {
+      const { ctx, observer } = await mounted()
+      emit(ctx, STEP_START)
+      await stream(ctx, { sessionId: 's1', provider: 'p', model: 'm' }, [
+        { type: 'finish', reason: { kind: 'error', failure: { message: 'boom', code: 'RATE_LIMIT', status: 429 } } },
+      ])
+      emit(ctx, retryEvent({ seq: 8, turn: 3, step: 1 }))
+      // The backoff is running: the conversation is retrying, and the panel may
+      // say so instead of leaving a bare failed row behind.
+      expect(observer.snapshot(['s1']).conversations?.get('s1')).toEqual({
+        state: 'retrying',
+        retry: { count: 1, max: 5, delayMs: 500, code: 'RATE_LIMIT' },
+      })
+      // The wait is over: the next attempt is about to dispatch.
+      emit(ctx, retryStartedEvent({ seq: 9, turn: 3, step: 1 }))
+      expect(observer.snapshot(['s1']).conversations?.get('s1')).toBeUndefined()
+      observer.dispose()
+    })
+
+    it('never leaves a retry window behind when the turn ends', async () => {
+      const { ctx, observer } = await mounted()
+      emit(ctx, retryEvent({ seq: 8, turn: 3, step: 1 }))
+      expect(observer.snapshot(['s1']).conversations?.get('s1')?.state).toBe('retrying')
+      emit(ctx, turnEndEvent({ seq: 9, turn: 3, reason: { kind: 'aborted', reason: { kind: 'user' } } }))
+      expect(observer.snapshot(['s1']).conversations?.get('s1')).toBeUndefined()
+      observer.dispose()
     })
   })
 })

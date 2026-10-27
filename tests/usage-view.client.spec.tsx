@@ -15,7 +15,7 @@ import { bandClassOf } from '../src/client/HitRateText.tsx'
 import { buildSessionRequestDetails } from '../src/session-request-details.ts'
 import { zh } from '../src/client/locales.ts'
 import { ASSOCIATIONS_PATH, PRICING_PATH } from '../src/wire.ts'
-import type { ModelResolution, PricingAssociationsPayload, UsageSummary } from '../src/wire.ts'
+import type { ConversationStatus, ModelResolution, PricingAssociationsPayload, UsageSummary } from '../src/wire.ts'
 import {
   makeSessionStateHook, makeUseProjection,
 } from './test-kit.ts'
@@ -599,7 +599,7 @@ describe('UsageView request pool', () => {
     cache: { eligibility: 'unknown' as const, band: 'excluded' as const, reason: 'in-flight' as const },
   }
 
-  function summaryWithRequestDetails(items: readonly unknown[], activeCount = 0): UsageSummary {
+  function summaryWithRequestDetails(items: readonly unknown[], activeCount = 0, conversation?: ConversationStatus): UsageSummary {
     return {
       ...ROOT_SUMMARY,
       requestDetails: {
@@ -608,6 +608,7 @@ describe('UsageView request pool', () => {
         asOf: 1_760_000_004_400,
         activeCount,
         liveCapability: 'lifecycle',
+        ...(conversation !== undefined ? { conversation } : {}),
       },
     }
   }
@@ -675,7 +676,13 @@ describe('UsageView request pool', () => {
     // The waiting row is the latest: its panel shows the state and the
     // elapsed figure, with no speed fabricated.
     expectText('等待首 token')
-    expectText('请求进行中')
+    // The lifecycle note rides in the footer's right slot, never on a line
+    // of its own: a note that appears and disappears with the request state
+    // would change the panel's height and push the history table around.
+    const latest = screen.getByRole('region', { name: '最新请求' })
+    const footer = latest.querySelector('[class*="requestFooter"]')!
+    expect(footer.textContent).toContain('首 token 尚未到达')
+    expect(latest.querySelector('[class*="requestNote"]')).toBeTruthy()
     expectText('已耗时')
     expect(screen.getByTitle('已耗时（按服务端时间锚定）')).toBeTruthy()
     // The pool count includes the latest item itself.
@@ -689,6 +696,73 @@ describe('UsageView request pool', () => {
     expect(lossRow.textContent).toContain('缓存过低')
     expect(lossRow.textContent).toContain('9.1%')
     expectText('本会话')
+  })
+
+  it('states where the conversation stands in the footer slot and keeps the request’s own diagnostic in the tooltip', async () => {
+    // A settled request whose cache assessment was excluded: the diagnostic
+    // explains the request, the conversation state explains the dialogue.
+    const coldStart = { ...LOSS_ROW, cache: { eligibility: 'unknown' as const, band: 'excluded' as const, reason: 'cold-start' as const } }
+    stubFetch({ root: summaryWithRequestDetails([coldStart], 0, { state: 'turn-complete' }) })
+    renderView()
+    await waitFor(() => expectText('最新请求'))
+    const latest = screen.getByRole('region', { name: '最新请求' })
+    const footer = latest.querySelector('[class*="requestFooter"]')!
+    expect(footer.textContent).toContain('本轮对话已完成')
+    expect(footer.textContent).not.toContain('冷启动')
+    // The diagnostic is not dropped: it rides in the note's tooltip.
+    fireEvent.mouseEnter(latest.querySelector('[class*="requestNote"]')!)
+    const tooltip = screen.getByRole('tooltip').textContent!
+    expect(tooltip).toContain('本轮对话已完成')
+    expect(tooltip).toContain('冷启动')
+  })
+
+  it('says the conversation is waiting for the tool result', async () => {
+    stubFetch({ root: summaryWithRequestDetails([LOSS_ROW], 0, { state: 'awaiting-tool' }) })
+    renderView()
+    await waitFor(() => expectText('最新请求'))
+    const footer = screen.getByRole('region', { name: '最新请求' }).querySelector('[class*="requestFooter"]')!
+    expect(footer.textContent).toContain('等待tool结果')
+  })
+
+  it('says the conversation is retrying after a failure, with the attempt count', async () => {
+    const failed = { ...LOSS_ROW, state: 'failed' as const, failureCode: 'RATE_LIMIT', speed: undefined }
+    stubFetch({
+      root: summaryWithRequestDetails([failed], 0, {
+        state: 'retrying',
+        retry: { count: 2, max: 5, delayMs: 3_000, code: 'RATE_LIMIT' },
+      }),
+    })
+    renderView()
+    await waitFor(() => expectText('最新请求'))
+    const latest = screen.getByRole('region', { name: '最新请求' })
+    const footer = latest.querySelector('[class*="requestFooter"]')!
+    expect(footer.textContent).toContain('请求失败，正在重试（2/5）')
+    // The failure code and the backoff wait stay readable in the tooltip.
+    fireEvent.mouseEnter(latest.querySelector('[class*="requestNote"]')!)
+    const tooltip = screen.getByRole('tooltip').textContent!
+    expect(tooltip).toContain('RATE_LIMIT')
+    expect(tooltip).toContain('3 秒后重试')
+  })
+
+  it('lets the conversation state outrank the request’s own note, and keeps the latter in the tooltip', async () => {
+    stubFetch({ root: summaryWithRequestDetails([WAITING_ROW], 1, { state: 'turn-complete' }) })
+    renderView()
+    await waitFor(() => expectText('最新请求'))
+    const latest = screen.getByRole('region', { name: '最新请求' })
+    const footer = latest.querySelector('[class*="requestFooter"]')!
+    expect(footer.textContent).toContain('本轮对话已完成')
+    expect(footer.textContent).not.toContain('首 token 尚未到达')
+    // The request's own note is not lost — it rides in the tooltip.
+    fireEvent.mouseEnter(latest.querySelector('[class*="requestNote"]')!)
+    expect(screen.getByRole('tooltip').textContent).toContain('首 token 尚未到达')
+  })
+
+  it('shows the request’s own lifecycle note when the conversation has no conclusion', async () => {
+    stubFetch({ root: summaryWithRequestDetails([WAITING_ROW], 1) })
+    renderView()
+    await waitFor(() => expectText('最新请求'))
+    const footer = screen.getByRole('region', { name: '最新请求' }).querySelector('[class*="requestFooter"]')!
+    expect(footer.textContent).toContain('首 token 尚未到达')
   })
 
   it('hides the cache-write column when no visible request reports a write bucket', async () => {

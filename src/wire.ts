@@ -841,6 +841,30 @@ export interface RequestDetailView {
   cache: RequestDetailCache
 }
 
+/**
+ * 会话级对话状态：最新一轮 turn 的收尾情况。它描述「对话现在走到哪了」，
+ * 而不是某一次请求的生命周期。
+ * - `awaiting-tool`：模型已发起工具调用、结果尚未回来（对话未完，正在等工具）。
+ * - `turn-complete`：本轮 turn 已正常结束且没有待返回的工具结果（本轮对话已完成）。
+ * - `retrying`：上一次请求失败，系统正在退避后重试（对话未完，还在重试）。
+ */
+export type ConversationState = 'awaiting-tool' | 'turn-complete' | 'retrying'
+
+/**
+ * 会话级对话状态及其细节。状态是稳定枚举，细节只带计数与失败码这类
+ * 无载荷事实，绝不携带 prompt 或正文。
+ */
+export interface ConversationStatus {
+  state: ConversationState
+  /** 仅 `retrying`：第几次重试、共几次、退避时长与失败码。 */
+  retry?: {
+    count: number
+    max: number
+    delayMs: number
+    code?: string
+  }
+}
+
 /** 会话用量页请求池快照：已按范围过滤、去重后选取的最多 20 条请求。
  * `items[0]` 优先取当前范围最新发起的活动请求（waiting / streaming），
  * 无活动请求时取最新发起的一条；选取在截断前完成。
@@ -856,6 +880,9 @@ export interface SessionRequestDetails {
    * 速度；`token-progress` = 另有生成中可信累计 token 计数（当前协议无此
    * 路由，运行中行恒无 token/速度）；`settled-only` = 仅结算记录。 */
   liveCapability: 'lifecycle' | 'token-progress' | 'settled-only'
+  /** 头条请求（`items[0]`）所属会话的对话状态；缺失表示没有结论（本轮仍在
+   * 进行中，或插件进程尚未观察到该会话的事件）。 */
+  conversation?: ConversationStatus
 }
 
 /**

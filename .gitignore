@@ -3,6 +3,8 @@ node_modules/
 lib/
 *.tsbuildinfo
 .npm-cache/
+# Local pnpm content-addressable store (fallback when the global store is unwritable)
+.pnpm-store/
 # Local `pnpm pack` artifacts for offline install testing
 *.tgz
 
