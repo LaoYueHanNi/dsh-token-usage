@@ -903,11 +903,11 @@ describe('magpieAdapter', () => {
     expect(result.windows).toEqual([
       {
         tier: 'five_hour', usedPercent: 100, resetAt: Date.parse('2026-10-25T03:20:04Z'),
-        card: 'ZCode · GLM Coding Lite',
+        card: 'ZCode · GLM Coding Lite', pool: 'zcode::ZCode',
       },
       {
         tier: 'weekly', usedPercent: 66.97, resetAt: Date.parse('2026-10-30T07:07:49Z'),
-        card: 'ZCode · GLM Coding Lite',
+        card: 'ZCode · GLM Coding Lite', pool: 'zcode::ZCode',
       },
     ])
   })
@@ -917,7 +917,7 @@ describe('magpieAdapter', () => {
     // as `other` with the vendor's own name.
     const scoped = await magpieAdapter.query(magpieContextOf(MAGPIE_REPORT, { model: 'stepfun/step-3' }).ctx)
     expect(scoped.windows).toEqual([
-      { tier: 'other', usedPercent: 13, resetAt: Date.parse('2026-11-01T00:00:00Z'), name: 'Credits', card: 'StepFun · Pro' },
+      { tier: 'other', usedPercent: 13, resetAt: Date.parse('2026-11-01T00:00:00Z'), name: 'Credits', card: 'StepFun · Pro', pool: 'stepfun::StepFun' },
     ])
 
     // A routing group id scopes to nothing the REST API can name: the
@@ -926,7 +926,7 @@ describe('magpieAdapter', () => {
     expect(fleet.windows.map(w => w.card)).toEqual([
       'ZCode · GLM Coding Lite', 'ZCode · GLM Coding Lite', 'StepFun · Pro', 'DeepSeek',
     ])
-    expect(fleet.windows[3]).toEqual({ tier: 'balance', remainingValue: 356.81, unit: 'cny', card: 'DeepSeek' })
+    expect(fleet.windows[3]).toEqual({ tier: 'balance', remainingValue: 356.81, unit: 'cny', card: 'DeepSeek', pool: 'deepseek::DeepSeek' })
 
     // A bare id (the gateway's bare-ids setting) has no prefix either.
     const bare = await magpieAdapter.query(magpieContextOf(MAGPIE_REPORT, { model: 'glm-4.7' }).ctx)
@@ -942,7 +942,7 @@ describe('magpieAdapter', () => {
       ],
     }
     const result = await magpieAdapter.query(magpieContextOf(report).ctx)
-    expect(result.windows).toEqual([{ tier: 'balance', remainingValue: 11.12, unit: 'usd', card: 'DS' }])
+    expect(result.windows).toEqual([{ tier: 'balance', remainingValue: 11.12, unit: 'usd', card: 'DS', pool: 'ds::DS' }])
   })
 
   it('qualifies same-provider cards by account and numbers blank ones', async () => {
@@ -956,6 +956,40 @@ describe('magpieAdapter', () => {
     const result = await magpieAdapter.query(magpieContextOf(report, { model: 'codex/gpt-5.5' }).ctx)
     expect(result.windows.map(w => w.card)).toEqual([
       'Codex · me@example.com', 'Codex · #1',
+    ])
+  })
+
+  it('shares one pool across the keys of a vendor and keeps vendors apart', async () => {
+    const report = {
+      object: 'list',
+      data: [
+        { provider: 'minimax', name: 'MiniMax (China)', kind: 'subscription', user: 'key-a', windows: [{ name: '5 hours', used: 99 }] },
+        { provider: 'minimax', name: 'MiniMax (China)', kind: 'subscription', user: 'key-b', windows: [{ name: '5 hours', used: 7 }] },
+        { provider: 'deepseek', name: 'DeepSeek', kind: 'subscription', windows: [{ name: '5 hours', used: 50 }] },
+      ],
+    }
+    const result = await magpieAdapter.query(magpieContextOf(report).ctx)
+    // Two keys of ONE vendor share that vendor's pool (their budgets are
+    // interchangeable); another vendor's window never joins it.
+    expect(result.windows.map(w => w.pool)).toEqual([
+      'minimax::MiniMax (China)', 'minimax::MiniMax (China)', 'deepseek::DeepSeek',
+    ])
+  })
+
+  it('shares one pool across the plans of one vendor (the gateway routes between accounts)', async () => {
+    // A lite plan and a pro plan are metered apart, yet the gateway
+    // shifts that vendor's traffic between them — for "can I still use
+    // this vendor?" they are one budget, so they share one pool.
+    const report = {
+      object: 'list',
+      data: [
+        { provider: 'zhipu', name: 'Zhipu GLM', kind: 'plan', plan: 'lite', user: 'a', windows: [{ name: '5 hours', used: 21 }] },
+        { provider: 'zhipu', name: 'Zhipu GLM', kind: 'plan', plan: 'pro', user: 'b', windows: [{ name: '5 hours', used: 1 }] },
+      ],
+    }
+    const result = await magpieAdapter.query(magpieContextOf(report, { model: 'zhipu/glm-5' }).ctx)
+    expect(result.windows.map(w => w.pool)).toEqual([
+      'zhipu::Zhipu GLM', 'zhipu::Zhipu GLM',
     ])
   })
 

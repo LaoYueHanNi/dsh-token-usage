@@ -2,7 +2,9 @@
  * Input-bar quota button (browser half): a 28×28 round trigger registered
  * into the `conversation.input.right` slot (it renders left of the model
  * chip — the host's fixed tool-row order). The glyph is a remaining-share
- * ring (ContextMeter family) colored by the finest window. Clicking opens a
+ * ring (ContextMeter family) colored by the finest window's POOL level —
+ * a gateway's several keys of one vendor share one budget, so the ring
+ * reads that pool's mean share and its availability. Clicking opens a
  * width-tiered popup (amount-only 200px / one progress bar 232px / two
  * bars 320px) centered on the button with the current provider's quota
  * windows: progress columns (5 小时 / 每周) for coding-plan providers, an
@@ -45,7 +47,8 @@ import { QUOTA_PATH } from '../wire.ts'
 import { useAsyncResource } from './async-resource.ts'
 import {
   finestQuotaWindow, formatQuotaClock, formatQuotaMoney, formatQuotaPercent, formatResetCountdown,
-  quotaIconFillShare, quotaRemainingPercent, quotaSeverityOf, quotaTriggerFigure, quotaUsedPercent,
+  poolQuotaWindows, quotaIconFillShare, quotaPoolSeverityOf, quotaRemainingPercent, quotaSeverityOf,
+  quotaTriggerFigure, quotaUsedPercent,
 } from './quota-format.ts'
 import type { QuotaSeverity } from './quota-format.ts'
 import { useColorSchemeMirror } from './use-color-scheme.ts'
@@ -245,11 +248,16 @@ export function QuotaButton({ sessionId, t, modelDirectory }: QuotaButtonProps):
   if (!visible || payload === null) return null
 
   const windows = payload.status === 'ok' ? payload.windows : []
-  // The icon reads the FINEST-granularity window (5-hour over weekly over
-  // balance), not the worst across them — the finest unit is the constraint
-  // the session currently acts inside.
-  const finest = finestQuotaWindow(windows)
-  const severity = finest === undefined ? 'ok' : quotaSeverityOf(finest)
+  // The trigger reads the POOLED level of the finest tier. A gateway
+  // holding several keys of ONE vendor family serves them
+  // interchangeably (it routes to whichever key still has room), so the
+  // pool's mean remaining share is the level the traffic actually
+  // feels — one exhausted key no longer paints the whole vendor red.
+  // Cross-vendor pools stay apart (each keeps its own level), and a
+  // payload without pools reads exactly as before.
+  const pooled = poolQuotaWindows(windows)
+  const finest = finestQuotaWindow(pooled)
+  const severity = finest === undefined ? 'ok' : quotaPoolSeverityOf(finest)
   const triggerClass = [styles.trigger]
   if (severity === 'warn') triggerClass.push(styles['icon-warn'])
   else if (severity === 'exhausted') triggerClass.push(styles['icon-exhausted'])
@@ -264,11 +272,18 @@ export function QuotaButton({ sessionId, t, modelDirectory }: QuotaButtonProps):
   // The hover tooltip carries the exact figure the ring approximates:
   // provider name + the finest window's remaining share (its amount when
   // no ratio exists); errors and window-less payloads keep the plain
-  // label.
+  // label. A pooled level says so — the mean of several keys' shares is
+  // not any single key's share.
   const figure = quotaTriggerFigure(finest)
   const triggerTip = figure === undefined
     ? t('quota.trigger')
-    : t('quota.triggerSummary', { name: payload.providerName ?? payload.provider, figure })
+    : finest !== undefined && finest.peerCount > 1
+      ? t('quota.triggerSummaryPooled', {
+        name: payload.providerName ?? payload.provider,
+        figure,
+        count: finest.peerCount,
+      })
+      : t('quota.triggerSummary', { name: payload.providerName ?? payload.provider, figure })
 
   return (
     <span ref={rootRef} className={styles.root}>

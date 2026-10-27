@@ -71,6 +71,22 @@ const ERROR_PAYLOAD: QuotaPayload = {
   error: { kind: 'auth', message: 'HTTP 401' },
 }
 
+/** A gateway payload pooling three keys of one vendor: one key is spent,
+ * the other two have room — the gateway routes around the spent one. */
+const POOLED_PAYLOAD: QuotaPayload = {
+  status: 'ok',
+  provider: 'magpie',
+  providerName: 'Magpie',
+  adapterId: 'magpie-quotas',
+  fetchedAt: FETCHED_AT,
+  intervalSec: 60,
+  windows: [
+    { tier: 'five_hour', usedPercent: 99, pool: 'minimax::MiniMax (China)', card: 'MiniMax (China) · key-a' },
+    { tier: 'five_hour', usedPercent: 7, pool: 'minimax::MiniMax (China)', card: 'MiniMax (China) · key-b' },
+    { tier: 'five_hour', usedPercent: 5, pool: 'minimax::MiniMax (China)', card: 'MiniMax (China) · key-c' },
+  ],
+}
+
 const NO_PROVIDER: QuotaPayload = { status: 'no-provider', intervalSec: 60 }
 const UNSUPPORTED: QuotaPayload = { status: 'unsupported', provider: 'anthropic', intervalSec: 60 }
 const DISABLED: QuotaPayload = { status: 'disabled', intervalSec: 60 }
@@ -201,6 +217,37 @@ describe('QuotaButton', () => {
     fireEvent.click(trigger)
     const panel = screen.getByRole('dialog')
     expect(panel.querySelector('[class*="fill"][class*="exhausted"]')).not.toBeNull()
+  })
+
+  it('pools the keys of one vendor: the trigger reads the pool level, not the first key', async () => {
+    stubFetch(POOLED_PAYLOAD)
+    render(<QuotaButton {...propsOf()} />)
+    const trigger = await screen.findByLabelText('供应商配额')
+    // One spent key no longer paints the whole vendor red — the pool has
+    // room, so the trigger warns (a key died) instead of reading spent.
+    expect(trigger.className).toMatch(/warn/)
+    expect(trigger.className).not.toMatch(/exhausted/)
+    // The ring fills the pool's mean remaining share (1 + 93 + 95)/3.
+    const ringC = 2 * Math.PI * 5.5
+    expect(trigger.querySelectorAll('circle')[1]?.getAttribute('stroke-dasharray'))
+      .toBe(`${((1 + 93 + 95) / 3 / 100 * ringC - 2).toFixed(3)} ${ringC.toFixed(3)}`)
+    // The panel still lists every key on its own row.
+    fireEvent.click(trigger)
+    const panel = screen.getByRole('dialog')
+    expect(panel.textContent).toContain('MiniMax (China) · key-a')
+    expect(screen.getByText('1%')).not.toBeNull()
+    expect(screen.getByText('93%')).not.toBeNull()
+    expect(screen.getByText('95%')).not.toBeNull()
+  })
+
+  it('reddens the trigger only when every key of the pool is spent', async () => {
+    stubFetch({
+      ...POOLED_PAYLOAD,
+      windows: POOLED_PAYLOAD.windows?.map(window => ({ ...window, usedPercent: 99 })),
+    })
+    render(<QuotaButton {...propsOf()} />)
+    const trigger = await screen.findByLabelText('供应商配额')
+    expect(trigger.className).toMatch(/exhausted/)
   })
 
   it('keeps the button on an error payload and shows the friendly copy with a retry', async () => {

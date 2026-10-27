@@ -87,6 +87,8 @@ A magpie route needs no setup: declare any OpenAI-compatible provider whose base
 
 Magpie cards follow the selected model immediately, before sending a request. Reads always use `?kept=1`: polling, opening the panel and retrying only read Magpie's own cache, never trigger upstream quota refreshes. Refresh quotas in Magpie when newer readings are needed; an empty cache does not fall back to a live vendor query.
 
+Several keys and accounts of one vendor back each other up inside the gateway: the input-bar ring shows that vendor pool's **mean level** and colors it by the pool's availability (one spent account turns it yellow, only a fully spent pool turns it red), while the panel still lists every account's own share. Routing groups (no determinable request model) keep one level per vendor.
+
 ## Install
 
 Requires dsh `0.2.1-rc.3` or newer.

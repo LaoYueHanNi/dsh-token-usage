@@ -951,6 +951,13 @@ export interface QuotaWindow {
    * display title (vendor · plan · account), which the panel renders as a
    * section heading. Absent on single-source payloads. */
   card?: string
+  /** The quota POOL a window belongs to: windows sharing a pool draw on
+   * interchangeable budgets of ONE vendor family (a gateway's several keys
+   * of the same account family, each with its own meter but serving the
+   * same traffic). Only same-pool windows may be pooled into one water
+   * level — two vendors' same-named windows are not the same budget.
+   * Absent on single-source payloads (nothing to pool). */
+  pool?: string
 }
 
 /** Why a quota query failed, normalized so the panel can pick friendly copy. */

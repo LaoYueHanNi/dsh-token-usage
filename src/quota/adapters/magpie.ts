@@ -164,13 +164,36 @@ function windowOf(card: MagpieCard, span: MagpieCard['windows'][number]): QuotaW
   if (used === undefined) return undefined
   const tier = tierOfWindow(span.name)
   const resetAt = span.resetsAt !== undefined ? Date.parse(span.resetsAt) : Number.NaN
+  const pool = poolOf(card)
   return {
     tier,
     usedPercent: used,
     ...(Number.isFinite(resetAt) ? { resetAt } : {}),
     ...(tier === 'other' && span.name !== undefined ? { name: span.name } : {}),
     ...(card.cardLabel !== undefined ? { card: card.cardLabel } : {}),
+    ...(pool !== undefined ? { pool } : {}),
   }
+}
+
+/**
+ * The quota POOL of one card: the vendor identity (route key + display
+ * name) its windows draw on. Several cards of the SAME vendor — several
+ * keys, several accounts, even several plans of that vendor — share that
+ * pool: the gateway routes that vendor's traffic to whichever account
+ * still has room, so their budgets are interchangeable and the pool's
+ * water level is the meaningful one.
+ *
+ * The PLAN deliberately does NOT join the identity: a lite plan and a pro
+ * plan are separately metered, yet the gateway treats both as accounts of
+ * the same vendor and shifts traffic between them (their `lastServedAt`
+ * stamps alternate) — for the question the ring answers ("can I still
+ * use this vendor?"), they are one budget. Cards of DIFFERENT vendors
+ * never share a pool: their same-named windows are unrelated budgets and
+ * must not be averaged together.
+ */
+function poolOf(card: MagpieCard): string | undefined {
+  if (card.provider === '' || card.name === '') return undefined
+  return `${card.provider}::${card.name}`
 }
 
 /**
@@ -232,6 +255,7 @@ export const magpieAdapter: QuotaAdapter = {
         label += ` · ${card.user ?? `#${String(unnamed)}`}`
       }
       card.cardLabel = label
+      const pool = poolOf(card)
       if (card.kind === 'balance') {
         const balance = balanceOf(card.balance)
         if (balance === undefined) continue
@@ -240,6 +264,7 @@ export const magpieAdapter: QuotaAdapter = {
           remainingValue: balance.value,
           unit: balance.unit,
           card: label,
+          ...(pool !== undefined ? { pool } : {}),
         })
         continue
       }

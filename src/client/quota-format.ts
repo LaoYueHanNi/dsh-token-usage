@@ -5,6 +5,13 @@
  * percent figures. Pure functions, shared by the button (the trigger icon
  * reads the finest-granularity window) and the panel's window columns.
  *
+ * POOLING: a gateway may hold several keys of ONE vendor family, each
+ * with its own meter but serving the same traffic. The trigger reads the
+ * POOL's level (the mean of the pool's remaining shares) instead of
+ * whichever window it happens to meet first, and colors it by the pool's
+ * availability — one dead key no longer paints the whole vendor red,
+ * while a pool with nothing left still does.
+ *
  * @module token-usage/client/quota-format
  */
 
@@ -83,13 +90,113 @@ export function quotaSeverityOf(window: QuotaWindow): QuotaSeverity {
  * (a calm 5-hour window carries the icon even when the weekly pool runs
  * low). Undefined when there is no window at all.
  */
-export function finestQuotaWindow(windows: readonly QuotaWindow[]): QuotaWindow | undefined {
+export function finestQuotaWindow<T extends QuotaWindow>(windows: readonly T[]): T | undefined {
   const rank: Record<QuotaWindow['tier'], number> = { five_hour: 0, weekly: 1, other: 2, monthly: 3, balance: 4 }
-  let pick: QuotaWindow | undefined
+  let pick: T | undefined
   for (const window of windows) {
     if (pick === undefined || rank[window.tier] < rank[pick.tier]) pick = window
   }
   return pick
+}
+
+/**
+ * A quota window after POOLING: the windows one quota pool spends at one
+ * tier collapsed into a single water level (the mean of their remaining
+ * shares), plus the bookkeeping the severity band needs to tell a pool's
+ * overall level from its weakest member.
+ */
+export interface PooledQuotaWindow extends QuotaWindow {
+  /** Windows behind this level (1 = a lone window, nothing pooled). */
+  peerCount: number
+  /** How many of those windows sit below the red line (remaining < 20%). */
+  exhaustedPeerCount: number
+}
+
+/**
+ * Pool the windows of a payload: windows that NAME the same quota POOL
+ * and spend the same tier (an `other` window pools only with its own
+ * name) collapse into one level — their budgets are interchangeable
+ * (a gateway's several keys of one vendor family), so the pool's mean
+ * remaining share is the level the traffic actually feels.
+ *
+ * Two boundaries keep the collapse honest:
+ *
+ * - A window WITHOUT a pool stands alone. Single-source payloads name
+ *   no pool, and a lone window pools with nothing — the mean of one
+ *   window is that window.
+ * - BALANCE windows never pool. Amounts are not shares: summing two
+ *   purses of different currencies (or averaging them) states nothing
+ *   true about either, so every balance keeps its own row.
+ *
+ * The order of first appearance is preserved, so the trigger still reads
+ * the first (finest) level of the payload.
+ */
+export function poolQuotaWindows(windows: readonly QuotaWindow[]): readonly PooledQuotaWindow[] {
+  const groups = new Map<string, QuotaWindow[]>()
+  windows.forEach((window, index) => {
+    // Pool-less windows get a key of their own (never shared).
+    const key = window.pool === undefined
+      ? `solo:${String(index)}`
+      : `${window.pool}|${window.tier}|${window.name ?? ''}`
+    const group = groups.get(key)
+    if (group === undefined) groups.set(key, [window])
+    else group.push(window)
+  })
+  const pooled: PooledQuotaWindow[] = []
+  for (const group of groups.values()) {
+    const ratios = group
+      .map(window => quotaRemainingPercent(window))
+      .filter((value): value is number => value !== undefined)
+    // A lone window, a balance group (amounts are not shares), or a group
+    // with no computable share stays as it is.
+    if (group.length === 1 || group[0]?.tier === 'balance' || ratios.length === 0) {
+      for (const window of group) {
+        const remaining = quotaRemainingPercent(window)
+        pooled.push({
+          ...window,
+          peerCount: 1,
+          exhaustedPeerCount: remaining !== undefined && remaining < REMAIN_RED ? 1 : 0,
+        })
+      }
+      continue
+    }
+    const mean = ratios.reduce((sum, value) => sum + value, 0) / ratios.length
+    const exhausted = ratios.filter(value => value < REMAIN_RED).length
+    const first = group[0] as QuotaWindow
+    pooled.push({
+      tier: first.tier,
+      remainingPercent: mean,
+      ...(first.name !== undefined ? { name: first.name } : {}),
+      ...(first.pool !== undefined ? { pool: first.pool } : {}),
+      peerCount: group.length,
+      exhaustedPeerCount: exhausted,
+    })
+  }
+  return pooled
+}
+
+/**
+ * The severity of a POOLED window — the traffic light of a pool, not of
+ * a single meter:
+ *
+ * - red only when EVERY window of the pool is exhausted (the pool has
+ *   nothing left to route to);
+ * - yellow when the pool is low (mean at or below the yellow line) or
+ *   when SOME window is exhausted while others still have room (one
+ *   account died, the pool still serves);
+ * - green otherwise.
+ *
+ * A lone window keeps the plain per-window band, so single-source
+ * providers read exactly as before.
+ */
+export function quotaPoolSeverityOf(window: PooledQuotaWindow): QuotaSeverity {
+  if (window.peerCount <= 1) return quotaSeverityOf(window)
+  const remaining = quotaRemainingPercent(window)
+  if (remaining === undefined) return quotaSeverityOf(window)
+  if (window.exhaustedPeerCount >= window.peerCount) return 'exhausted'
+  if (window.exhaustedPeerCount > 0) return 'warn'
+  if (remaining <= REMAIN_YELLOW) return 'warn'
+  return 'ok'
 }
 
 /**

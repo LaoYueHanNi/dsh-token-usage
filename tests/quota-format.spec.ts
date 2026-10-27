@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest'
 import {
   formatQuotaClock, formatQuotaMoney, formatQuotaPercent, formatResetCountdown,
   quotaRemainingPercent, quotaSeverityOf, quotaUsedPercent, finestQuotaWindow,
-  quotaIconFillShare, quotaTriggerFigure,
+  quotaIconFillShare, quotaTriggerFigure, poolQuotaWindows, quotaPoolSeverityOf,
 } from '../src/client/quota-format.ts'
 
 const NOW = 1_780_000_000_000
@@ -83,8 +83,91 @@ describe('finestQuotaWindow', () => {
   })
 })
 
-describe('quotaIconFillShare', () => {
-  it('maps a remaining percent onto 0–1, a funded amount onto a full ring, and empty onto the track', () => {
+describe('poolQuotaWindows', () => {
+  const POOL = 'minimax::MiniMax (China)'
+
+  it('collapses the windows of one pool into the mean of their remaining shares', () => {
+    const pooled = poolQuotaWindows([
+      { tier: 'five_hour', usedPercent: 99, pool: POOL, card: 'key-a' },
+      { tier: 'five_hour', usedPercent: 7, pool: POOL, card: 'key-b' },
+      { tier: 'five_hour', usedPercent: 5, pool: POOL, card: 'key-c' },
+    ])
+    expect(pooled).toHaveLength(1)
+    const level = pooled[0]
+    expect(level?.remainingPercent).toBeCloseTo((1 + 93 + 95) / 3)
+    expect(level?.peerCount).toBe(3)
+    expect(level?.exhaustedPeerCount).toBe(1)
+    expect(level?.pool).toBe(POOL)
+  })
+
+  it('keeps vendors apart and pools each tier on its own', () => {
+    const pooled = poolQuotaWindows([
+      { tier: 'five_hour', usedPercent: 50, pool: 'a::A' },
+      { tier: 'weekly', usedPercent: 50, pool: 'a::A' },
+      { tier: 'five_hour', usedPercent: 10, pool: 'b::B' },
+    ])
+    expect(pooled.map(level => level.pool)).toEqual(['a::A', 'a::A', 'b::B'])
+    expect(pooled.every(level => level.peerCount === 1)).toBe(true)
+  })
+
+  it('never pools a pool-less window, and never pools balances', () => {
+    const pooled = poolQuotaWindows([
+      { tier: 'five_hour', usedPercent: 50 },
+      { tier: 'five_hour', usedPercent: 60 },
+      { tier: 'balance', remainingValue: 5, maxValue: 10, pool: POOL },
+      { tier: 'balance', remainingValue: 7, maxValue: 10, pool: POOL },
+    ])
+    expect(pooled).toHaveLength(4)
+    expect(pooled.every(level => level.peerCount === 1)).toBe(true)
+  })
+})
+
+describe('quotaPoolSeverityOf', () => {
+  const POOL = 'minimax::MiniMax (China)'
+
+  it('reads a lone window exactly like the plain per-window band', () => {
+    expect(quotaPoolSeverityOf({ tier: 'five_hour', usedPercent: 5, peerCount: 1, exhaustedPeerCount: 0 })).toBe('ok')
+    expect(quotaPoolSeverityOf({ tier: 'five_hour', usedPercent: 50, peerCount: 1, exhaustedPeerCount: 0 })).toBe('warn')
+    expect(quotaPoolSeverityOf({ tier: 'five_hour', usedPercent: 95, peerCount: 1, exhaustedPeerCount: 1 })).toBe('exhausted')
+  })
+
+  it('reddens only when EVERY window of the pool is exhausted', () => {
+    const all = poolQuotaWindows([
+      { tier: 'five_hour', usedPercent: 99, pool: POOL },
+      { tier: 'five_hour', usedPercent: 98, pool: POOL },
+    ])
+    expect(quotaPoolSeverityOf(all[0]!)).toBe('exhausted')
+  })
+
+  it('warns when one key of the pool died while the others still have room', () => {
+    const mixed = poolQuotaWindows([
+      { tier: 'five_hour', usedPercent: 99, pool: POOL },
+      { tier: 'five_hour', usedPercent: 7, pool: POOL },
+      { tier: 'five_hour', usedPercent: 5, pool: POOL },
+    ])
+    // The mean level is healthy (63%), yet a key is spent — the pool
+    // warns instead of reading green.
+    expect(quotaPoolSeverityOf(mixed[0]!)).toBe('warn')
+  })
+
+  it('warns on a low pool level even when no key is spent', () => {
+    const low = poolQuotaWindows([
+      { tier: 'five_hour', usedPercent: 70, pool: POOL },
+      { tier: 'five_hour', usedPercent: 70, pool: POOL },
+    ])
+    expect(quotaPoolSeverityOf(low[0]!)).toBe('warn')
+  })
+
+  it('stays green while the pool level is high and no key is spent', () => {
+    const healthy = poolQuotaWindows([
+      { tier: 'five_hour', usedPercent: 7, pool: POOL },
+      { tier: 'five_hour', usedPercent: 5, pool: POOL },
+    ])
+    expect(quotaPoolSeverityOf(healthy[0]!)).toBe('ok')
+  })
+})
+
+describe('quotaIconFillShare', () => {  it('maps a remaining percent onto 0–1, a funded amount onto a full ring, and empty onto the track', () => {
     expect(quotaIconFillShare({ tier: 'five_hour', usedPercent: 62.5 })).toBe(0.375)
     expect(quotaIconFillShare({ tier: 'balance', remainingValue: 6.8, maxValue: 10, unit: 'usd' })).toBeCloseTo(0.68)
     expect(quotaIconFillShare({ tier: 'balance', remainingValue: 110.5, unit: 'cny' })).toBe(1)
