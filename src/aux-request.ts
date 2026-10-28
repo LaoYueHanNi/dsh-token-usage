@@ -81,6 +81,10 @@ export interface AuxRequestRecordInput {
   responseModel?: string
   /** Provider-reported usage, when the stream delivered a usage chunk. */
   usage?: TokenUsage
+  /** Route key of this bypass call (`options.provider`). Empty is omitted.
+   * Historical auxiliary rows cannot be backfilled: they never landed in
+   * the session log. */
+  provider?: string
 }
 
 /**
@@ -102,5 +106,6 @@ export function recordFromAuxRequest(input: AuxRequestRecordInput): UsageRecord 
     ...(usage !== undefined ? { usage } : {}),
     kind: 'aux',
     auxKind: input.auxKind,
+    ...(input.provider !== undefined && input.provider !== '' ? { provider: input.provider } : {}),
   }
 }

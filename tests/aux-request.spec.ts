@@ -114,6 +114,17 @@ describe('recordFromAuxRequest', () => {
       model: 'deepseek-flash',
     })).toBe(false)
   })
+
+  it('keeps a non-empty route key and omits an empty one', () => {
+    expect(recordFromAuxRequest({
+      auxKind: 'session-title', requestId: 'aux:session-title:1:7', time: 1,
+      model: 'deepseek-flash', provider: 'deepseek-official',
+    }).provider).toBe('deepseek-official')
+    expect('provider' in recordFromAuxRequest({
+      auxKind: 'other', requestId: 'aux:other:1:8', time: 1,
+      model: 'deepseek-flash', provider: '',
+    })).toBe(false)
+  })
 })
 
 describe('aux row parsing', () => {

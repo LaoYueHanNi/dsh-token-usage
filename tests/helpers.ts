@@ -196,6 +196,7 @@ export function retryEvent(overrides: {
   step?: number
   retry?: number
   failure?: SessionEvent<'llm/retry'>['data']['failure']
+  provider?: string
 } = {}): SessionEvent<'llm/retry'> {
   return {
     type: 'llm/retry',
@@ -205,7 +206,7 @@ export function retryEvent(overrides: {
       retryId: 'retry-1',
       turn: overrides.turn ?? 1,
       step: overrides.step ?? 1,
-      provider: 'deepseek',
+      provider: overrides.provider ?? 'deepseek',
       mode: 'normal',
       policyKey: '["normal",5,["EMPTY_RESPONSE","RATE_LIMIT","SERVER","TIMEOUT","TRANSPORT"],500,10000,0.1]',
       retry: overrides.retry ?? 1,

@@ -157,7 +157,7 @@ describe('syncHistory', () => {
     const result = await syncHistory({ persistence, log })
     expect(result).toEqual({ added: 2, skipped: 0, removed: 0, failedSessions: 0 })
     expect(log.rows.map(row => row.requestId)).toEqual(['m1', 'compaction:s1:4'])
-    expect(log.rows[1]).toMatchObject({ kind: 'compaction', model: 'deepseek-chat' })
+    expect(log.rows[1]).toMatchObject({ kind: 'compaction', model: 'deepseek-chat', provider: 'deepseek' })
   })
 
   it('records errored turn/end events as failure rows attributed to the tracked model', async () => {
@@ -200,7 +200,7 @@ describe('syncHistory', () => {
     ])
     await syncHistory({ persistence, log })
     // The failure row names the route's model, not the message's.
-    expect(log.rows[1]).toMatchObject({ kind: 'failure', model: 'kimi-k2' })
+    expect(log.rows[1]).toMatchObject({ kind: 'failure', model: 'kimi-k2', provider: 'kimi' })
   })
 
   it('records a failure with an empty model when no route was ever observed', async () => {
@@ -232,6 +232,7 @@ describe('syncHistory', () => {
         kind: 'failure',
         model: 'deepseek-chat',
         failureCode: 'RATE_LIMIT',
+        provider: 'deepseek',
       }),
       expect.objectContaining({
         requestId: 'failure:s1:6',

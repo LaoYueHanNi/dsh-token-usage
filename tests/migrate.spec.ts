@@ -60,6 +60,16 @@ describe('association migration byte protection', () => {
   })
 })
 
+describe('provider name registry', () => {
+  it('copies providers.json with the data directory', async () => {
+    await writeFile(join(oldDir, 'providers.json'), '{"deepseek-official":"DeepSeek"}')
+    expect(await copyData(oldDir, newDir)).toContain('providers.json')
+    expect(await readFile(join(newDir, 'providers.json'), 'utf8')).toBe('{"deepseek-official":"DeepSeek"}')
+    await cleanSource(oldDir, newDir)
+    expect(existsSync(join(oldDir, 'providers.json'))).toBe(false)
+  })
+})
+
 describe('copyData', () => {
   it('copies every owned file verbatim and reports per-file progress', async () => {
     await writeFile(join(oldDir, 'usage-2026-01-15.jsonl'), 'a\nb\n')

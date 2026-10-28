@@ -2,7 +2,7 @@ import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { isInitialized, markInitialized, markMetaSynced, markTimingSynced } from '../src/sync-state.ts'
+import { completedFieldIds, isInitialized, markFieldsCompleted, markInitialized, markMetaSynced, markTimingSynced, pendingCompleterIds } from '../src/sync-state.ts'
 
 async function tempDir(): Promise<string> {
   return mkdtemp(join(tmpdir(), 'token-usage-state-'))
@@ -92,5 +92,43 @@ describe('timingSyncedAt markers', () => {
     await markTimingSynced(dir, () => new Date(9))
     const text = await readFile(join(dir, 'state.json'), 'utf8')
     expect(JSON.parse(text)).toEqual({ initializedAt: 1, metaSyncedAt: 2, timingSyncedAt: 9 })
+  })
+})
+
+describe('completedFields', () => {
+  it('merges completer ids and survives the other marker writes', async () => {
+    const dir = await tempDir()
+    await markInitialized(dir, () => new Date(1), true, true)
+    await markFieldsCompleted(dir, ['provider'])
+    expect(JSON.parse(await readFile(join(dir, 'state.json'), 'utf8'))).toEqual({
+      initializedAt: 1,
+      metaSyncedAt: 1,
+      timingSyncedAt: 1,
+      completedFields: ['provider'],
+    })
+    await markTimingSynced(dir, () => new Date(9))
+    await markMetaSynced(dir, () => new Date(8))
+    await markInitialized(dir, () => new Date(4))
+    const state = JSON.parse(await readFile(join(dir, 'state.json'), 'utf8')) as {
+      initializedAt: number
+      metaSyncedAt: number
+      timingSyncedAt: number
+      completedFields: string[]
+    }
+    expect(state.completedFields).toEqual(['provider'])
+    expect(state.initializedAt).toBe(4)
+    expect(completedFieldIds(state)).toEqual(['provider'])
+    expect(pendingCompleterIds(state, ['provider', 'later'])).toEqual(['later'])
+  })
+
+  it('does not invent initializedAt when the marker is missing', async () => {
+    const dir = await tempDir()
+    await markFieldsCompleted(dir, ['provider'])
+    await expect(readFile(join(dir, 'state.json'))).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('ignores a malformed done-set', async () => {
+    expect(completedFieldIds({ initializedAt: 1, completedFields: 'provider' as unknown as string[] })).toEqual([])
+    expect(pendingCompleterIds(null, ['provider'])).toEqual(['provider'])
   })
 })
