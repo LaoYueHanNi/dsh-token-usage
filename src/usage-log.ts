@@ -189,13 +189,13 @@ export class UsageLog {
 
   /**
    * Fill absent fields declared by `completers` from the session logs.
-   * Runs on the append queue. A thrown walk returns no completed ids, so
+   * Runs on the append queue. A thrown walk reports nothing settled, so
    * the caller does not stamp the pass and the next startup retries it.
    * @param persistence - host session persistence.
    * @param completers - the still-pending completers.
    */
   completeFields(persistence: SyncPersistence, completers: readonly FieldCompleter[]): Promise<FieldCompletionResult> {
-    let result: FieldCompletionResult = { patched: 0, completedIds: [], failedSessions: 0 }
+    let result: FieldCompletionResult = { patched: 0, cleanIds: [], retriedIds: [], failedSessions: 0 }
     const task = this.queue.then(async () => {
       await this.ensureDir()
       result = await completeDayFiles(this.dir, persistence, completers, this.logger)
@@ -203,7 +203,7 @@ export class UsageLog {
     this.queue = task.catch(() => {})
     return task.then(() => result).catch((error: unknown) => {
       this.logger.error('[token-usage] field completion failed:', error)
-      return { patched: 0, completedIds: [], failedSessions: 0 }
+      return { patched: 0, cleanIds: [], retriedIds: [], failedSessions: 0 }
     })
   }
 
@@ -549,21 +549,27 @@ export async function backfillDayFilesTiming(
   return patchedCount
 }
 
-/** What one field-completion pass did. `completedIds` lists only completers whose every candidate session was readable. */
+/** What one field-completion pass did, per completer: `cleanIds` settled
+ * with every candidate session readable; `retriedIds` still had unreadable
+ * candidate sessions, so the caller decides via its retry budget whether
+ * to stamp or re-run them. */
 export interface FieldCompletionResult {
   /** Rows that gained at least one field. */
   patched: number
-  /** Completer ids safe to stamp. A completer with no candidates is included. */
-  completedIds: readonly string[]
+  /** Completer ids whose every candidate session was readable. */
+  cleanIds: readonly string[]
+  /** Completer ids with at least one unreadable candidate session. */
+  retriedIds: readonly string[]
   /** Candidate sessions whose log could not be read. */
   failedSessions: number
 }
 
 /**
  * Fill absent fields from session logs. A day file is rewritten only when a
- * row changed. An unreadable session does not block the others, and its
- * completer is left unstamped so the next startup retries it. Rows the
- * walk cannot prove stay blank; that does not block the stamp.
+ * row changed. An unreadable session does not block the others; it moves
+ * the completer from `cleanIds` to `retriedIds` so the caller's retry
+ * budget, not this walk, decides when the completer settles. Rows the
+ * walk cannot prove stay blank; that does not block settlement.
  */
 export async function completeDayFiles(
   dir: string,
@@ -571,7 +577,7 @@ export async function completeDayFiles(
   completers: readonly FieldCompleter[],
   logger: LoggerLike = consoleLogger,
 ): Promise<FieldCompletionResult> {
-  const none: FieldCompletionResult = { patched: 0, completedIds: [], failedSessions: 0 }
+  const none: FieldCompletionResult = { patched: 0, cleanIds: [], retriedIds: [], failedSessions: 0 }
   if (completers.length === 0) return none
   let names: string[]
   try {
@@ -602,7 +608,7 @@ export async function completeDayFiles(
     if (fileHasCandidate) fileLines.set(name, lines)
   }
   if (fileLines.size === 0) {
-    return { patched: 0, completedIds: completers.map(completer => completer.id), failedSessions: 0 }
+    return { patched: 0, cleanIds: completers.map(completer => completer.id), retriedIds: [], failedSessions: 0 }
   }
   const reader = readerOf(persistence)
   const sessions = new Set<string>()
@@ -664,9 +670,12 @@ export async function completeDayFiles(
       await rewriteDayFile(dir, name, stay)
     }
   }
-  const completedIds = completers
-    .filter(completer => ![...(candidates.get(completer.id) ?? [])].some(id => failed.has(id)))
-    .map(completer => completer.id)
-  return { patched, completedIds, failedSessions: failed.size }
+  const cleanIds: string[] = []
+  const retriedIds: string[] = []
+  for (const completer of completers) {
+    const hasFailedCandidate = [...(candidates.get(completer.id) ?? [])].some(id => failed.has(id))
+    ;(hasFailedCandidate ? retriedIds : cleanIds).push(completer.id)
+  }
+  return { patched, cleanIds, retriedIds, failedSessions: failed.size }
 }
 

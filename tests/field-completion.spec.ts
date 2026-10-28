@@ -85,7 +85,7 @@ describe('UsageLog.completeFields', () => {
       ] as SessionEvent[],
       s2: [turnEndEvent({ seq: 1 })] as SessionEvent[],
     }), FIELD_COMPLETERS)
-    expect(result).toEqual({ patched: 3, completedIds: ['provider'], failedSessions: 0 })
+    expect(result).toEqual({ patched: 3, cleanIds: ['provider'], retriedIds: [], failedSessions: 0 })
     const parsed = (await readFile(join(dir, 'usage-2026-01-15.jsonl'), 'utf8'))
       .split('\n')
       .filter(line => line !== '')
@@ -99,7 +99,7 @@ describe('UsageLog.completeFields', () => {
     expect(parsed[6]).toBeNull()
   })
 
-  it('does not stamp a completer while a candidate session is unreadable', async () => {
+  it('moves a completer to retriedIds while a candidate session is unreadable', async () => {
     const dir = await tempDir()
     const when = new Date(2026, 0, 15, 8).getTime()
     await writeFile(join(dir, 'usage-2026-01-15.jsonl'), `${[
@@ -111,7 +111,8 @@ describe('UsageLog.completeFields', () => {
       s1: [messageEvent({ messageId: 'msg-1', provider: 'deepseek' })] as SessionEvent[],
     }, ['gone']), FIELD_COMPLETERS)
     expect(result.patched).toBe(1)
-    expect(result.completedIds).toEqual([])
+    expect(result.cleanIds).toEqual([])
+    expect(result.retriedIds).toEqual(['provider'])
     expect(result.failedSessions).toBe(1)
     const text = await readFile(join(dir, 'usage-2026-01-15.jsonl'), 'utf8')
     expect(text).toContain('"requestId":"msg-1"')

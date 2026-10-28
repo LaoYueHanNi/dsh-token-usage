@@ -52,7 +52,7 @@ import { withPricingDirectoryMigration } from './pricing-associations.ts'
 import { extractFirstTokenTimeFromStream, modelOfEvent, providerOfEvent, recordOfEvent, responseModelOfReplay, type RequestTiming } from './usage-record.ts'
 import { RequestObserver } from './request-observe.ts'
 import { classifyAuxRequest, recordFromAuxRequest } from './aux-request.ts'
-import { markFieldsCompleted, markTimingSynced, pendingCompleterIds, readSyncState } from './sync-state.ts'
+import { markFieldCompletionOutcome, markTimingSynced, pendingCompleterIds, readSyncState } from './sync-state.ts'
 import { autoSyncIfNeeded, syncHistory, titleOfEvent } from './sync.ts'
 import { clearRecordCache, warmRecordCache } from './record-cache.ts'
 import { invalidateSummary } from './stats.ts'
@@ -1042,7 +1042,14 @@ export function apply(ctx: Context, config: Config = {}) {
             logger.info(`[token-usage] completed fields on ${String(completion.patched)} historical records`)
             invalidateDerivedState(dir)
           }
-          if (completion.completedIds.length > 0) await markFieldsCompleted(dir, completion.completedIds)
+          const settled = await markFieldCompletionOutcome(dir, {
+            cleanIds: completion.cleanIds,
+            retriedIds: completion.retriedIds,
+          })
+          const abandoned = settled.filter(id => completion.retriedIds.includes(id))
+          if (abandoned.length > 0) {
+            logger.warn(`[token-usage] field completion gave up on unreadable sessions for: ${abandoned.join(', ')}`)
+          }
         }
         return warmRecordCache(dir, undefined, logger)
       })

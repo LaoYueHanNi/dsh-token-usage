@@ -22,6 +22,9 @@ Status: implemented
 
 ## Decision
 
+> [!NOTE]
+> 本决策中的「读失败不盖章、每次启动重试」语义已于 2026-10-28 由 [DR: 字段补全读失败的重试上限](2026-10-28-field-completion-retry-cap.md) 取代：连续 3 轮读失败后照样盖章，放弃死会话。其余内容仍然生效。
+
 用量行只保存路由键。实时投影与历史行走共用 `recordOfEvent`，不依赖请求观察器：
 
 - 普通请求读 `source.provider`。
@@ -34,7 +37,7 @@ Status: implemented
 
 展示名不进 JSONL 行。数据目录的 `providers.json` 把路由 id 映射到最近一次读到的 `displayName`，随数据目录迁移（`OWNED_PATTERNS` 含该文件），原子写。启动时、以及 llm 服务挂上时，把目录里每个有展示名的条目 upsert 进去。每记下一条带路由键的行，再尝试刷新目录并 upsert 这一条；旁路回调里 llm 上下文已经停用、读取会抛错时，沿用上一次成功的快照，不让记账失败。同 id 新名覆盖旧名。目录里已经没有的 id 不删除。没有名字的 id 不写入空名，展示时退回 id（`providerLabel`）。不用配额组合名，也不从模型名前缀猜测。这份名册不能从会话日志重建。
 
-缺字段补全是登记表 `FIELD_COMPLETERS`，供应商是第一项，id 为 `provider`。计时回填保持原样，不迁进来。宿主启动时若 `state.json` 的 `completedFields` 没有这一项，就在追加队列上自动跑，不比较插件版本，也不走手动全量扫描。只填空值。普通请求用 `message.id`，压缩用 `compaction:<session>:<seq>`，`llm/retry` 用 `failure:<session>:<seq>` 对上事件自己的路由；`turn/end` 的同一个 `failure:` id 用该 seq 之前最后一次请求路由。日文件只有改了才原子重写。不经过 reconcile。任一候选会话没读成，该项不写入 `completedFields`，下次启动再试；`markInitialized`、`markMetaSynced`、`markTimingSynced` 都保留这份名单。没有 `initializedAt` 时不发明标记。补全改写了行就丢掉派生统计状态，下次读统计时从日文件重算。不抬 `ROLLUP_AGGREGATE_FORMAT`。辅助行和没有会话 id 的行不是候选。
+缺字段补全是登记表 `FIELD_COMPLETERS`，供应商是第一项，id 为 `provider`。计时回填保持原样，不迁进来。宿主启动时若 `state.json` 的 `completedFields` 没有这一项，就在追加队列上自动跑，不比较插件版本，也不走手动全量扫描。只填空值。普通请求用 `message.id`，压缩用 `compaction:<session>:<seq>`，`llm/retry` 用 `failure:<session>:<seq>` 对上事件自己的路由；`turn/end` 的同一个 `failure:` id 用该 seq 之前最后一次请求路由。日文件只有改了才原子重写。不经过 reconcile。任一候选会话没读成，该项不写入 `completedFields`，下次启动再试，连续 3 轮读失败后照样盖章（见顶部警示块）；`markInitialized`、`markMetaSynced`、`markTimingSynced` 都保留这份名单与重试计数。没有 `initializedAt` 时不发明标记。补全改写了行就丢掉派生统计状态，下次读统计时从日文件重算。不抬 `ROLLUP_AGGREGATE_FORMAT`。辅助行和没有会话 id 的行不是候选。
 
 这部分取代 [DR: 会话用量页的实时请求池与请求级缓存三档提示](2026-10-25-session-request-pool.md) 里「`provider` 旧日志不回填不重写」。`interrupted` 与 `startedAt` 仍不回填。
 
@@ -53,5 +56,5 @@ Status: implemented
 
 ## Consequences
 
-- 代价：第一次启动会按候选会话重读日志，并重写有空路由键的日文件，然后丢掉 rollup。`turn/end` 的路由是推断，推不出就留空，将来不能从总量里扣掉。升级前的辅助调用永远没有路由键，做维度时必须单列，不能当成某个供应商的零。`providers.json` 丢了只能用当前目录恢复仍在的路由。没有新请求时，改名要到下次启动的目录快照才更新；请求当时若读不到目录，用的是上一次快照。永久读不到的会话会让 `provider` 这一项一直不盖章，每次启动重试。
+- 代价：第一次启动会按候选会话重读日志，并重写有空路由键的日文件，然后丢掉 rollup。`turn/end` 的路由是推断，推不出就留空，将来不能从总量里扣掉。升级前的辅助调用永远没有路由键，做维度时必须单列，不能当成某个供应商的零。`providers.json` 丢了只能用当前目录恢复仍在的路由。没有新请求时，改名要到下次启动的目录快照才更新；请求当时若读不到目录，用的是上一次快照。永久读不到的会话会让 `provider` 这一项最多重试 3 轮后盖章放弃（见顶部警示块）。
 - 换来：新的普通请求、压缩、`llm/retry` 和辅助调用在投影时带上路由键；能从会话日志证明的旧行在启动补全里补上，已有非空值不被覆盖。读失败不封死其余会话。同一个 id 的展示名以最新快照为准，删掉的路由留着最后一次的名字。下一个可从会话事件证明的可选字段只需再登记一个补全项。统计页的维度、筛选和 rollup 版本号不变。

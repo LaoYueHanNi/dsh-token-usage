@@ -2,7 +2,7 @@ import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { completedFieldIds, isInitialized, markFieldsCompleted, markInitialized, markMetaSynced, markTimingSynced, pendingCompleterIds } from '../src/sync-state.ts'
+import { completedFieldIds, isInitialized, markFieldCompletionOutcome, markInitialized, markMetaSynced, markTimingSynced, pendingCompleterIds } from '../src/sync-state.ts'
 
 async function tempDir(): Promise<string> {
   return mkdtemp(join(tmpdir(), 'token-usage-state-'))
@@ -96,10 +96,15 @@ describe('timingSyncedAt markers', () => {
 })
 
 describe('completedFields', () => {
-  it('merges completer ids and survives the other marker writes', async () => {
+  it('stamps a clean pass, clears its retries, and survives the other marker writes', async () => {
     const dir = await tempDir()
     await markInitialized(dir, () => new Date(1), true, true)
-    await markFieldsCompleted(dir, ['provider'])
+    await writeFile(join(dir, 'state.json'), JSON.stringify({
+      initializedAt: 1, metaSyncedAt: 1, timingSyncedAt: 1,
+      completedFields: [], fieldCompletionAttempts: { provider: 2 },
+    }))
+    const settled = await markFieldCompletionOutcome(dir, { cleanIds: ['provider'], retriedIds: [] })
+    expect(settled).toEqual(['provider'])
     expect(JSON.parse(await readFile(join(dir, 'state.json'), 'utf8'))).toEqual({
       initializedAt: 1,
       metaSyncedAt: 1,
@@ -114,21 +119,60 @@ describe('completedFields', () => {
       metaSyncedAt: number
       timingSyncedAt: number
       completedFields: string[]
+      fieldCompletionAttempts?: Record<string, number>
     }
     expect(state.completedFields).toEqual(['provider'])
     expect(state.initializedAt).toBe(4)
+    expect(state.fieldCompletionAttempts).toBeUndefined()
     expect(completedFieldIds(state)).toEqual(['provider'])
     expect(pendingCompleterIds(state, ['provider', 'later'])).toEqual(['later'])
   })
 
+  it('counts retried passes and stamps the completer once the budget runs out', async () => {
+    const dir = await tempDir()
+    await markInitialized(dir, () => new Date(1))
+    // First unreadable pass: counted, not stamped.
+    let settled = await markFieldCompletionOutcome(dir, { cleanIds: [], retriedIds: ['provider'] })
+    expect(settled).toEqual([])
+    let state = JSON.parse(await readFile(join(dir, 'state.json'), 'utf8')) as { completedFields?: string[]; fieldCompletionAttempts?: Record<string, number> }
+    expect(state.completedFields).toBeUndefined()
+    expect(state.fieldCompletionAttempts).toEqual({ provider: 1 })
+    // Second unreadable pass: still within budget.
+    settled = await markFieldCompletionOutcome(dir, { cleanIds: [], retriedIds: ['provider'] })
+    expect(settled).toEqual([])
+    state = JSON.parse(await readFile(join(dir, 'state.json'), 'utf8')) as { completedFields?: string[]; fieldCompletionAttempts?: Record<string, number> }
+    expect(state.fieldCompletionAttempts).toEqual({ provider: 2 })
+    // Third unreadable pass: budget exhausted — stamped done, counter cleared.
+    settled = await markFieldCompletionOutcome(dir, { cleanIds: [], retriedIds: ['provider'] })
+    expect(settled).toEqual(['provider'])
+    state = JSON.parse(await readFile(join(dir, 'state.json'), 'utf8')) as { completedFields?: string[]; fieldCompletionAttempts?: Record<string, number> }
+    expect(state.completedFields).toEqual(['provider'])
+    expect(state.fieldCompletionAttempts).toBeUndefined()
+    // Already stamped: a later retried pass neither re-counts nor re-stamps.
+    settled = await markFieldCompletionOutcome(dir, { cleanIds: [], retriedIds: ['provider'] })
+    expect(settled).toEqual([])
+    expect(pendingCompleterIds(state, ['provider'])).toEqual([])
+  })
+
   it('does not invent initializedAt when the marker is missing', async () => {
     const dir = await tempDir()
-    await markFieldsCompleted(dir, ['provider'])
+    const settled = await markFieldCompletionOutcome(dir, { cleanIds: ['provider'], retriedIds: ['other'] })
+    expect(settled).toEqual([])
     await expect(readFile(join(dir, 'state.json'))).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
-  it('ignores a malformed done-set', async () => {
+  it('ignores a malformed done-set and attempt map', async () => {
     expect(completedFieldIds({ initializedAt: 1, completedFields: 'provider' as unknown as string[] })).toEqual([])
     expect(pendingCompleterIds(null, ['provider'])).toEqual(['provider'])
+    const dir = await tempDir()
+    await markInitialized(dir, () => new Date(1))
+    await writeFile(join(dir, 'state.json'), JSON.stringify({
+      initializedAt: 1,
+      fieldCompletionAttempts: { '': 1, provider: 'x' as unknown as number, other: -2 },
+    }))
+    const settled = await markFieldCompletionOutcome(dir, { cleanIds: [], retriedIds: ['provider'] })
+    expect(settled).toEqual([])
+    const state = JSON.parse(await readFile(join(dir, 'state.json'), 'utf8')) as { fieldCompletionAttempts?: Record<string, number> }
+    expect(state.fieldCompletionAttempts).toEqual({ provider: 1 })
   })
 })
