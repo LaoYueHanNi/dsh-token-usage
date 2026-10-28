@@ -294,6 +294,19 @@ export interface UsageModelRow {
   totals: UsageTotals
 }
 
+/**
+ * One per-provider aggregation row, keyed by the route key (`provider`) the
+ * records carried. `''` is the unattributed group — pre-field history and
+ * auxiliary rows whose route never landed in a session log. It is listed as
+ * its own row (never folded into a named provider, never dropped), so the
+ * dimension's totals reconcile with the top line.
+ */
+export interface UsageProviderRow {
+  /** Route key; `''` groups every unattributed record. */
+  provider: string
+  totals: UsageTotals
+}
+
 /** Per-million-token prices of one rate node, in ¥ (RMB). */
 export interface ModelPricing {
   /** Uncached input price, ¥ per million tokens. */
@@ -476,11 +489,16 @@ export interface PricingOverviewPayload {
   usdExchangeRate: number
 }
 
-/** One per-day × per-model × per-rate aggregation row. */
+/** One per-day × per-model × per-rate × per-provider aggregation row. The
+ * route re-aggregates any filter from these cells and re-prices history
+ * under the current table; `provider` is the route key the record carried
+ * (absent/empty = pre-field history that could not be attributed). */
 export interface UsageRateRow {
   day: string
   model: string
   rate: RateKey
+  /** Route key of the requests in this cell; absent when unattributed. */
+  provider?: string
   totals: UsageTotals
 }
 
@@ -554,6 +572,10 @@ export interface UsageSessionRow {
   day: string
   model: string
   rate: RateKey
+  /** Route key of the requests in this cell; absent when unattributed.
+   * Keeps the session dimension at the same granule width rateRows carry,
+   * so a session-scoped read rebuilds the provider dimension from cells. */
+  provider?: string
   /** Newest record time folded into this cell (max over the fold); the
    * session table's "last active" column. */
   lastTime: number
@@ -606,6 +628,9 @@ export interface TokenSummary {
   byHour: UsageHourRow[]
   /** Per-model rows, descending by request count. */
   byModel: UsageModelRow[]
+  /** Per-provider rows (route key → totals; `''` = unattributed), descending
+   * by request count. Rebuilt from the same granules rateRows carry. */
+  byProvider: UsageProviderRow[]
   /** Per-day × per-model × per-rate rows, day then model then rate ascending;
    * lets the route re-aggregate any day range × model filter without
    * rereading files, and re-price history under the current table. */
@@ -626,6 +651,12 @@ export interface TokenSummary {
 
 /** A per-model row carrying its billed cost (¥); 0 when the model is unpriced. */
 export type CostedModelRow = UsageModelRow & { cost: number; perf?: ModelPerf }
+
+/** A per-provider row carrying its billed cost (¥), folded from the rate
+ * rows that carry the same provider key; the unattributed group keeps its
+ * own row so the provider table's cost column reconciles with the summary
+ * card for free. */
+export type CostedProviderRow = UsageProviderRow & { cost: number }
 
 /** A per-session aggregation cell carrying its billed cost (¥); 0 when the
  * model is unpriced — priced from the same rate identity the per-model cost
@@ -678,6 +709,9 @@ export interface CostedSummary extends TokenSummary {
   pricing: PricingTable
   /** Per-model rows with their billed cost attached. */
   byModel: CostedModelRow[]
+  /** Per-provider rows with their billed cost attached (see
+   * {@link CostedProviderRow}); the unattributed group (`''`) included. */
+  byProvider: CostedProviderRow[]
   /** Per-session cells with their billed cost attached (see
    * {@link CostedSessionCell}); the route folds these into
    * {@link SessionUsageRow}s for the session table. */
@@ -721,6 +755,9 @@ export type StatsPayload = (CostedSummaryWire & {
   /** Effective RMB-per-USD rate (feed value, else the built-in default);
    * the divisor when `currency` is USD. */
   usdExchangeRate: number
+  /** Route key → latest display name for the provider dimension; absent
+   * when the host has no registry seam (the client falls back to keys). */
+  providerNames?: Readonly<Record<string, string>>
 }) | (CostedSummaryWire & {
   scope: 'session'
   /** The session ids aggregated to produce this payload, in URL order. */
@@ -732,6 +769,9 @@ export type StatsPayload = (CostedSummaryWire & {
   currency: DisplayCurrency
   /** Effective RMB-per-USD rate (the divisor when `currency` is USD). */
   usdExchangeRate: number
+  /** Route key → latest display name for the provider dimension; absent
+   * when the host has no registry seam (the client falls back to keys). */
+  providerNames?: Readonly<Record<string, string>>
   /** Direct-child breakdown keyed by child id, when the request named `childId`. */
   children?: Readonly<Record<string, ChildUsageSummary>>
 })
@@ -895,6 +935,10 @@ export interface SessionRequestDetails {
 export interface UsageSummary extends Omit<CostedSummary, 'bySession'> {
   currency: DisplayCurrency
   usdExchangeRate: number
+  /** Route key → latest display name from the data directory's
+   * `providers.json` registry; a key with no entry (or a missing registry)
+   * displays as the key itself. Absent on older host payloads. */
+  providerNames?: Readonly<Record<string, string>>
   /** Whole-scope payloads only: the settings page's session table rows
    * (see {@link SessionUsageRow}); absent on session-scoped reads. */
   sessionRows?: readonly SessionUsageRow[]

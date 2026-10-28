@@ -72,9 +72,55 @@
 
 /* Perf pick, unranked row: no bar renders, so the name takes the width
  * the track would have held (the session rows' grammar). */
+/* Perf pick, unranked row: no bar renders, so the name takes the width
+ * the track would have held (the session rows' grammar). */
 .nameGrow {
   flex: 1;
   width: auto;
+}
+
+/* The provider list's missing-provider remainder: a real reconciliation
+ * row, quieter than a named route (secondary ink, no transparency) so
+ * history without a route key reads as a remainder rather than a provider. */
+.nameDim {
+  color: var(--dsw-alias-label-secondary);
+}
+
+/* The question-mark badge's hover wrap. The bubble is a Fragment sibling
+ * (shell Tooltip is not a body portal), so a local `:global([role=tooltip])`
+ * override pins its type to the pill tooltips' 12px with `pre` lines —
+ * each reason line stays intact, same grammar as the failure pill. */
+.hintWrap {
+  display: inline-flex;
+  min-width: 0;
+}
+
+.hintWrap :global([role="tooltip"]) {
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.4;
+  white-space: pre;
+  width: max-content;
+  min-width: max-content;
+  max-width: none;
+}
+
+/* The question-mark badge beside the unattributed label: same compact
+ * marker grammar as the request pool's kind badges (bordered pill, 10px),
+ * hover (with the tooltip it anchors) explains the closed set of reasons
+ * records carry no route key. */
+.nameHint {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 5px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 4px;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 10px;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: help;
 }
 
 .nameText {

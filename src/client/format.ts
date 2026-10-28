@@ -35,6 +35,14 @@ const FAILURE_CODE_LABEL_KEYS = {
   UNKNOWN: 'fail.UNKNOWN',
 } as const satisfies Record<string, TokenUsageKey>
 
+/** Display label of a provider route key: the payload's name registry
+ * (route key → latest display name) wins; a missing or empty entry falls
+ * back to the key itself, so a route the registry never saw still shows. */
+export function providerLabel(id: string, names?: Readonly<Record<string, string>>): string {
+  const name = names?.[id]
+  return name !== undefined && name !== '' ? name : id
+}
+
 /** One decimal below 10, integer otherwise, trailing `.0` stripped. */
 function scale(value: number): string {
   if (value >= 10) return String(Math.round(value))

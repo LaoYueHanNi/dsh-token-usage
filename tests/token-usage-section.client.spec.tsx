@@ -107,6 +107,19 @@ const SUMMARY: UsageSummary = {
     },
     cost: 0.0014,
   }],
+  byProvider: [
+    {
+      provider: 'deepseek-official',
+      totals: { requests: 2, inputTokens: 90, outputTokens: 40, cacheReadTokens: 30, cacheWriteTokens: 1 },
+      cost: 0.001,
+    },
+    {
+      provider: '',
+      totals: { requests: 1, inputTokens: 5, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      cost: 0.0004,
+    },
+  ],
+  providerNames: { 'deepseek-official': 'DeepSeek' },
   rateRows: [
     { day: '2026-01-15', model: 'deepseek-chat', rate: { ruleStart: 0, ruleEnd: 0, tier: 0, slot: -1 }, totals: { requests: 1, inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 } },
     { day: '2026-01-16', model: 'deepseek-reasoner', rate: { ruleStart: 0, ruleEnd: 0, tier: 0, slot: -1 }, totals: { requests: 1, inputTokens: 100, outputTokens: 60, cacheReadTokens: 40, cacheWriteTokens: 0 } },
@@ -492,7 +505,39 @@ describe('TokenUsageSection', () => {
     await waitFor(() => expect(screen.queryByRole('tooltip')).toBeNull())
   })
 
-  it('renders the page variant as the four-card dashboard without a dimension switch', async () => {
+  it('switches the detail tabs to the provider list with display names and the unattributed remainder', async () => {
+    stubFetch(async () => ({ ok: true, json: async () => SUMMARY }))
+    render(<TokenUsageSection close={() => {}} t={t} />)
+    // The tab sits in the detail switch; the default (project) list shows first.
+    const providerTab = await screen.findByRole('button', { name: '按供应商' })
+    expect(providerTab.getAttribute('aria-pressed')).toBe('false')
+    fireEvent.click(providerTab)
+    expect(providerTab.getAttribute('aria-pressed')).toBe('true')
+    const list = screen.getByRole('list', { name: '按供应商' })
+    // The named route renders the registry's display name, never the raw
+    // key; the unattributed remainder renders last with its question-mark
+    // badge, whose hover lists the closed set of no-route-key reasons.
+    expect(within(list).getByText('DeepSeek')).toBeTruthy()
+    expect(within(list).queryByText('deepseek-official')).toBeNull()
+    const unattributed = within(list).getByText('缺失供应商')
+    expect(unattributed.textContent).toContain('?')
+    fireEvent.mouseEnter(unattributed)
+    await waitFor(() => expect(screen.getByRole('tooltip').textContent).toContain('可能是：'))
+    expect(screen.getByRole('tooltip').textContent).toContain('  1. 会话日志已删除的历史会话')
+    expect(screen.getByRole('tooltip').textContent).toContain('  2. 路由键字段加入前的旧会话')
+    expect(screen.getByRole('tooltip').textContent).toContain('  3. 不带路由键的运行开销')
+    fireEvent.mouseLeave(unattributed)
+    await waitFor(() => expect(screen.queryByRole('tooltip')).toBeNull())
+    // The sort control addresses the provider list (token pick active).
+    const sortGroup = screen.getByRole('group', { name: t('byProvider.title') })
+    expect(within(sortGroup).getByRole('button', { name: 'token' }).getAttribute('aria-pressed')).toBe('true')
+    // Switching back restores the project list.
+    fireEvent.click(screen.getByRole('button', { name: '按项目' }))
+    expect(screen.queryByRole('list', { name: '按供应商' })).toBeNull()
+    expect(screen.getByRole('list', { name: '按项目' })).toBeTruthy()
+  })
+
+  it('renders the page variant as the five-card dashboard without a dimension switch', async () => {
     const kindTotals = { requests: 2, inputTokens: 300, outputTokens: 30, cacheReadTokens: 0, cacheWriteTokens: 0 }
     const aux = {
       total: kindTotals,
@@ -505,17 +550,24 @@ describe('TokenUsageSection', () => {
     ]
     const fetchMock = stubFetch(async () => Response.json({ ...SUMMARY, aux, sessionRows }))
     render(<TokenUsageSection close={() => {}} t={t} variant="page" />)
-    // All four cards render their lists at once — no dimension switch.
+    // All five cards render their lists at once — no dimension switch.
     await screen.findByRole('list', { name: '按项目' })
     expect(screen.queryByRole('group', { name: t('detail.switch.label') })).toBeNull()
     expect(screen.getByRole('list', { name: '按会话' })).toBeTruthy()
     expect(screen.getByRole('list', { name: '按模型' })).toBeTruthy()
+    expect(screen.getByRole('list', { name: '按供应商' })).toBeTruthy()
     expect(screen.getByRole('list', { name: '运行开销' })).toBeTruthy()
+    // The providers card reads the registry display name; the
+    // unattributed remainder renders with its question badge.
+    const providerCard = screen.getByRole('list', { name: '按供应商' })
+    expect(within(providerCard).getByText('DeepSeek')).toBeTruthy()
+    expect(within(providerCard).getByText('缺失供应商')).toBeTruthy()
     // Card heads: the counts ride beside the titles (two directory tails
-    // fold into two projects; one model row); every card head carries a
-    // sort — sessions default to cost (its 费用 pick pressed), projects
-    // and models to tokens, so address the sessions card's own control.
-    expect(screen.getByText('2 个 · 按总 token')).toBeTruthy()
+    // fold into two projects; one model row; two provider rows including
+    // the unattributed remainder — the same count as projects); every card
+    // head carries a sort — sessions default to cost (its 费用 pick
+    // pressed), projects and models to tokens.
+    expect(screen.getAllByText('2 个 · 按总 token')).toHaveLength(2)
     expect(screen.getByText('1 个 · 按总 token')).toBeTruthy()
     expect(screen.getByText('共 2 条')).toBeTruthy()
     expect(screen.getByText('辅助模型请求')).toBeTruthy()

@@ -16,7 +16,7 @@ import { join } from 'node:path'
 import { consoleLogger, type LoggerLike } from './log.ts'
 import { coerceRecord, AUX_KINDS } from './usage-record.ts'
 import type { AuxKind, UsageRecord } from './usage-record.ts'
-import type { RateKey, UsageAuxRow, UsageDayRow, UsageHourRow, UsageModelRow, UsageRateRow, UsageSessionRow, UsageTotals } from './wire.ts'
+import type { RateKey, UsageAuxRow, UsageDayRow, UsageHourRow, UsageModelRow, UsageProviderRow, UsageRateRow, UsageSessionRow, UsageTotals } from './wire.ts'
 
 const ROLLUP_FILE = 'rollup.json'
 const TMP_FILE = 'rollup.json.tmp'
@@ -24,14 +24,15 @@ const TMP_FILE = 'rollup.json.tmp'
 /**
  * The aggregate shape this build writes and expects. Bump when a totals
  * dimension gains a field the folding must carry (the timing accumulators
- * behind the performance view made shape 2, and its valid latency count
- * made shape 3): a stored rollup under an older
+ * behind the performance view made shape 2, its valid latency count made
+ * shape 3, and the provider route key on rate/session cells plus the
+ * byProvider dimension made shape 4): a stored rollup under an older
  * value — or without the key, the pre-field shape 1 — is discarded and
  * rebuilt from the day files on the next stats read, the same path a
  * pricing-fingerprint change takes. Shape 1 carried every token dimension,
  * so a rebuild only backfills the new accumulators; usage never changes.
  */
-export const ROLLUP_AGGREGATE_FORMAT = 3
+export const ROLLUP_AGGREGATE_FORMAT = 4
 
 /** The rollup file name, exported so callers (e.g. the post-sync
  * invalidation in index.ts) can drop the derived state by one authority. */
@@ -65,6 +66,11 @@ export interface RollupFile {
   byHour: UsageHourRow[]
   /** Per-model rows of the absorbed records, descending on request count. */
   byModel: UsageModelRow[]
+  /** Per-provider rows of the absorbed records (route key → totals; `''` =
+   * unattributed), descending on request count with the unattributed group
+   * last. A legacy rollup predating the dimension reads as an empty list
+   * and rebuilds through `aggregateFormat`. */
+  byProvider: UsageProviderRow[]
   /** Per-(day, model, rate identity) rows of the absorbed records — rule
    * identities, never prices; a changed pricing fingerprint rebuilds them
    * from raw records before repricing the absorbed history. */
@@ -114,6 +120,12 @@ function isModelRow(value: unknown): value is UsageModelRow {
   return typeof row.model === 'string' && isTotals(row.totals)
 }
 
+function isProviderRow(value: unknown): value is UsageProviderRow {
+  if (typeof value !== 'object' || value === null) return false
+  const row = value as Record<string, unknown>
+  return typeof row.provider === 'string' && isTotals(row.totals)
+}
+
 function isRateKey(value: unknown): value is RateKey {
   if (typeof value !== 'object' || value === null) return false
   const key = value as Record<string, unknown>
@@ -125,6 +137,7 @@ function isRateRow(value: unknown): value is UsageRateRow {
   const row = value as Record<string, unknown>
   return typeof row.day === 'string' && DAY_KEY.test(row.day)
     && typeof row.model === 'string' && isRateKey(row.rate) && isTotals(row.totals)
+    && (row.provider === undefined || typeof row.provider === 'string')
 }
 
 function isSessionRow(value: unknown): value is UsageSessionRow {
@@ -133,6 +146,7 @@ function isSessionRow(value: unknown): value is UsageSessionRow {
   return typeof row.sessionId === 'string'
     && typeof row.day === 'string' && DAY_KEY.test(row.day)
     && typeof row.model === 'string' && isRateKey(row.rate)
+    && (row.provider === undefined || typeof row.provider === 'string')
     && typeof row.lastTime === 'number' && Number.isFinite(row.lastTime)
     && isTotals(row.totals)
 }
@@ -151,10 +165,16 @@ function isAuxRow(value: unknown): value is UsageAuxRow {
     && typeof row.model === 'string' && isRateKey(row.rate) && isTotals(row.totals)
 }
 
-/** The stored shape: a rollup written before the auxiliary dimension existed
- * omits `auxRows`. It still reads as valid — the writing version could not
- * have recorded an auxiliary row, so the empty dimension loses no usage. */
-type StoredRollupFile = Omit<RollupFile, 'auxRows'> & { auxRows?: UsageAuxRow[] }
+/** The stored shape: a rollup written before the auxiliary or provider
+ * dimensions existed omits `auxRows` / `byProvider`. Both still read as
+ * valid — the writing version could not have recorded those rows, so the
+ * empty dimensions lose no usage; the provider-keyed cells inside
+ * `rateRows` / `bySession` likewise read as the unattributed group, and
+ * `aggregateFormat` sends the whole rollup through a rebuild anyway. */
+type StoredRollupFile = Omit<RollupFile, 'auxRows' | 'byProvider'> & {
+  auxRows?: UsageAuxRow[]
+  byProvider?: UsageProviderRow[]
+}
 
 function isRollupFile(value: unknown): value is StoredRollupFile {
   if (typeof value !== 'object' || value === null) return false
@@ -168,6 +188,7 @@ function isRollupFile(value: unknown): value is StoredRollupFile {
     && Array.isArray(rollup.byDay) && rollup.byDay.every(isDayRow)
     && Array.isArray(rollup.byHour) && rollup.byHour.every(isHourRow)
     && Array.isArray(rollup.byModel) && rollup.byModel.every(isModelRow)
+    && (rollup.byProvider === undefined || (Array.isArray(rollup.byProvider) && rollup.byProvider.every(isProviderRow)))
     && Array.isArray(rollup.rateRows) && rollup.rateRows.every(isRateRow)
     && (rollup.auxRows === undefined || (Array.isArray(rollup.auxRows) && rollup.auxRows.every(isAuxRow)))
     // A missing legacy dimension requires a rebuild, but usable totals
@@ -208,6 +229,7 @@ export async function readRollup(dir: string, logger: LoggerLike = consoleLogger
     ...value,
     recent,
     auxRows: value.auxRows ?? [],
+    byProvider: value.byProvider ?? [],
     ...(value.bySession === undefined ? { bySession: [], requiresRebuild: true as const } : {}),
   }
 }

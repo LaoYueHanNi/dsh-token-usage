@@ -272,6 +272,46 @@ describe('createStatsRoute', () => {
     expect(body.total.inputTokens).toBe(10)
   })
 
+  it('serves the provider dimension with the name registry on whole and session reads, never on chip', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'token-usage-provider-'))
+    const line = (record: UsageRecord): string => `${JSON.stringify(record)}\n`
+    await writeFile(join(dir, 'usage-2026-01-15.jsonl'),
+      line({ ...fixtureRecord(100), provider: 'deepseek-official' })
+      + line({ ...fixtureRecord(200), provider: 'zai-coding-cn' })
+      + line(fixtureRecord(300)))
+    const route = createStatsRoute(() => dir, {
+      providerNames: async () => ({ 'deepseek-official': 'DeepSeek' }),
+    })
+    const whole = fakeResponse()
+    await route.handler(fakeRequest(), whole.res)
+    expect(whole.captured.status).toBe(200)
+    const wholeBody = JSON.parse(whole.captured.body) as {
+      byProvider: Array<{ provider: string; totals: { requests: number } }>
+      providerNames: Record<string, string>
+    }
+    expect(wholeBody.byProvider.map(row => [row.provider, row.totals.requests])).toEqual([
+      ['deepseek-official', 1],
+      ['zai-coding-cn', 1],
+      ['', 1],
+    ])
+    expect(wholeBody.providerNames).toEqual({ 'deepseek-official': 'DeepSeek' })
+    // The session-scoped read carries the same dimension and registry.
+    const scoped = fakeResponse()
+    await route.handler(fakeRequest({ url: `${STATS_PATH}?sessionId=s1&fields=session` }), scoped.res)
+    const scopedBody = JSON.parse(scoped.captured.body) as {
+      byProvider: Array<{ provider: string }>
+      providerNames: Record<string, string>
+    }
+    expect(scopedBody.byProvider.map(row => row.provider)).toEqual(['deepseek-official', 'zai-coding-cn', ''])
+    expect(scopedBody.providerNames).toEqual({ 'deepseek-official': 'DeepSeek' })
+    // The chip stays slim: no dimension, no registry.
+    const chip = fakeResponse()
+    await route.handler(fakeRequest({ url: `${STATS_PATH}?sessionId=s1&fields=chip` }), chip.res)
+    const chipBody = JSON.parse(chip.captured.body) as Record<string, unknown>
+    expect(chipBody.byProvider).toBeUndefined()
+    expect(chipBody.providerNames).toBeUndefined()
+  })
+
   it('rejects non-GET methods with 405', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'token-usage-route-'))
     const route = createStatsRoute(() => dir)

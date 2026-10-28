@@ -106,6 +106,10 @@ export function isSameOriginFetch(req: IncomingMessage): boolean {
  * live settings change (the region pick) lands without rebuilding the route. */
 export interface StatsRouteOptions {
   currency?: () => DisplayCurrency
+  /** Reads the data directory's provider-name registry (route key → latest
+   * display name) for the payload's `providerNames`; omitted serves the
+   * payload without it and the client falls back to the raw keys. */
+  providerNames?: () => Promise<Readonly<Record<string, string>>>
   /** Diagnostic sink for data reads; defaults to console. */
   logger?: LoggerLike
   /** The live request observer backing the usage tab's request pool. A host
@@ -370,8 +374,9 @@ function slimSessionPayload(input: {
   fields: StatsFields
   children: Record<string, ChildUsageSummary> | undefined
   requestDetails: SessionRequestDetails | undefined
+  providerNames: Readonly<Record<string, string>> | undefined
 }): unknown {
-  const { summary, sessionIds, series, currency, usdExchangeRate, fields, children, requestDetails } = input
+  const { summary, sessionIds, series, currency, usdExchangeRate, fields, children, requestDetails, providerNames } = input
   // The granular per-session cells stay behind the route: session-scoped
   // consumers read totals / byModel / requestSeries, never the cells.
   const { bySession: _cells, ...summaryRest } = summary
@@ -383,6 +388,7 @@ function slimSessionPayload(input: {
     requestSeries,
     currency,
     usdExchangeRate,
+    ...(providerNames !== undefined ? { providerNames } : {}),
     ...children !== undefined ? { children } : {},
   }
   if (fields === 'full') return full
@@ -406,6 +412,8 @@ function slimSessionPayload(input: {
     byModel: summary.byModel,
     modelResolutions: summary.modelResolutions,
     byDay: summary.byDay,
+    byProvider: summary.byProvider,
+    ...(providerNames !== undefined ? { providerNames } : {}),
     requestSeries,
     // The request pool rides ONLY the `session` read: chip stays slim, and
     // the whole-log `full` read never grows runtime-state payloads.
@@ -502,6 +510,12 @@ export function createStatsRoute(dir: () => string, options: StatsRouteOptions =
         // Display-currency metadata: amounts stay RMB on the wire; the
         // page converts (÷ usdExchangeRate) when the region pick says USD.
         const currency = options.currency?.() ?? 'CNY'
+        // The provider-name registry rides every payload that carries the
+        // provider dimension; a host without the registry seam serves the
+        // raw keys and the client falls back to them.
+        const providerNames = options.providerNames !== undefined
+          ? await options.providerNames().catch(() => undefined)
+          : undefined
         // The session table's final rows: the costed bySession cells fold
         // per top-level session (the whole subtree merges in), sorted by
         // cost and truncated top-N server-side, with the metadata index's
@@ -550,6 +564,7 @@ export function createStatsRoute(dir: () => string, options: StatsRouteOptions =
             fields: filter.fields,
             children,
             requestDetails,
+            providerNames,
           })
           : {
             ...summaryRest,
@@ -558,6 +573,7 @@ export function createStatsRoute(dir: () => string, options: StatsRouteOptions =
             projectRows: projectRowsOf(allSessionRows),
             currency,
             usdExchangeRate,
+            ...(providerNames !== undefined ? { providerNames } : {}),
           } satisfies StatsPayload
         res.writeHead(200, {
           'content-type': 'application/json; charset=utf-8',

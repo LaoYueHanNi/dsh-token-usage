@@ -25,6 +25,7 @@ import type { RollupFile } from './rollup.ts'
 import type {
   AuxSummary,
   CostedModelRow,
+  CostedProviderRow,
   CostedSessionCell,
   CostedSummary,
   CostState,
@@ -39,6 +40,7 @@ import type {
   UsageDayRow,
   UsageHourRow,
   UsageModelRow,
+  UsageProviderRow,
   UsageRateRow,
   UsageSessionRow,
   UsageTotals,
@@ -57,7 +59,7 @@ export type RateResolver = (record: UsageRecord) => RateKey
 
 /** Empty rollup used as the merge base when no rollup exists on disk yet. */
 function emptyRollup(): RollupFile {
-  return { upto: '', total: emptyTotals(), byDay: [], byHour: [], byModel: [], rateRows: [], auxRows: [], bySession: [], recent: [] }
+  return { upto: '', total: emptyTotals(), byDay: [], byHour: [], byModel: [], byProvider: [], rateRows: [], auxRows: [], bySession: [], recent: [] }
 }
 
 /** Zeroed totals; requests counts rows, the token buckets sum reported usage. */
@@ -127,37 +129,57 @@ function modelRows(models: Map<string, UsageTotals>): UsageModelRow[] {
       right.totals.requests - left.totals.requests || left.model.localeCompare(right.model))
 }
 
+/** Sort provider rows by requests descending then route key; the
+ * unattributed group (`''`) always sinks to the bottom so named routes
+ * lead the table whatever their volume. */
+function providerRows(providers: Map<string, UsageTotals>): UsageProviderRow[] {
+  return [...providers.entries()]
+    .map(([provider, totals]) => ({ provider, totals }))
+    .sort((left, right) =>
+      (left.provider === '' ? 1 : 0) - (right.provider === '' ? 1 : 0)
+        || right.totals.requests - left.totals.requests
+        || left.provider.localeCompare(right.provider))
+}
+
 /** Deterministic rate-identity order: rule window, tier, slot. */
 function compareKeys(left: RateKey, right: RateKey): number {
   return left.ruleStart - right.ruleStart || left.ruleEnd - right.ruleEnd
     || left.tier - right.tier || left.slot - right.slot
 }
 
-/** Sort rate rows day ascending, then model name, then rate identity. */
+/** Sort rate rows day ascending, then model name, then route key, then rate identity. */
 function rateRowsSorted(rows: Iterable<UsageRateRow>): UsageRateRow[] {
   return [...rows].sort((left, right) =>
     left.day < right.day ? -1 : left.day > right.day ? 1
       : left.model < right.model ? -1 : left.model > right.model ? 1
-        : compareKeys(left.rate, right.rate))
+        : (left.provider ?? '') < (right.provider ?? '') ? -1 : (left.provider ?? '') > (right.provider ?? '') ? 1
+          : compareKeys(left.rate, right.rate))
 }
 
-/** Map key of one (day, model, rate) cell. */
-function rateRowKey(day: string, model: string, rate: RateKey): string {
-  return `${day}\n${model}\n${rate.ruleStart}-${rate.ruleEnd}-${rate.tier}-${rate.slot}`
+/** Map key of one (day, model, rate, provider) cell; an absent provider is
+ * the unattributed group, the same key an explicit `''` produces. */
+function rateRowKey(day: string, model: string, rate: RateKey, provider = ''): string {
+  return `${day}\n${model}\n${rateKeyText(rate)}\n${provider}`
 }
 
-/** Deterministic session-cell order: session id, day, model, rate identity. */
+/** Deterministic session-cell order: session id, day, model, route key, rate identity. */
 function sessionRowsSorted(rows: Iterable<UsageSessionRow>): UsageSessionRow[] {
   return [...rows].sort((left, right) =>
     left.sessionId < right.sessionId ? -1 : left.sessionId > right.sessionId ? 1
       : left.day < right.day ? -1 : left.day > right.day ? 1
         : left.model < right.model ? -1 : left.model > right.model ? 1
-          : compareKeys(left.rate, right.rate))
+          : (left.provider ?? '') < (right.provider ?? '') ? -1 : (left.provider ?? '') > (right.provider ?? '') ? 1
+            : compareKeys(left.rate, right.rate))
 }
 
-/** Map key of one (sessionId, day, model, rate) cell. */
+/** Map key of one (sessionId, day, model, rate, provider) cell. */
 function sessionRowKey(row: UsageSessionRow): string {
-  return `${row.sessionId}\n${row.day}\n${row.model}\n${row.rate.ruleStart}-${row.rate.ruleEnd}-${row.rate.tier}-${row.rate.slot}`
+  return `${row.sessionId}\n${row.day}\n${row.model}\n${rateKeyText(row.rate)}\n${row.provider ?? ''}`
+}
+
+/** Text form of a rate identity for composite map keys. */
+function rateKeyText(rate: RateKey): string {
+  return `${rate.ruleStart}-${rate.ruleEnd}-${rate.tier}-${rate.slot}`
 }
 
 /** Fixed display order of the auxiliary kinds (the recorder vocabulary). */
@@ -174,7 +196,7 @@ function auxRowsSorted(rows: Iterable<UsageAuxRow>): UsageAuxRow[] {
 
 /** Map key of one (kind, day, model, rate) auxiliary cell. */
 function auxRowKey(auxKind: AuxKind, day: string, model: string, rate: RateKey): string {
-  return `${auxKind}\n${day}\n${model}\n${rate.ruleStart}-${rate.ruleEnd}-${rate.tier}-${rate.slot}`
+  return `${auxKind}\n${day}\n${model}\n${rateKeyText(rate)}`
 }
 
 /** The auxiliary kind of one record; a hand-built aux row may omit it. */
@@ -293,17 +315,28 @@ export function summarizeRecords(records: readonly UsageRecord[], resolve: RateR
   const days = new Map<string, UsageTotals>()
   const hours = new Map<string, UsageTotals>()
   const models = new Map<string, UsageTotals>()
+  const providers = new Map<string, UsageTotals>()
   const rated = new Map<string, UsageRateRow>()
   const aux = new Map<string, UsageAuxRow>()
   const sessions = new Map<string, UsageSessionRow>()
   const recent: UsageRecord[] = []
   for (const record of records) {
     const model = effectiveModelOf(record)
+    // Route key of the row; absent means pre-field history or an auxiliary
+    // call whose route never landed in a session log — its own group (''),
+    // never folded into a named provider.
+    const provider = record.provider ?? ''
     addUsage(total, record)
     const day = dayKey(record.time)
     const dayTotals = days.get(day) ?? emptyTotals()
     addUsage(dayTotals, record)
     days.set(day, dayTotals)
+    // The provider dimension keeps every record, attributed or not: request
+    // counts must reconcile with the top line, and the unattributed group
+    // is exactly the "cannot be split further" remainder.
+    const providerTotals = providers.get(provider) ?? emptyTotals()
+    addUsage(providerTotals, record)
+    providers.set(provider, providerTotals)
     // An unattributed failure (`model === ''`) still folds into totals,
     // byDay, and rateRows (so a day-range filter keeps the count). It
     // stays out of byModel / byHour — a blank table row would pretend
@@ -320,9 +353,9 @@ export function summarizeRecords(records: readonly UsageRecord[], resolve: RateR
       models.set(model, modelTotals)
     }
     const rate = resolve(record)
-    const rowKey = rateRowKey(day, model, rate)
+    const rowKey = rateRowKey(day, model, rate, provider)
     const cell = rated.get(rowKey)
-      ?? { day, model, rate, totals: emptyTotals() }
+      ?? { day, model, rate, ...(provider !== '' ? { provider } : {}), totals: emptyTotals() }
     addUsage(cell.totals, record)
     rated.set(rowKey, cell)
     // Unowned auxiliary calls (the legacy Auto-review/translation shape)
@@ -343,6 +376,7 @@ export function summarizeRecords(records: readonly UsageRecord[], resolve: RateR
         day,
         model,
         rate,
+        ...(provider !== '' ? { provider } : {}),
         lastTime: record.time,
         totals: emptyTotals(),
       }
@@ -358,12 +392,14 @@ export function summarizeRecords(records: readonly UsageRecord[], resolve: RateR
   const byDay: UsageDayRow[] = dayRows(days)
   const byHour: UsageHourRow[] = hourRows(hours)
   const byModel: UsageModelRow[] = modelRows(models)
+  const byProvider: UsageProviderRow[] = providerRows(providers)
   recent.sort((left, right) => right.time - left.time)
   return {
     total,
     byDay,
     byHour,
     byModel,
+    byProvider,
     rateRows: rateRowsSorted(rated.values()),
     auxRows: auxRowsSorted(aux.values()),
     bySession: sessionRowsSorted(sessions.values()),
@@ -517,6 +553,7 @@ export function mergeSummaries(
   const days = new Map<string, UsageTotals>()
   const hours = new Map<string, UsageTotals>()
   const models = new Map<string, UsageTotals>()
+  const providers = new Map<string, UsageTotals>()
   const rated = new Map<string, UsageRateRow>()
   const aux = new Map<string, UsageAuxRow>()
   const sessions = new Map<string, UsageSessionRow>()
@@ -536,10 +573,18 @@ export function mergeSummaries(
     addTotals(model, row.totals)
     models.set(row.model, model)
   }
+  // `?? []`: a hand-built or legacy-shaped summary without the provider
+  // dimension folds as if it had none (on-disk rollups are normalized when
+  // read, so only in-memory shapes need the leniency).
+  for (const row of [...(left.byProvider ?? []), ...(right.byProvider ?? [])]) {
+    const provider = providers.get(row.provider) ?? emptyTotals()
+    addTotals(provider, row.totals)
+    providers.set(row.provider, provider)
+  }
   for (const row of [...left.rateRows, ...right.rateRows]) {
-    const key = rateRowKey(row.day, row.model, row.rate)
+    const key = rateRowKey(row.day, row.model, row.rate, row.provider)
     const cell = rated.get(key)
-      ?? { day: row.day, model: row.model, rate: row.rate, totals: emptyTotals() }
+      ?? { day: row.day, model: row.model, rate: row.rate, ...(row.provider !== undefined && row.provider !== '' ? { provider: row.provider } : {}), totals: emptyTotals() }
     addTotals(cell.totals, row.totals)
     rated.set(key, cell)
   }
@@ -572,6 +617,7 @@ export function mergeSummaries(
     byDay: dayRows(days),
     byHour: hourRows(hours),
     byModel: modelRows(models),
+    byProvider: providerRows(providers),
     rateRows: rateRowsSorted(rated.values()),
     auxRows: auxRowsSorted(aux.values()),
     bySession: sessionRowsSorted(sessions.values()),
@@ -636,6 +682,7 @@ export function filterSummary(
   const total = emptyTotals()
   const days = new Map<string, UsageTotals>()
   const models = new Map<string, UsageTotals>()
+  const providers = new Map<string, UsageTotals>()
   for (const row of rows) {
     addTotals(total, row.totals)
     const day = days.get(row.day) ?? emptyTotals()
@@ -646,9 +693,13 @@ export function filterSummary(
       addTotals(perModel, row.totals)
       models.set(row.model, perModel)
     }
+    const provider = row.provider ?? ''
+    const perProvider = providers.get(provider) ?? emptyTotals()
+    addTotals(perProvider, row.totals)
+    providers.set(provider, perProvider)
   }
   const recent = filterRecordsByRange(summary.recent, undefined, dayRangeFilter(from, to, model, canonical))
-  return { dataDir: summary.dataDir, total, byDay: dayRows(days), byHour, byModel: modelRows(models), rateRows: rateRowsSorted(rows), auxRows: auxRowsSorted(auxRows), bySession, recent }
+  return { dataDir: summary.dataDir, total, byDay: dayRows(days), byHour, byModel: modelRows(models), byProvider: providerRows(providers), rateRows: rateRowsSorted(rows), auxRows: auxRowsSorted(auxRows), bySession, recent }
 }
 
 /** Available cached session cells retain usage even if raw history is lost.
@@ -659,6 +710,7 @@ export function summaryForSessions(summary: TokenSummary, sessionIds: readonly s
   const total = emptyTotals()
   const days = new Map<string, UsageTotals>()
   const models = new Map<string, UsageTotals>()
+  const providers = new Map<string, UsageTotals>()
   const rated = new Map<string, UsageRateRow>()
   for (const row of bySession) {
     addTotals(total, row.totals)
@@ -668,11 +720,14 @@ export function summaryForSessions(summary: TokenSummary, sessionIds: readonly s
       const model = models.get(row.model) ?? emptyTotals()
       addTotals(model, row.totals); models.set(row.model, model)
     }
-    const key = rateRowKey(row.day, row.model, row.rate)
-    const cell = rated.get(key) ?? { day: row.day, model: row.model, rate: row.rate, totals: emptyTotals() }
+    const provider = row.provider ?? ''
+    const perProvider = providers.get(provider) ?? emptyTotals()
+    addTotals(perProvider, row.totals); providers.set(provider, perProvider)
+    const key = rateRowKey(row.day, row.model, row.rate, provider)
+    const cell = rated.get(key) ?? { day: row.day, model: row.model, rate: row.rate, ...(provider !== '' ? { provider } : {}), totals: emptyTotals() }
     addTotals(cell.totals, row.totals); rated.set(key, cell)
   }
-  return { total, byDay: dayRows(days), byHour: [], byModel: modelRows(models), rateRows: rateRowsSorted(rated.values()), auxRows: [], bySession,
+  return { total, byDay: dayRows(days), byHour: [], byModel: modelRows(models), byProvider: providerRows(providers), rateRows: rateRowsSorted(rated.values()), auxRows: [], bySession,
     recent: summary.recent.filter(row => wanted.has(row.sessionId)) }
 }
 
@@ -727,12 +782,15 @@ export function attachCosts(
   const rulesOf = (name: string): ModelRates | undefined => costState !== 'ready' ? undefined
     : context !== undefined ? context.ratesForModel(name) : pricing[name]
   const costs = new Map<string, number>()
+  const providerCosts = new Map<string, number>()
   let totalCost = 0
   for (const row of summary.rateRows) {
     const rules = rulesOf(row.model)
     if (rules === undefined) continue
     const cost = costOf(row.totals, ratesForKey(rules, row.rate))
     costs.set(row.model, (costs.get(row.model) ?? 0) + cost)
+    const provider = row.provider ?? ''
+    providerCosts.set(provider, (providerCosts.get(provider) ?? 0) + cost)
     totalCost += cost
   }
   // Session cells bill from their own rate identity — the same units the
@@ -816,6 +874,11 @@ export function attachCosts(
   const unpricedModels = byModel
     .filter(row => context !== undefined ? context.resolveModel(row.model).status !== 'matched' : pricing[row.model] === undefined)
     .map(row => row.model)
+  // The provider table: token rows from the summary's provider dimension,
+  // each billed at the cost its own rate rows accumulated — the unattributed
+  // group included, so the column sums to the summary card.
+  const byProvider: CostedProviderRow[] = (summary.byProvider ?? [])
+    .map(row => ({ ...row, cost: providerCosts.get(row.provider) ?? 0 }))
   return {
     dataDir: summary.dataDir,
     total: summary.total,
@@ -830,6 +893,7 @@ export function attachCosts(
     byDay: summary.byDay,
     byHour: summary.byHour,
     byModel,
+    byProvider,
     bySession,
     rateRows: summary.rateRows,
     auxRows: summary.auxRows,

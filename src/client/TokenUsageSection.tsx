@@ -38,11 +38,24 @@ import { projectRowsOf } from './project-rows.ts'
 import { useColorSchemeMirror } from './use-color-scheme.ts'
 import styles from './TokenUsageSection.module.css'
 
-/** The three tabs' fixed sort options: projects and models pick between
- * token size and billed cost; sessions add last activity. */
+/** The detail tabs' fixed sort options: projects, models and providers pick
+ * between token size and billed cost; sessions add last activity. */
 const PROJECT_SORT: readonly RowSort[] = ['tokens', 'cost']
 const MODEL_SORT: readonly RowSort[] = ['tokens', 'cost']
+const PROVIDER_SORT: readonly RowSort[] = ['tokens', 'cost']
 const SESSION_SORT: readonly RowSort[] = ['tokens', 'cost', 'recent']
+
+/** The detail switch's tab labels, one per mode. */
+const DETAIL_MODES = ['project', 'model', 'session', 'provider', 'aux'] as const
+type DetailMode = (typeof DETAIL_MODES)[number]
+
+/** One detail mode's label key. */
+function detailLabelOf(mode: DetailMode): 'byProject.title' | 'byModel.title' | 'bySession.title' | 'byProvider.title' | 'aux.tab' {
+  return mode === 'project' ? 'byProject.title'
+    : mode === 'model' ? 'byModel.title'
+      : mode === 'session' ? 'bySession.title'
+        : mode === 'provider' ? 'byProvider.title' : 'aux.tab'
+}
 
 /** Re-export so existing section tests and consumers keep importing
  * `StatCard` from this module (the file moved to `./StatCard.tsx`). */
@@ -222,21 +235,22 @@ export function TokenUsageSection({ t, close, sessionListed, openSession, varian
   // Entering the page starts on today's window (the 1d quick range).
   const [filters, setFilters] = useState<Filters>(() => ({ model: '', ...quickRange(1) }))
   // The detail-table block's mode: by project (default — the dashboards'
-  // first tab), by model, by session, or the runtime-overhead breakdown of
-  // the auxiliary (bypass) model requests. Pure presentation state — every
-  // row set arrives on the SAME summary response, so switching never
-  // refetches (session-local, not persisted, the usage tab's scope-switch
-  // tradeoff).
-  const [detailMode, setDetailMode] = useState<'project' | 'model' | 'session' | 'aux'>('project')
-  // The three lists' sorts, each its own state (the page's cards and the
-  // panel's tabs render the same lists, so one state drives both): projects
-  // and models pick token size vs billed cost, sessions add last activity.
-  // A pick matching the native order passes it straight through.
+  // first tab), by model, by session, by provider, or the runtime-overhead
+  // breakdown of the auxiliary (bypass) model requests. Pure presentation
+  // state — every row set arrives on the SAME summary response, so
+  // switching never refetches (session-local, not persisted, the usage
+  // tab's scope-switch tradeoff).
+  const [detailMode, setDetailMode] = useState<DetailMode>('project')
+  // The lists' sorts, each its own state (the page's cards and the panel's
+  // tabs render the same lists, so one state drives both): projects,
+  // models and providers pick token size vs billed cost, sessions add last
+  // activity. A pick matching the native order passes it straight through.
   const [projectSort, setProjectSort] = useState<RowSort>('tokens')
   const [modelSort, setModelSort] = useState<RowSort>('tokens')
   // The models' performance view — a content switch next to the sort
   // control (shared by the page card and the panel tab, like the sorts).
   const [modelPerfView, setModelPerfView] = useState(false)
+  const [providerSort, setProviderSort] = useState<RowSort>('tokens')
   const [sessionSort, setSessionSort] = useState<RowSort>('cost')
   // Ctrl+click on a model row toggles the model filter to just that model
   // (a single pick — clicking the filtered model again clears it).
@@ -399,6 +413,10 @@ export function TokenUsageSection({ t, close, sessionListed, openSession, varian
                   onModelSortChange={setModelSort}
                   modelPerfView={modelPerfView}
                   onModelPerfToggle={setModelPerfView}
+                  providerRows={state.value.byProvider ?? []}
+                  providerNames={state.value.providerNames}
+                  providerSort={providerSort}
+                  onProviderSortChange={setProviderSort}
                   sessionSort={sessionSort}
                   onSessionSortChange={setSessionSort}
                   aux={state.value.aux}
@@ -420,7 +438,7 @@ export function TokenUsageSection({ t, close, sessionListed, openSession, varian
                 <section className={styles['detailPanel']}>
                   <div className={styles['detailToolbar']}>
                     <div className={styles['segmented']} role="group" aria-label={t('detail.switch.label')}>
-                      {(['project', 'model', 'session', 'aux'] as const).map(mode => (
+                      {DETAIL_MODES.map(mode => (
                         <button
                           key={mode}
                           type="button"
@@ -428,7 +446,7 @@ export function TokenUsageSection({ t, close, sessionListed, openSession, varian
                           aria-pressed={detailMode === mode}
                           onClick={() => setDetailMode(mode)}
                         >
-                          {t(mode === 'project' ? 'byProject.title' : mode === 'model' ? 'byModel.title' : mode === 'session' ? 'bySession.title' : 'aux.tab')}
+                          {t(detailLabelOf(mode))}
                         </button>
                       ))}
                     </div>
@@ -437,10 +455,10 @@ export function TokenUsageSection({ t, close, sessionListed, openSession, varian
                         <span className={detailMode === 'model' && modelPerfView ? styles['sortHidden'] : undefined}>
                           <RowSortControl
                             compact
-                            value={detailMode === 'project' ? projectSort : detailMode === 'model' ? modelSort : sessionSort}
-                            options={detailMode === 'project' ? PROJECT_SORT : detailMode === 'model' ? MODEL_SORT : SESSION_SORT}
-                            onChange={detailMode === 'project' ? setProjectSort : detailMode === 'model' ? setModelSort : setSessionSort}
-                            ariaLabel={t(detailMode === 'project' ? 'byProject.title' : detailMode === 'model' ? 'byModel.title' : 'bySession.title')}
+                            value={detailMode === 'project' ? projectSort : detailMode === 'model' ? modelSort : detailMode === 'provider' ? providerSort : sessionSort}
+                            options={detailMode === 'project' ? PROJECT_SORT : detailMode === 'model' ? MODEL_SORT : detailMode === 'provider' ? PROVIDER_SORT : SESSION_SORT}
+                            onChange={detailMode === 'project' ? setProjectSort : detailMode === 'model' ? setModelSort : detailMode === 'provider' ? setProviderSort : setSessionSort}
+                            ariaLabel={t(detailLabelOf(detailMode))}
                             t={t}
                           />
                         </span>
@@ -457,7 +475,9 @@ export function TokenUsageSection({ t, close, sessionListed, openSession, varian
                           projectRows={projectRows}
                           modelRows={state.value.byModel}
                           sessionRows={state.value.sessionRows ?? []}
-                          sort={detailMode === 'project' ? projectSort : detailMode === 'model' ? modelSort : sessionSort}
+                          providerRows={state.value.byProvider ?? []}
+                          providerNames={state.value.providerNames}
+                          sort={detailMode === 'project' ? projectSort : detailMode === 'model' ? modelSort : detailMode === 'provider' ? providerSort : sessionSort}
                           perfView={detailMode === 'model' && modelPerfView}
                           pricing={state.value.pricing}
                           costState={state.value.costState}

@@ -23,19 +23,20 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
-import type { CostState, CostedModelRow, ModelPerf, PricingTable, SessionUsageRow, UsageTotals } from '../wire.ts'
+import { Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
+import type { CostState, CostedModelRow, CostedProviderRow, ModelPerf, PricingTable, SessionUsageRow, UsageTotals } from '../wire.ts'
 import { MIN_PERF_SAMPLES } from '../wire.ts'
 import { costsAvailable } from './PricingStatus.tsx'
 import { dayKeyOf, totalTokens } from './day.ts'
 import type { CurrencyView } from './format.ts'
-import { formatCost, formatSpeed, formatTokens, formatTtft, hitRateDisplay } from './format.ts'
+import { formatCost, formatSpeed, formatTokens, formatTtft, hitRateDisplay, providerLabel } from './format.ts'
 import { ModelAssociationBadge, UnpricedModelTag } from './PricingAssociations.tsx'
 import type { ProjectUsageRow } from './project-rows.ts'
 import { dirTailOf } from './project-rows.ts'
 import styles from './UsageRows.module.css'
 
 /** Which row shape the list renders. */
-export type UsageRowsKind = 'project' | 'model' | 'session'
+export type UsageRowsKind = 'project' | 'model' | 'session' | 'provider'
 
 /** The row lists' controlled sort. `tokens` on projects passes the fold's
  * native order through; `cost` on sessions passes the served order
@@ -136,6 +137,21 @@ function shortIdOf(sessionId: string): string {
   return sessionId.length > 8 ? `${sessionId.slice(0, 8)}…` : sessionId
 }
 
+/** The unattributed row's hover tooltip: an intro line, then the known
+ * reasons a record can carry no route key as a numbered list, each line
+ * indented by two spaces (the bubble renders `pre`, so the indent shows).
+ * The list is the full closed set — deleted logs, pre-field history, and
+ * bypass calls the host never gives a route key — so the reader sees this
+ * row is expected, not a bug. */
+function unattributedTooltip(t: TranslateNS<'token-usage'>): string {
+  const causes = [
+    t('byProvider.cause.deletedLog'),
+    t('byProvider.cause.preField'),
+    t('byProvider.cause.bypass'),
+  ]
+  return [t('byProvider.cause.intro'), ...causes.map((cause, index) => `  ${index + 1}. ${cause}`)].join('\n')
+}
+
 /** Relative last-active label (「3 小时前」): minutes inside the first hour,
  * hours inside the first day, days beyond. */
 function relativeTimeOf(time: number, t: TranslateNS<'token-usage'>): string {
@@ -157,6 +173,12 @@ export interface UsageRowsProps {
   modelRows?: readonly CostedModelRow[] | undefined
   /** `kind: 'session'` — the served per-session rows (final order = cost). */
   sessionRows?: readonly SessionUsageRow[] | undefined
+  /** `kind: 'provider'` — the priced per-provider rows; `''` is the
+   * unattributed remainder row. */
+  providerRows?: readonly CostedProviderRow[] | undefined
+  /** Provider rows only: the route-key → display-name registry; a key
+   * without an entry falls back to the key itself. */
+  providerNames?: Readonly<Record<string, string>> | undefined
   /** The controlled sort pick (see {@link RowSort}); the default depends
    * on the kind — `tokens` on project/model, `cost` on session. Ignored
    * while `perfView` is set. */
@@ -193,6 +215,8 @@ export function UsageRows({
   projectRows,
   modelRows,
   sessionRows,
+  providerRows,
+  providerNames,
   sort,
   perfView,
   pricing,
@@ -228,8 +252,8 @@ export function UsageRows({
   // view replaces the pick entirely — its order is speed-fixed.
   const perfMode = perfView === true && kind === 'model'
   const active = sort ?? (kind === 'session' ? 'cost' : 'tokens')
-  const rows = useMemo<readonly (ProjectUsageRow | CostedModelRow | SessionUsageRow)[]>(() => {
-    const base = kind === 'project' ? projectRows : kind === 'model' ? modelRows : sessionRows
+  const rows = useMemo<readonly (ProjectUsageRow | CostedModelRow | SessionUsageRow | CostedProviderRow)[]>(() => {
+    const base = kind === 'project' ? projectRows : kind === 'model' ? modelRows : kind === 'session' ? sessionRows : providerRows
     if (base === undefined) return []
     if (kind === 'session') {
       if (active === 'cost') return base
@@ -241,6 +265,18 @@ export function UsageRows({
     if (kind === 'project') {
       if (active === 'tokens') return base
       return [...(base as readonly ProjectUsageRow[])].sort((left, right) => right.cost - left.cost || (left.name < right.name ? -1 : 1))
+    }
+    if (kind === 'provider') {
+      // Providers arrive request-count descending with the unattributed
+      // remainder sunk; both picks re-sort by their own measure and keep
+      // that sink — the remainder is a reconciliation row, not a provider.
+      const unattributedLast = (row: CostedProviderRow): number => row.provider === '' ? 1 : 0
+      return [...(base as readonly CostedProviderRow[])].sort((left, right) =>
+        unattributedLast(left) - unattributedLast(right)
+          || (active === 'cost'
+            ? right.cost - left.cost
+            : totalTokens(right.totals) - totalTokens(left.totals))
+          || (left.provider < right.provider ? -1 : 1))
     }
     const models = [...base] as CostedModelRow[]
     if (perfMode) {
@@ -262,7 +298,7 @@ export function UsageRows({
     return models.sort(active === 'tokens'
       ? (left, right) => totalTokens(right.totals) - totalTokens(left.totals) || (left.model < right.model ? -1 : 1)
       : (left, right) => right.cost - left.cost || (left.model < right.model ? -1 : 1))
-  }, [kind, projectRows, modelRows, sessionRows, active, perfMode])
+  }, [kind, projectRows, modelRows, sessionRows, providerRows, active, perfMode])
 
   // The bar scale: the tallest row of the *rendered* set is 100%,
   // measured in the active unit — a cost-sorted list bars by cost, the
@@ -270,7 +306,7 @@ export function UsageRows({
   // low-sample rows drop their bar and must not stretch the scale), or
   // the bars would contradict the order they sit in. Zero renders
   // zero-width bars (never NaN).
-  const barValueOf = (row: ProjectUsageRow | CostedModelRow | SessionUsageRow): number =>
+  const barValueOf = (row: ProjectUsageRow | CostedModelRow | SessionUsageRow | CostedProviderRow): number =>
     perfMode ? ('perf' in row && row.perf !== undefined && row.perf.samples >= MIN_PERF_SAMPLES ? row.perf.tokensPerSec : 0)
       : active === 'cost' ? row.cost
         : totalTokens(row.totals)
@@ -342,7 +378,9 @@ export function UsageRows({
     )
   }
 
-  const ariaLabel = kind === 'project' ? t('byProject.title') : kind === 'model' ? t('byModel.title') : t('bySession.title')
+  const ariaLabel = kind === 'project' ? t('byProject.title')
+    : kind === 'model' ? t('byModel.title')
+      : kind === 'session' ? t('bySession.title') : t('byProvider.title')
 
   return (
     <div className={styles['rows']} ref={scrollRef} onScroll={handleScroll} role="list" aria-label={ariaLabel}>
@@ -442,6 +480,48 @@ export function UsageRows({
                   {perfMode
                     ? null
                     : <span className={styles['rowCost']}>{rules !== undefined ? costText(model.cost) : '—'}</span>}
+                </div>
+              )
+            }
+            if (kind === 'provider') {
+              const provider = row as CostedProviderRow
+              const unattributed = provider.provider === ''
+              return (
+                <div className={styles['row']} role="listitem" key={unattributed ? '\u0000' : provider.provider}>
+                  <span
+                    className={unattributed ? `${styles['rowName']} ${styles['nameDim']}` : styles['rowName']}
+                    title={unattributed ? undefined : provider.provider}
+                  >
+                    <span className={styles['nameLine']}>
+                      {unattributed
+                        ? (
+                          <span className={styles['hintWrap']}>
+                            <Tooltip label={unattributedTooltip(t)} side="bottom" delayMs={100}>
+                              <span
+                                className={styles['nameText']}
+                                aria-label={t('byProvider.unattributed')}
+                              >
+                                {t('byProvider.unattributed')}
+                                <span className={styles['nameHint']} aria-hidden={true}>?</span>
+                              </span>
+                            </Tooltip>
+                          </span>
+                        )
+                        : <span className={styles['nameText']}>{providerLabel(provider.provider, providerNames)}</span>}
+                    </span>
+                  </span>
+                  <span className={styles['track']}>
+                    {barMax > 0
+                      ? (
+                        <span
+                          className={styles['fill']}
+                          style={{ width: `${(barValueOf(provider) / barMax) * 100}%` }}
+                        />
+                      )
+                      : null}
+                  </span>
+                  {numsCell(provider.totals)}
+                  <span className={styles['rowCost']}>{costText(provider.cost)}</span>
                 </div>
               )
             }

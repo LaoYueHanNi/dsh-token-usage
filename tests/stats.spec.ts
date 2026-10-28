@@ -4,15 +4,16 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { readRollup, writeRollup, ROLLUP_AGGREGATE_FORMAT } from '../src/rollup.ts'
 import { clearRecordCache, readCachedRecords } from '../src/record-cache.ts'
-import { RECENT_LIMIT, attachCosts, buildSummary, filterRecordsBySessions, filterSummary, mergeSummaries, readAllRecords, requestSeriesOf, summarizeRecords } from '../src/stats.ts'
+import { RECENT_LIMIT, attachCosts, buildSummary, filterRecordsBySessions, filterSummary, mergeSummaries, readAllRecords, requestSeriesOf, summarizeRecords, summaryForSessions } from '../src/stats.ts'
 import type { RateResolver } from '../src/stats.ts'
 import type { PricingTable } from '../src/wire.ts'
 import type { UsageRecord } from '../src/usage-record.ts'
 
 /** One record with the given time and usage buckets (usage optional); pass
  * `kind: 'compaction'` for a compaction summarize row, `kind: 'failure'`
- * for a failed-request row (no usage by construction). */
-function record(time: number, model: string, usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number }, kind?: 'compaction' | 'failure'): UsageRecord {
+ * for a failed-request row (no usage by construction); `provider` stamps a
+ * route key exactly the way the live recorder does (empty omitted). */
+function record(time: number, model: string, usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number }, kind?: 'compaction' | 'failure', provider?: string): UsageRecord {
   return {
     requestId: kind === 'compaction' ? `compaction-${time}`
       : kind === 'failure' ? `failure-${time}-${model}`
@@ -21,6 +22,7 @@ function record(time: number, model: string, usage?: { input?: number; output?: 
     sessionId: 's1',
     model,
     ...(kind !== undefined ? { kind } : {}),
+    ...(provider !== undefined && provider !== '' ? { provider } : {}),
     ...usage === undefined || kind === 'failure' ? {} : {
       usage: {
         inputTokens: usage.input ?? 0,
@@ -674,6 +676,23 @@ describe('buildSummary rollup (cold/hot split)', () => {
     await expect(readRollup(dir)).resolves.toMatchObject({ upto: '2026-01-15', total: { requests: 2 } })
   })
 
+  it('persists the provider dimension and provider-keyed rate rows in the rollup', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'token-usage-split-'))
+    await writeDayFile(dir, 'usage-2026-01-14.jsonl', [
+      record(new Date(2026, 0, 14, 12).getTime(), 'deepseek-chat', { input: 1 }, undefined, 'deepseek-official'),
+      record(new Date(2026, 0, 14, 13).getTime(), 'deepseek-chat', { input: 2 }),
+    ])
+    const summary = await buildSummary(dir, today)
+    expect(summary.byProvider.map(row => [row.provider, row.totals.requests])).toEqual([
+      ['deepseek-official', 1],
+      ['', 1],
+    ])
+    const stored = await readRollup(dir)
+    expect(stored?.byProvider).toEqual(summary.byProvider)
+    // Same day × model × rate splits per provider; the absent key stays absent.
+    expect(stored?.rateRows.map(row => row.provider)).toEqual([undefined, 'deepseek-official'])
+  })
+
   it.each([undefined, 2])('rebuilds aggregate format %s so valid timing counts backfill over history', async (aggregateFormat) => {
     const dir = await mkdtemp(join(tmpdir(), 'token-usage-split-'))
     const frozenAt = new Date(2026, 0, 15, 12).getTime()
@@ -802,6 +821,101 @@ describe('readAllRecords / buildSummary', () => {
     expect(summary.byHour).toEqual([])
     expect(summary.byModel).toEqual([])
     expect(summary.recent).toEqual([])
+  })
+})
+
+describe('provider dimension', () => {
+  const at = new Date(2026, 0, 15, 10).getTime()
+
+  it('groups by route key, keeps the unattributed remainder as its own sinking row, and splits rate rows per provider', () => {
+    const rows: UsageRecord[] = [
+      record(at, 'deepseek-chat', { input: 10 }, undefined, 'deepseek-official'),
+      record(at + 1, 'deepseek-chat', { input: 20 }, undefined, 'deepseek-official'),
+      record(at + 2, 'deepseek-chat', { input: 30 }, undefined, 'zai-coding-cn'),
+      // Pre-field history and an unowned auxiliary call: no route key.
+      record(at + 3, 'deepseek-chat', { input: 40 }),
+      { requestId: 'aux:session-title:1:1', time: at + 4, sessionId: '', model: 'deepseek-chat', kind: 'aux', auxKind: 'session-title', usage: { inputTokens: 50, outputTokens: 5 } },
+    ]
+    const summary = summarizeRecords(rows)
+    // Requests descending; the unattributed group sinks below named routes
+    // whatever its volume (aux rows count into their provider group too).
+    expect(summary.byProvider.map(row => [row.provider, row.totals.requests])).toEqual([
+      ['deepseek-official', 2],
+      ['zai-coding-cn', 1],
+      ['', 2],
+    ])
+    expect(summary.byProvider[2].totals.inputTokens).toBe(90)
+    // Same day × model × rate splits per provider; absent key stays absent.
+    expect(summary.rateRows.map(row => row.provider)).toEqual([
+      undefined, 'deepseek-official', 'zai-coding-cn',
+    ])
+  })
+
+  it('merges provider rows key-wise, folding both sides\' unattributed groups', () => {
+    const attributed = summarizeRecords([record(at, 'deepseek-chat', { input: 1 }, undefined, 'deepseek-official')])
+    const legacy = summarizeRecords([record(at + 1, 'deepseek-chat', { input: 2 })])
+    const merged = mergeSummaries(attributed, legacy)
+    expect(merged.byProvider.map(row => [row.provider, row.totals.requests])).toEqual([
+      ['deepseek-official', 1],
+      ['', 1],
+    ])
+    // A hand-built in-memory side without the dimension folds as if it had
+    // none (on-disk rollups normalize instead, so only memory needs this).
+    const bare = mergeSummaries(attributed, { ...legacy, byProvider: undefined } as typeof legacy)
+    expect(bare.byProvider.map(row => row.provider)).toEqual(['deepseek-official'])
+    expect(merged.rateRows.map(row => row.provider)).toEqual([undefined, 'deepseek-official'])
+  })
+
+  it('re-aggregates the provider dimension under a day-range filter', () => {
+    const summary = { dataDir: 'C:/data', ...summarizeRecords([
+      record(new Date(2026, 0, 14, 10).getTime(), 'deepseek-chat', { input: 1 }, undefined, 'deepseek-official'),
+      record(new Date(2026, 0, 15, 10).getTime(), 'deepseek-chat', { input: 10 }, undefined, 'zai-coding-cn'),
+      record(new Date(2026, 0, 15, 11).getTime(), 'deepseek-chat', { input: 20 }),
+    ]) }
+    const filtered = filterSummary(summary, '2026-01-15', '2026-01-15')
+    expect(filtered.byProvider.map(row => [row.provider, row.totals.requests])).toEqual([
+      ['zai-coding-cn', 1],
+      ['', 1],
+    ])
+  })
+
+  it('rebuilds provider rows from session cells on the cached fallback', () => {
+    const summary = summarizeRecords([
+      record(at, 'deepseek-chat', { input: 1 }, undefined, 'deepseek-official'),
+      record(at + 1, 'deepseek-chat', { input: 2 }),
+      record(at + 2, 'deepseek-chat', { input: 4 }, undefined, 'zai-coding-cn'),
+    ])
+    const other = summarizeRecords([record(at + 3, 'deepseek-chat', { input: 8 }, undefined, 'kimi-coding')])
+    const whole = mergeSummaries(summary, { ...other, bySession: other.bySession.map(row => ({ ...row, sessionId: 's2' })) })
+    const scoped = summaryForSessions(whole, ['s1'])
+    expect(scoped.byProvider.map(row => [row.provider, row.totals.requests])).toEqual([
+      ['deepseek-official', 1],
+      ['zai-coding-cn', 1],
+      ['', 1],
+    ])
+  })
+
+  it('bills per-provider costs from the same rate rows as byModel', () => {
+    const pricing: PricingTable = {
+      'deepseek-chat': {
+        base: { inputPerMillion: 2, outputPerMillion: 8, cacheReadPerMillion: 0.5 },
+        contextTiers: [], dailySlots: [], timeRules: [],
+      },
+    }
+    const summary = { dataDir: 'C:/data', ...summarizeRecords([
+      record(at, 'deepseek-chat', { input: 1_000_000, output: 500_000, cacheRead: 250_000 }, undefined, 'deepseek-official'),
+      record(at + 1, 'deepseek-chat', { input: 1_000_000 }, undefined, 'deepseek-official'),
+      record(at + 2, 'deepseek-chat', { input: 1_000_000 }),
+    ]) }
+    const costed = attachCosts(summary, pricing)
+    // deepseek-official: (2+4+0.125) + 2; unattributed: 2 — the column sums
+    // to the summary card, and the unpriced remainder is billed as its own
+    // group rather than dropped.
+    expect(costed.byProvider.map(row => [row.provider, row.cost])).toEqual([
+      ['deepseek-official', 2 + 4 + 0.125 + 2],
+      ['', 2],
+    ])
+    expect(costed.byProvider.reduce((sum, row) => sum + row.cost, 0)).toBe(costed.totalCost)
   })
 })
 

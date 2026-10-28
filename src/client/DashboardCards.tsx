@@ -11,7 +11,7 @@
 import type { RefObject } from 'react'
 import type { ReactNode } from 'react'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
-import type { AuxSummary, CostState, CostedModelRow, PricingTable, SessionUsageRow } from '../wire.ts'
+import type { AuxSummary, CostState, CostedModelRow, CostedProviderRow, PricingTable, SessionUsageRow } from '../wire.ts'
 import { OverheadRows } from './OverheadRows.tsx'
 import { UsageRows, RowSortControl, PerfToggle } from './UsageRows.tsx'
 import type { RowSort } from './UsageRows.tsx'
@@ -19,12 +19,13 @@ import type { ProjectUsageRow } from './project-rows.ts'
 import type { CurrencyView } from './format.ts'
 import styles from './DashboardCards.module.css'
 
-/** The three cards' fixed sort options: projects and models pick between
- * token size and billed cost; sessions add last activity. The models'
- * performance view is a separate head toggle, not a sort pick. */
+/** The cards' fixed sort options: projects, models and providers pick
+ * between token size and billed cost; sessions add last activity. The
+ * models' performance view is a separate head toggle, not a sort pick. */
 const SORT_PROJECT: readonly RowSort[] = ['tokens', 'cost']
 const SORT_SESSION: readonly RowSort[] = ['tokens', 'cost', 'recent']
 const SORT_MODEL: readonly RowSort[] = ['tokens', 'cost']
+const SORT_PROVIDER: readonly RowSort[] = ['tokens', 'cost']
 
 /** Props for the four-card dashboard. Every list arrives final from the
  * section; the seats (session jump, model filter, price dialog) pass
@@ -47,6 +48,13 @@ export interface DashboardCardsProps {
    * and the sort control yields its seat. */
   modelPerfView: boolean
   onModelPerfToggle: (next: boolean) => void
+  /** The priced per-provider rows (providers card); `''` is the
+   * unattributed remainder row. */
+  providerRows: readonly CostedProviderRow[]
+  /** Route key → display name for the provider rows. */
+  providerNames: Readonly<Record<string, string>> | undefined
+  providerSort: RowSort
+  onProviderSortChange: (next: RowSort) => void
   sessionSort: RowSort
   onSessionSortChange: (next: RowSort) => void
   /** The auxiliary layer (overhead card; absent renders the empty hint). */
@@ -81,6 +89,10 @@ export function DashboardCards({
   onModelSortChange,
   modelPerfView,
   onModelPerfToggle,
+  providerRows,
+  providerNames,
+  providerSort,
+  onProviderSortChange,
   sessionSort,
   onSessionSortChange,
   aux,
@@ -190,6 +202,34 @@ export function DashboardCards({
           t={t}
           onToggleModel={onToggleModel}
           onModelName={onModelName}
+        />
+      </div>
+      <div className={styles['panel']}>
+        <div className={styles['panelHead']}>
+          <span className={styles['panelTitle']}>
+            {t('board.providers')}
+            <span className={styles['panelCount']}>
+              {providerSort === 'cost'
+                ? t('board.byCost', { count: providerRows.length.toLocaleString() })
+                : t('board.byTokens', { count: providerRows.length.toLocaleString() })}
+            </span>
+          </span>
+          <RowSortControl
+            value={providerSort}
+            options={SORT_PROVIDER}
+            onChange={onProviderSortChange}
+            ariaLabel={t('board.providers')}
+            t={t}
+          />
+        </div>
+        <UsageRows
+          kind="provider"
+          providerRows={providerRows}
+          providerNames={providerNames}
+          sort={providerSort}
+          costState={costState}
+          view={view}
+          t={t}
         />
       </div>
       <div ref={overheadCardRef} className={overheadFlash ? `${styles['panel']} ${styles['flash']}` : styles['panel']}>

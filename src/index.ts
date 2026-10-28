@@ -1070,6 +1070,9 @@ export function apply(ctx: Context, config: Config = {}) {
       webCtx.effect(() => webCtx.webServer.register(
         createStatsRoute(currentDir, {
           currency: () => currencyOfRegion(effectiveInput().pricingRegion),
+          // The provider dimension's display names: the running directory's
+          // registry, read per request so a relocation serves the moved file.
+          providerNames: () => current?.names.read() ?? Promise.resolve({}),
           logger,
           live: () => ({
             snapshot: (sessionIds) => {
