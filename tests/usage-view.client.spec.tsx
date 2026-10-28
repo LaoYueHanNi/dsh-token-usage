@@ -701,6 +701,57 @@ describe('UsageView request pool', () => {
     expectText('本会话')
   })
 
+  it('explains the rewrite inside the hit-cell tooltip with no badge of its own', async () => {
+    // The 93.6%-hit counter-example: attributed (a prune run preceded it)
+    // yet completely normal cache — the tooltip annotates, never judges,
+    // and NO standalone badge renders (real-world feedback: redundant next
+    // to the 缓存过低 marker).
+    const attributed = {
+      ...LOSS_ROW,
+      id: 'msg-after',
+      durableRequestId: 'msg-after',
+      inputTokens: 4_500,
+      cacheReadTokens: 65_700,
+      cache: { rate: 0.936, eligibility: 'eligible' as const, band: 'normal' as const },
+      compactionAttribution: [
+        { kind: 'prune' as const, count: 2, shadowedTokenCount: 4_812 },
+        { kind: 'summary' as const, count: 1, shadowedTokenCount: 43_637 },
+      ],
+    }
+    const plain = { ...LOSS_ROW, id: 'msg-plain', durableRequestId: 'msg-plain', cache: { rate: 0.9, eligibility: 'eligible' as const, band: 'normal' as const } }
+    stubFetch({ root: summaryWithRequestDetails([attributed, plain]) })
+    renderView()
+    await waitFor(() => expectText('最新请求'))
+    expect(screen.queryByText('压缩后')).toBeNull()
+    const latest = screen.getByRole('region', { name: '最新请求' })
+    expect(within(latest).getByText('93.6%')).toBeTruthy()
+    // Hovering the hit cell explains the rewrite (the row's own tooltip).
+    fireEvent.mouseEnter(within(latest).getByText('93.6%').closest('span[tabindex]')!)
+    const tooltip = screen.getByRole('tooltip').textContent!
+    expect(tooltip).toContain('宿主的压缩操作改写了上下文前缀，缓存表现可能受影响')
+    expect(tooltip).toContain('工具结果剪枝改写了请求前缀（2 条，剪除消息的影子 token 合计 4.8K）')
+    expect(tooltip).toContain('LLM 摘要替换了会话历史（影子 token 44K）')
+  })
+
+  it('merges the attribution into the 缓存过低 tooltip on loss rows', async () => {
+    // The real-world shape (ac1c0f39): a 16-prune batch + summary preceded
+    // the request; its 9.1% loss marker explains the low hit AND the chain.
+    const lossAttributed = {
+      ...LOSS_ROW,
+      id: 'msg-loss-after',
+      durableRequestId: 'msg-loss-after',
+      compactionAttribution: [{ kind: 'prune' as const, count: 16, shadowedTokenCount: 60_256 }],
+    }
+    stubFetch({ root: summaryWithRequestDetails([lossAttributed]) })
+    renderView()
+    await waitFor(() => expectText('最新请求'))
+    const lossBadge = within(screen.getByRole('region', { name: '最新请求' })).getByText('缓存过低')
+    fireEvent.mouseEnter(lossBadge.closest('span[tabindex]')!)
+    const lossTooltip = screen.getByRole('tooltip').textContent!
+    expect(lossTooltip).toContain('本次缓存命中 9.1%')
+    expect(lossTooltip).toContain('工具结果剪枝改写了请求前缀（16 条，剪除消息的影子 token 合计 60K）')
+  })
+
   it('states where the conversation stands in the footer slot and keeps the request’s own diagnostic in the tooltip', async () => {
     // A settled request whose cache assessment was excluded: the diagnostic
     // explains the request, the conversation state explains the dialogue.

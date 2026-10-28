@@ -13,6 +13,7 @@
 
 import type { TokenUsage } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import type { CompactionAttributionItem } from './compaction-attribution.ts'
 // Type-only: pulls the declaration-merged `compaction/*` event payloads into
 // this program, so `SessionEvent<'compaction/summary'>` below is nameable.
 import type {} from '@deepseek-ai/dsh-compaction/types'
@@ -125,6 +126,14 @@ export interface UsageRecord {
   /** Exact waterfall attempt clock, when observed live. Kept separately
    * from the legacy step-level timing so aggregate statistics do not change. */
   attemptTiming?: { startedAt: number; settledAt: number; firstTokenAt?: number }
+  /** Plain-request rows only: the compaction events (prune clusters and
+   * summaries) that landed since the session's previous plain request —
+   * the request pool's tooltip explanation that the host's own
+   * rewrite may have disturbed the prefix cache (never a cache verdict).
+   * Absent on legacy rows and unattributed requests (same omission
+   * philosophy as `kind`); never written on compaction / failure / aux
+   * rows. */
+  compactionAttribution?: CompactionAttributionItem[]
 }
 
 /** Optional timing figures for one model request. */
@@ -488,6 +497,34 @@ function normalizeAuxKind(value: unknown): AuxKind {
   return isAuxKind(value) ? value : 'other'
 }
 
+/** Whether a raw value is a trustworthy non-negative finite count. */
+function isNonNegativeCount(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+}
+
+/**
+ * Read one stored compaction attribution: display-side evidence only, so a
+ * malformed entry drops individually (never the whole row) — a wrong `kind`,
+ * a non-positive count, or a negative shadow figure is omitted, and an empty
+ * survivor set reads as unattributed. Legacy rows without the field stay
+ * unattributed without being rewritten.
+ */
+function normalizeAttribution(value: unknown): { compactionAttribution: CompactionAttributionItem[] } | Record<string, never> {
+  if (!Array.isArray(value)) return {}
+  const items: CompactionAttributionItem[] = []
+  for (const entry of value) {
+    if (typeof entry !== 'object' || entry === null) continue
+    const item = entry as Record<string, unknown>
+    if (item['kind'] !== 'prune' && item['kind'] !== 'summary') continue
+    const count = item['count']
+    const shadowedTokenCount = item['shadowedTokenCount']
+    if (typeof count !== 'number' || !Number.isInteger(count) || count < 1) continue
+    if (!isNonNegativeCount(shadowedTokenCount)) continue
+    items.push({ kind: item['kind'], count, shadowedTokenCount })
+  }
+  return items.length > 0 ? { compactionAttribution: items } : {}
+}
+
 function isUsageFields(value: unknown): value is UsageFields {
   if (typeof value !== 'object' || value === null) return false
   const fields = value as Record<string, unknown>
@@ -554,6 +591,7 @@ export function coerceRecord(value: unknown): UsageRecord | null {
           ? { firstTokenAt: clock.firstTokenAt } : {}),
       } }
     : {}
+  const attribution = normalizeAttribution(record.compactionAttribution)
   if (record.usage === undefined || record.usage === null) {
     return {
       requestId: record.requestId as string,
@@ -567,6 +605,7 @@ export function coerceRecord(value: unknown): UsageRecord | null {
       ...firstToken,
       ...startedAt,
       ...attemptTiming,
+      ...attribution,
       ...responseModel,
       ...provider,
       ...interrupted,
@@ -587,6 +626,7 @@ export function coerceRecord(value: unknown): UsageRecord | null {
     ...firstToken,
     ...startedAt,
     ...attemptTiming,
+    ...attribution,
     ...responseModel,
     ...provider,
     ...interrupted,

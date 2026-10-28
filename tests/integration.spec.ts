@@ -8,7 +8,7 @@ import { SessionSeq } from '@deepseek-ai/dsh-session'
 import * as plugin from '../src/index.ts'
 import { DEFAULT_PRICING_URL_OVERSEAS } from '../src/pricing.ts'
 import { ASSOCIATIONS_FILE } from '../src/pricing-associations.ts'
-import { compactionEvent, messageEvent, retryEvent } from './helpers.ts'
+import { compactionEvent, messageEvent, pruneEvent, retryEvent } from './helpers.ts'
 
 /** Returns persisted sessions from a shared mutable list. */
 function persistenceService(sessions: Array<{ id: string; events: unknown[] }>) {
@@ -301,6 +301,51 @@ describe('plugin integration', () => {
     // compaction land, in event order.
     const rows = await pollRows(mounted.dir, 3)
     expect(rows.map(row => row.requestId)).toEqual(['m1', 'compaction:s1:4', 'm2'])
+  })
+
+  it('attributes the first plain request after compaction events (live path)', async () => {
+    const mounted = await mount()
+    await waitForState(mounted.dir)
+    ctx!.emit('session/event', { id: 's1' }, messageEvent({ messageId: 'm0', seq: 1 }))
+    await pollRows(mounted.dir, 1)
+    // A prune + a summary with no plain request in between: the window folds
+    // both, the next plain request consumes them in one attribution, and the
+    // compaction's own billing row stays unattributed.
+    ctx!.emit('session/event', { id: 's1' }, pruneEvent({ seq: 2, tokens: 900 }))
+    ctx!.emit('session/event', { id: 's1' }, compactionEvent({ seq: 3 }))
+    ctx!.emit('session/event', { id: 's1' }, messageEvent({ messageId: 'm1', seq: 4 }))
+    ctx!.emit('session/event', { id: 's1' }, messageEvent({ messageId: 'm2', seq: 5 }))
+    // Four rows land: m0, the summary's own billing row, then m1 and m2
+    // (the prune itself never produces a row).
+    const rows = await pollRows(mounted.dir, 4)
+    const byId = new Map(rows.map(row => [row.requestId, row]))
+    expect(byId.get('m1')!.compactionAttribution).toEqual([
+      { kind: 'prune', count: 1, shadowedTokenCount: 900 },
+      { kind: 'summary', count: 1, shadowedTokenCount: 123_456 },
+    ])
+    expect(byId.get('m2')!.compactionAttribution).toBeUndefined()
+    expect(byId.get('compaction:s1:3')!.compactionAttribution).toBeUndefined()
+  })
+
+  it('attributes rows on the first-run sync with the same window rule', async () => {
+    sessions.push({
+      id: 's1',
+      events: [
+        messageEvent({ messageId: 'm0', seq: 1 }),
+        pruneEvent({ seq: 2, tokens: 900 }),
+        compactionEvent({ seq: 3 }),
+        messageEvent({ messageId: 'm1', seq: 4 }),
+      ],
+    })
+    const mounted = await mount()
+    await waitForState(mounted.dir)
+    const rows = await pollRows(mounted.dir, 3)
+    const byId = new Map(rows.map(row => [row.requestId, row]))
+    expect(byId.get('m1')!.compactionAttribution).toEqual([
+      { kind: 'prune', count: 1, shadowedTokenCount: 900 },
+      { kind: 'summary', count: 1, shadowedTokenCount: 123_456 },
+    ])
+    expect(byId.get('m0')!.compactionAttribution).toBeUndefined()
   })
 
   it('ignores non-assistant/message events', async () => {

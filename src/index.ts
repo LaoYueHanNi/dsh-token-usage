@@ -51,6 +51,7 @@ import { createPricingAssociationsRoute } from './pricing-associations-route.ts'
 import { withPricingDirectoryMigration } from './pricing-associations.ts'
 import { extractFirstTokenTimeFromStream, modelOfEvent, providerOfEvent, recordOfEvent, responseModelOfReplay, type RequestTiming } from './usage-record.ts'
 import { RequestObserver } from './request-observe.ts'
+import { CompactionAttributionWindow } from './compaction-attribution.ts'
 import { classifyAuxRequest, recordFromAuxRequest } from './aux-request.ts'
 import { markFieldCompletionOutcome, markTimingSynced, pendingCompleterIds, readSyncState } from './sync-state.ts'
 import { autoSyncIfNeeded, syncHistory, titleOfEvent } from './sync.ts'
@@ -922,6 +923,19 @@ export function apply(ctx: Context, config: Config = {}) {
     // assistant/message confirmations). Bounded by the session count.
     const lastModel = new Map<string, string>()
     const lastProvider = new Map<string, string>()
+    // Per-session compaction attribution windows (the shared implementation
+    // the history rescan also drives): compaction events since the session's
+    // last plain request, attached to the next plain-request row. Bounded by
+    // the session count, same as the route maps above.
+    const attributionWindows = new Map<string, CompactionAttributionWindow>()
+    const attributionWindowOf = (sessionId: string): CompactionAttributionWindow => {
+      let window = attributionWindows.get(sessionId)
+      if (window === undefined) {
+        window = new CompactionAttributionWindow()
+        attributionWindows.set(sessionId, window)
+      }
+      return window
+    }
     interface ActiveStepTiming {
       turn: number
       step: number
@@ -988,11 +1002,21 @@ export function apply(ctx: Context, config: Config = {}) {
       if (revealed !== undefined) lastModel.set(session.id, revealed)
       const revealedProvider = providerOfEvent(event)
       if (revealedProvider !== undefined) lastProvider.set(session.id, revealedProvider)
+      const attributionWindow = attributionWindowOf(session.id)
+      attributionWindow.observe(event)
       const record = recordOfEvent(
         event, session.id, lastModel.get(session.id) ?? '', recordCompaction, timing,
         lastProvider.get(session.id) ?? '',
       )
       if (record === null) return
+      // The attribution lands only on plain-request rows: the compaction
+      // row is the rewrite's own billing row, a failure row has no cache
+      // figures to explain, and the window then survives to the next plain
+      // request, whose prefix the rewrite still precedes.
+      if (record.kind === undefined || record.kind === 'request') {
+        const attribution = attributionWindow.consumeForRequest()
+        if (attribution !== undefined) record.compactionAttribution = attribution
+      }
       if (record.provider !== undefined) rememberProviderNames([record.provider])
       // Fire-and-forget: the log serializes appends and reports its own failures.
       void current?.log.record(requestObserver.decorateRecord(record))

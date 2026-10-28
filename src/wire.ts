@@ -8,8 +8,10 @@
  */
 
 import type { AuxKind, UsageRecord } from './usage-record.ts'
+import type { CompactionAttributionItem } from './compaction-attribution.ts'
 
 export type { AuxKind, UsageFields, UsageRecord } from './usage-record.ts'
+export type { CompactionAttributionItem, CompactionSourceKind } from './compaction-attribution.ts'
 
 /** The stats endpoint path, served by the host half's webServer route. */
 export const STATS_PATH = '/token-usage/stats'
@@ -841,6 +843,12 @@ export interface RequestDetailView {
   /** Auxiliary subtype when the host proved this request belongs to the
    * current session (for example `session-title`). */
   auxKind?: AuxKind
+  /** Plain-request rows only: the compaction events (prune clusters and
+   * summaries) that landed since the session's previous plain request — the
+   * hit-cell tooltip's rewrite explanation. Annotation only: it never enters
+   * {@link RequestDetailCache} or moves any cache band. Absent on legacy
+   * rows and unattributed requests. */
+  compactionAttribution?: readonly CompactionAttributionItem[]
   /** Canonical model id after the pricing table's alias / regex resolution. */
   modelId?: string
   /** 请求路由的模型（计费身份）。 */

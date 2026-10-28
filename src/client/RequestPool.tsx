@@ -24,7 +24,7 @@ import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { CurrencyView } from './format.ts'
 import { bandOf, formatCost, formatRequestRate, formatRequestRateExact, formatTimeOfDay, formatTokens, formatTtft } from './format.ts'
 import { bandClassOf } from './HitRateText.tsx'
-import type { RequestDetailCache, RequestDetailView, SessionRequestDetails } from '../wire.ts'
+import type { CompactionAttributionItem, RequestDetailCache, RequestDetailView, SessionRequestDetails } from '../wire.ts'
 import type { ConversationStatus } from '../wire.ts'
 import styles from './UsageView.module.css'
 
@@ -61,28 +61,46 @@ function hitClassOf(cache: RequestDetailCache): string | undefined {
 
 /** The hit cell's tooltip: the low-hit explanation (with the raw-precision
  * note when rounding would hide a sub-threshold rate) or the exclusion
- * reason. Unknown figures explain their unknown instead of going silent. */
-function hitTooltipOf(cache: RequestDetailCache, t: TranslateNS<'token-usage'>): string {
+ * reason. Unknown figures explain their unknown instead of going silent.
+ * The compaction attribution (when the row carries one) rides the same
+ * tooltip as its closing section — real-world feedback dropped the standalone
+ * badge as redundant next to the 缓存过低 marker, and the causal chain reads
+ * exactly where the rate is questioned. The wording says the prefix WAS
+ * rewritten and cache behaviour MAY be affected — never that compaction
+ * caused a cache loss, because a high-hit row can carry the same attribution
+ * (the miss severity depends on the earliest rewritten position, which the
+ * plugin cannot see). */
+function hitTooltipOf(cache: RequestDetailCache, t: TranslateNS<'token-usage'>, attribution?: readonly CompactionAttributionItem[]): string {
+  const lines: string[] = []
   if (cache.rate === undefined) {
-    return cache.reason !== undefined ? t(`pool.excluded.${cache.reason}`) : ''
-  }
-  const display = formatRequestRate(cache.rate)
-  if (cache.band === 'loss') {
-    // Show raw precision when rounding hides why the loss label applies.
-    const lines = [t('pool.cache.tooltip', { rate: display })]
-    if (Number.parseFloat(display) >= 50) {
-      lines.push(t('pool.cache.roundedDown', { rate: formatRequestRateExact(cache.rate) }))
+    if (cache.reason !== undefined) lines.push(t(`pool.excluded.${cache.reason}`))
+  } else {
+    const display = formatRequestRate(cache.rate)
+    if (cache.band === 'loss') {
+      lines.push(t('pool.cache.tooltip', { rate: display }))
+      // Show raw precision when rounding hides why the loss label applies.
+      if (Number.parseFloat(display) >= 50) {
+        lines.push(t('pool.cache.roundedDown', { rate: formatRequestRateExact(cache.rate) }))
+      }
+    } else if (cache.reason !== undefined) {
+      lines.push(t(`pool.excluded.${cache.reason}`))
     }
-    return lines.join('\n')
   }
-  if (cache.reason !== undefined) return t(`pool.excluded.${cache.reason}`)
-  return ''
+  if (attribution !== undefined) {
+    lines.push(t('pool.attribution.prefix'))
+    for (const item of attribution) {
+      lines.push(item.kind === 'prune'
+        ? t('pool.attribution.prune', { count: String(item.count), tokens: formatTokens(item.shadowedTokenCount) })
+        : t('pool.attribution.summary', { tokens: formatTokens(item.shadowedTokenCount) }))
+    }
+  }
+  return lines.join('\n')
 }
 
 /** The hit cell keeps request precision, shared numeric colours, and its explanation. */
-function HitCell({ cache, t }: { cache: RequestDetailCache; t: TranslateNS<'token-usage'> }): ReactNode {
+function HitCell({ cache, attribution, t }: { cache: RequestDetailCache; attribution?: readonly CompactionAttributionItem[] | undefined; t: TranslateNS<'token-usage'> }): ReactNode {
   const text = formatRequestRate(cache.rate)
-  const tooltip = hitTooltipOf(cache, t)
+  const tooltip = hitTooltipOf(cache, t, attribution)
   const content = <span className={hitClassOf(cache)}>{text}</span>
   return tooltip === ''
     ? content
@@ -111,6 +129,10 @@ function ModelCell({ detail, cache, t }: { detail: RequestDetailView; cache: Req
     : detail.kind === 'compaction'
       ? t('pool.kind.compaction')
       : undefined
+  // No attribution badge of its own: the rewrite's causal chain lives in the
+  // hit cell's tooltip (real-world feedback found a standalone pill redundant
+  // next to the 缓存过低 marker). The loss marker shares the same tooltip, so
+  // it explains the attribution too.
   if (cache.band !== 'loss') {
     return <span className={styles['modelInline']}>
       {name}
@@ -121,7 +143,7 @@ function ModelCell({ detail, cache, t }: { detail: RequestDetailView; cache: Req
     <span className={styles['modelInline']}>
       {name}
       {kindLabel !== undefined && <span className={styles['auxKind']} aria-label={kindLabel}>{kindLabel}</span>}
-      <Tooltip label={hitTooltipOf(cache, t)} side="top" delayMs={100}>
+      <Tooltip label={hitTooltipOf(cache, t, detail.compactionAttribution)} side="top" delayMs={100}>
         <span className={styles['cacheLoss']} tabIndex={0}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m10.3 3.8-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.7-3.2l-8-14a2 2 0 0 0-3.4 0Z" /><path d="M12 9v4m0 4h.01" /></svg>
           {t('pool.cache.label')}
@@ -284,7 +306,7 @@ function PoolRow({ detail, focusId, view, showCacheWrite, t }: { detail: Request
       <td data-label={t('pool.col.state')} className={`${styles['poolState']} ${stateClassOf(detail.state)}`}>{stateTextOf(detail, t)}</td>
       <td data-label={t('pool.col.time')} className={styles['poolTime']}><time dateTime={new Date(time).toISOString()}>{formatTimeOfDay(time)}</time></td>
       <td data-label={t('pool.col.model')} className={styles['poolModel']}><ModelCell detail={detail} cache={detail.cache} t={t} /></td>
-      <td data-label={t('pool.col.hit')}><HitCell cache={detail.cache} t={t} /></td>
+      <td data-label={t('pool.col.hit')}><HitCell cache={detail.cache} attribution={detail.compactionAttribution} t={t} /></td>
       <td data-label={t('pool.col.input')} title={t('pool.metric.hitInput')}>{tokenTextOf(detail.inputTokens)}</td>
       <td data-label={t('pool.col.output')}>{tokenTextOf(detail.outputTokens)}</td>
       <td data-label={t('pool.col.cacheRead')}>{tokenTextOf(detail.cacheReadTokens)}</td>
@@ -361,7 +383,7 @@ export function RequestPoolSections({ details, focusId, view, staleAt, t }: Requ
                   </div>
                   <div className={styles['requestMetrics']}>
                     <div>
-                      <div className={styles['metricValue']}><HitCell cache={latest.cache} t={t} /></div>
+                      <div className={styles['metricValue']}><HitCell cache={latest.cache} attribution={latest.compactionAttribution} t={t} /></div>
                       <div className={styles['metricLabel']}>{t('pool.col.hit')}</div>
                     </div>
                     <div>

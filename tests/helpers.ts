@@ -42,6 +42,26 @@ export function messageEvent(overrides: {
   } as SessionEvent<'assistant/message'>
 }
 
+/** Minimal but shape-true compaction/prune event for unit tests: one
+ * tool-result pruning that shadowed a surface range (log-only, no billing
+ * row). */
+export function pruneEvent(overrides: {
+  seq?: number
+  time?: number
+  tokens?: number
+} = {}): SessionEvent<'compaction/prune'> {
+  return {
+    type: 'compaction/prune',
+    seq: SessionSeq(overrides.seq ?? 5),
+    time: overrides.time ?? 1_700_000_000_000,
+    data: {
+      shadowedRange: { start: 33, end: 230 },
+      shadowedSeqs: [33, 230],
+      shadowedTokenCount: overrides.tokens ?? 100,
+    },
+  } as SessionEvent<'compaction/prune'>
+}
+
 /** Minimal but shape-true compaction/summary event for unit tests. The
  * default usage mirrors a realistic summarize call: a huge input. */
 export function compactionEvent(overrides: {

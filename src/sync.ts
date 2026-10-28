@@ -25,6 +25,7 @@ import type {} from '@deepseek-ai/dsh-compaction/types'
 // Type-only: pulls the merged `llm/retry` payload into this program.
 import type {} from '@deepseek-ai/dsh-llm-retry/types'
 import { markInitialized, markMetaSynced, readSyncState } from './sync-state.ts'
+import { CompactionAttributionWindow } from './compaction-attribution.ts'
 import { extractFirstTokenTimeFromStream, modelOfEvent, providerOfEvent, recordOfEvent, type RequestTiming } from './usage-record.ts'
 import type { UsageLog } from './usage-log.ts'
 
@@ -269,6 +270,10 @@ export async function syncHistory(
     // fallback all land as the same append, one fold covers every source.
     let title: string | undefined
     let openStep: { turn: number; step: number; startTime: number } | null = null
+    // The compaction attribution window of this session — the SAME
+    // implementation the live recorder drives, so a rescan attributes rows
+    // exactly like a live observation would.
+    const attributionWindow = new CompactionAttributionWindow()
     for (const event of inspection.events) {
       signal?.throwIfAborted()
       if (event.type === 'step/start') {
@@ -305,8 +310,18 @@ export async function syncHistory(
       } else if (event.type === 'step/end' || event.type === 'turn/end') {
         openStep = null
       }
+      attributionWindow.observe(event)
       const record = recordOfEvent(event, id, model, deps.recordCompaction !== false, timing, provider)
       if (record === null) continue
+      // Attribution attaches to plain-request rows only (same rule as the
+      // live recorder): the compaction row is the rewrite's own billing row,
+      // a failure row has no cache figures to explain. Rows already saved
+      // dedupe below — the attribution lands on the first write, and rows
+      // persisted before this field stay unattributed (never rewritten).
+      if (record.kind === undefined || record.kind === 'request') {
+        const attribution = attributionWindow.consumeForRequest()
+        if (attribution !== undefined) record.compactionAttribution = attribution
+      }
       // Keep the id whether the row was already saved or lands now: the
       // reconcile pass keeps exactly the ids this walk produced.
       reproduced.add(record.requestId)

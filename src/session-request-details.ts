@@ -19,6 +19,7 @@ import { costOf, ratesForKey } from './pricing.ts'
 import type { ModelRates } from './wire.ts'
 import type { RateKey } from './wire.ts'
 import { effectiveModelOf, type AuxKind, type UsageRecord } from './usage-record.ts'
+import type { CompactionAttributionItem } from './compaction-attribution.ts'
 import { assessRequestCache, routeExclusionsOf, settledSpeedOf } from './request-details.ts'
 import type { LiveAttempt } from './request-observe.ts'
 import { REQUEST_POOL_LIMIT, type ConversationStatus, type RequestDetailView, type SessionRequestDetails } from './wire.ts'
@@ -50,6 +51,10 @@ interface MergedAttempt extends OrderAnchor {
   sessionId: string
   kind: 'request' | 'compaction' | 'failure' | 'aux'
   auxKind?: AuxKind
+  /** Durable plain-request rows carry the compaction attribution the
+   * recorder's window attached (display-side only; a live attempt never
+   * carries one — the tooltip explains a settled row's prefix context). */
+  compactionAttribution?: readonly CompactionAttributionItem[]
   state: RequestDetailView['state']
   requestedModel: string
   responseModel?: string
@@ -104,6 +109,7 @@ function attemptOfRecord(record: UsageRecord): MergedAttempt {
     sessionId: record.sessionId,
     kind: record.kind === 'failure' ? 'failure' : record.kind === 'compaction' ? 'compaction' : record.kind === 'aux' ? 'aux' : 'request',
     ...(record.auxKind !== undefined ? { auxKind: record.auxKind } : {}),
+    ...(record.compactionAttribution !== undefined ? { compactionAttribution: record.compactionAttribution } : {}),
     state,
     requestedModel: record.model,
     ...(record.responseModel !== undefined ? { responseModel: record.responseModel } : {}),
@@ -328,6 +334,7 @@ export function buildSessionRequestDetails(input: {
       state: attempt.state,
       kind: attempt.kind,
       ...(attempt.auxKind !== undefined ? { auxKind: attempt.auxKind } : {}),
+      ...(attempt.compactionAttribution !== undefined ? { compactionAttribution: attempt.compactionAttribution } : {}),
       ...(modelId !== '' ? { modelId } : {}),
       requestedModel: attempt.requestedModel,
       ...(attempt.responseModel !== undefined ? { responseModel: attempt.responseModel } : {}),
