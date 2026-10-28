@@ -202,7 +202,14 @@ describe('recordFromCompaction', () => {
       model: 'deepseek-chat',
       usage: { inputTokens: 100_000, outputTokens: 500, cacheReadTokens: 3_000 },
       kind: 'compaction',
+      provider: 'deepseek',
     })
+  })
+
+  it('omits an empty compaction route key', () => {
+    const record = recordFromCompaction(compactionEvent({ provider: '' }), 'session-1')
+    expect(record).not.toBeNull()
+    expect('provider' in record!).toBe(false)
   })
 
   it('keys the row on the event seq, not the compactionId', () => {
@@ -237,6 +244,11 @@ describe('recordFromTurnEnd', () => {
       kind: 'failure',
       failureCode: 'RATE_LIMIT',
     })
+  })
+
+  it('names the last known route and omits an empty one', () => {
+    expect(recordFromTurnEnd(turnEndEvent(), 'session-1', 'deepseek-chat', 'kimi')!.provider).toBe('kimi')
+    expect('provider' in recordFromTurnEnd(turnEndEvent(), 'session-1', 'deepseek-chat', '')!).toBe(false)
   })
 
   it('omits failureCode when the classifier names none', () => {
@@ -281,7 +293,13 @@ describe('recordFromRetry', () => {
       model: 'deepseek-chat',
       kind: 'failure',
       failureCode: 'RATE_LIMIT',
+      provider: 'deepseek',
     })
+  })
+
+  it('omits an empty retry route key instead of storing it', () => {
+    const record = recordFromRetry(retryEvent({ provider: '' }), 'session-1', 'deepseek-chat')
+    expect('provider' in record).toBe(false)
   })
 
   it('omits failureCode when the classifier names none', () => {
@@ -305,6 +323,9 @@ describe('recordOfEvent', () => {
     expect(recordOfEvent(compactionEvent({ seq: 4 }), 's1', '')?.requestId).toBe('compaction:s1:4')
     expect(recordOfEvent(turnEndEvent({ seq: 9 }), 's1', 'm')?.requestId).toBe('failure:s1:9')
     expect(recordOfEvent(retryEvent({ seq: 8 }), 's1', 'm')?.requestId).toBe('failure:s1:8')
+    expect(recordOfEvent(retryEvent({ seq: 8, provider: 'zai' }), 's1', 'm', true, undefined, 'deepseek')?.provider).toBe('zai')
+    expect(recordOfEvent(turnEndEvent({ seq: 9 }), 's1', 'm', true, undefined, 'kimi')?.provider).toBe('kimi')
+    expect(recordOfEvent(turnEndEvent({ seq: 9 }), 's1', 'm')?.provider).toBeUndefined()
     expect(recordOfEvent(turnEndEvent({ reason: { kind: 'completed' } }), 's1', 'm')).toBeNull()
     expect(recordOfEvent(
       { type: 'turn/start', seq: 0, time: 1, data: { turn: 1 } } as SessionEvent,

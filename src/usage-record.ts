@@ -319,6 +319,9 @@ export function recordFromCompaction(
     model: event.data.model,
     usage,
     kind: 'compaction',
+    // The summarize call names its own route. An empty key is omitted, same
+    // as a plain request that never reported one.
+    ...routeKey(event.data.provider),
   }
 }
 
@@ -340,6 +343,7 @@ function failureRow(
   sessionId: string,
   model: string,
   code: string | undefined,
+  provider: string | undefined,
 ): UsageRecord {
   return {
     requestId: `failure:${sessionId}:${String(event.seq)}`,
@@ -350,7 +354,13 @@ function failureRow(
     // The classifier always names a code (an unclassified throw flattens to
     // 'UNKNOWN'); keep the row honest even if a future event omits it.
     ...(code !== undefined && code !== '' ? { failureCode: code } : {}),
+    ...routeKey(provider),
   }
+}
+
+/** Omit an empty route key. The field is never stored as `""`. */
+function routeKey(provider: string | undefined): { provider: string } | Record<string, never> {
+  return provider !== undefined && provider !== '' ? { provider } : {}
 }
 
 /**
@@ -366,16 +376,19 @@ function failureRow(
  * follows `request/context` / `assistant/message` events to keep one
  * last-known model id per session — and the provider-neutral
  * `failureCode` (the `LlmFailure.code`, e.g. RATE_LIMIT / TRANSPORT /
- * QUOTA) the failure classifier assigned.
+ * QUOTA) the failure classifier assigned. `turn/end` names no route
+ * either, so `provider` is the same walk's last-known route key (empty
+ * when none was observed — the field is then omitted, never guessed).
  * @returns the record, or null when the turn ended for a non-error reason.
  */
 export function recordFromTurnEnd(
   event: SessionEvent<'turn/end'>,
   sessionId: string,
   model: string,
+  provider = '',
 ): UsageRecord | null {
   if (event.data.reason.kind !== 'error') return null
-  return failureRow(event, sessionId, model, event.data.reason.error.code)
+  return failureRow(event, sessionId, model, event.data.reason.error.code, provider)
 }
 
 /**
@@ -384,24 +397,28 @@ export function recordFromTurnEnd(
  * such event is a real failed call (the plugin writes it before the wait,
  * so a later cancel during backoff still counts the original attempt).
  * The row carries no usage; `model` is the session's last-known route
- * (the event names the provider, not the model); `failureCode` is the
- * `LlmFailure.code` on the payload. `llm/retry-started` is the wait-
- * complete marker and is not a failure — the caller ignores it.
+ * (the event names the provider, not the model); the route key is this
+ * attempt's own `data.provider`, not the session's last-known route.
+ * `failureCode` is the `LlmFailure.code` on the payload.
+ * `llm/retry-started` is the wait-complete marker and is not a failure —
+ * the caller ignores it.
  */
 export function recordFromRetry(
   event: SessionEvent<'llm/retry'>,
   sessionId: string,
   model: string,
 ): UsageRecord {
-  return failureRow(event, sessionId, model, event.data.failure.code)
+  return failureRow(event, sessionId, model, event.data.failure.code, event.data.provider)
 }
 
 /**
  * Project one session event into a log row, or null when the event is not
  * a recorded origin. Live listening and history sync share this so a new
  * origin cannot land on only one path. `lastModel` is the session's last
- * known route (failure rows name no model of their own); compaction
- * recording follows the same `recordCompaction` switch both callers take.
+ * known model and `lastProvider` its last known route key (a `turn/end`
+ * error names neither; compaction and `llm/retry` carry their own route
+ * on the event). Compaction recording follows the same `recordCompaction`
+ * switch both callers take.
  */
 export function recordOfEvent(
   event: SessionEvent,
@@ -409,6 +426,7 @@ export function recordOfEvent(
   lastModel: string,
   recordCompaction = true,
   timing?: RequestTiming,
+  lastProvider = '',
 ): UsageRecord | null {
   switch (event.type) {
     case 'assistant/message':
@@ -416,7 +434,7 @@ export function recordOfEvent(
     case 'compaction/summary':
       return recordCompaction ? recordFromCompaction(event, sessionId) : null
     case 'turn/end':
-      return recordFromTurnEnd(event, sessionId, lastModel)
+      return recordFromTurnEnd(event, sessionId, lastModel, lastProvider)
     case 'llm/retry':
       return recordFromRetry(event, sessionId, lastModel)
     default:
@@ -435,6 +453,25 @@ export function modelOfEvent(event: SessionEvent): string | undefined {
   if (event.type === 'request/context') return event.data.model
   if (event.type === 'assistant/message') return event.data.message.source.model
   return undefined
+}
+
+/**
+ * The route key an event reveals about the session's current route, when
+ * it does. Same two sources as {@link modelOfEvent}: `request/context`
+ * announces a route change before dispatch, and `assistant/message`
+ * confirms the route that produced a message. An empty key reveals
+ * nothing — it must not wipe a route already known. Compaction and
+ * `llm/retry` name their own route on the row, but they do not move this
+ * last-known value; a later `turn/end` keeps following the request route.
+ */
+export function providerOfEvent(event: SessionEvent): string | undefined {
+  if (event.type === 'request/context') return nonEmpty(event.data.provider)
+  if (event.type === 'assistant/message') return nonEmpty(event.data.message.source.provider)
+  return undefined
+}
+
+function nonEmpty(value: string | undefined): string | undefined {
+  return value !== undefined && value !== '' ? value : undefined
 }
 
 function normalizeCount(value: unknown): number | undefined {

@@ -25,7 +25,7 @@ import type {} from '@deepseek-ai/dsh-compaction/types'
 // Type-only: pulls the merged `llm/retry` payload into this program.
 import type {} from '@deepseek-ai/dsh-llm-retry/types'
 import { markInitialized, markMetaSynced, readSyncState } from './sync-state.ts'
-import { extractFirstTokenTimeFromStream, modelOfEvent, recordOfEvent, type RequestTiming } from './usage-record.ts'
+import { extractFirstTokenTimeFromStream, modelOfEvent, providerOfEvent, recordOfEvent, type RequestTiming } from './usage-record.ts'
 import type { UsageLog } from './usage-log.ts'
 
 /** Outcome of one sync run. */
@@ -258,10 +258,12 @@ export async function syncHistory(
     // The session was read in full: this walk is now the authority for what
     // the ledger must hold, so its stale coordinates become droppable.
     readable.add(id)
-    // Last-known route model of this session: failure rows need a model to
-    // attribute, and turn/end names none, so the walk follows the same
-    // request/context + assistant/message events the live recorder does.
+    // Last-known route of this session: a turn/end error names neither a
+    // model nor a provider, so the walk follows the same request/context +
+    // assistant/message events the live recorder does. Compaction and
+    // llm/retry carry their own route on the event and do not move this.
     let model = ''
+    let provider = ''
     // Latest-wins title: title events append in seq order, so the LAST one
     // seen is the current title — a rename, an auto-generated title, and a
     // fallback all land as the same append, one fold covers every source.
@@ -278,6 +280,8 @@ export async function syncHistory(
       }
       const revealed = modelOfEvent(event)
       if (revealed !== undefined) model = revealed
+      const revealedProvider = providerOfEvent(event)
+      if (revealedProvider !== undefined) provider = revealedProvider
       const revealedTitle = titleOfEvent(event)
       if (revealedTitle !== undefined) title = revealedTitle
       let timing: RequestTiming | undefined
@@ -301,7 +305,7 @@ export async function syncHistory(
       } else if (event.type === 'step/end' || event.type === 'turn/end') {
         openStep = null
       }
-      const record = recordOfEvent(event, id, model, deps.recordCompaction !== false, timing)
+      const record = recordOfEvent(event, id, model, deps.recordCompaction !== false, timing, provider)
       if (record === null) continue
       // Keep the id whether the row was already saved or lands now: the
       // reconcile pass keeps exactly the ids this walk produced.

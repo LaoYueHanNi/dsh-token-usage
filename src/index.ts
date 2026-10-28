@@ -42,15 +42,17 @@ import type {} from '@deepseek-ai/dsh-host-webserver'
 import type { TokenUsage } from '@deepseek-ai/dsh-llm'
 import { UsageLog } from './usage-log.ts'
 import { SessionMetaStore } from './session-meta.ts'
+import { ProviderNameStore } from './provider-names.ts'
+import { FIELD_COMPLETERS } from './field-completion.ts'
 import { cleanSource, copyData, type MigrationProgress } from './migrate.ts'
 import { resolvePricingUrl, syncCloudPricing, type CloudSyncResult, type PricingSourceInput } from './pricing.ts'
 import { PricingAssociationService } from './pricing-association-service.ts'
 import { createPricingAssociationsRoute } from './pricing-associations-route.ts'
 import { withPricingDirectoryMigration } from './pricing-associations.ts'
-import { extractFirstTokenTimeFromStream, modelOfEvent, recordOfEvent, responseModelOfReplay, type RequestTiming } from './usage-record.ts'
+import { extractFirstTokenTimeFromStream, modelOfEvent, providerOfEvent, recordOfEvent, responseModelOfReplay, type RequestTiming } from './usage-record.ts'
 import { RequestObserver } from './request-observe.ts'
 import { classifyAuxRequest, recordFromAuxRequest } from './aux-request.ts'
-import { markTimingSynced, readSyncState } from './sync-state.ts'
+import { markFieldsCompleted, markTimingSynced, pendingCompleterIds, readSyncState } from './sync-state.ts'
 import { autoSyncIfNeeded, syncHistory, titleOfEvent } from './sync.ts'
 import { clearRecordCache, warmRecordCache } from './record-cache.ts'
 import { invalidateSummary } from './stats.ts'
@@ -348,7 +350,29 @@ export function apply(ctx: Context, config: Config = {}) {
   // The directory, log, and metadata index currently in force. Registrations
   // below read them per event and per request, so a settings-driven move
   // swaps the running directory without re-registering anything.
-  let current: { dir: string; log: UsageLog; meta: SessionMetaStore } | undefined
+  let current: { dir: string; log: UsageLog; meta: SessionMetaStore; names: ProviderNameStore } | undefined
+  /** Last provider directory this process could read. A bypass callback
+   * often runs after the llm context has gone inactive, and touching the
+   * service then throws; the refresh below keeps this snapshot instead. */
+  let namedProviders: readonly { provider: string; displayName?: string }[] = []
+  /** Replaced while the llm service is attached. Never throws. */
+  let refreshNamedProviders: () => void = () => {}
+  /** Snapshot display names. With `only`, just the route keys a new row named. */
+  const rememberProviderNames = (only?: readonly string[]): void => {
+    const store = current?.names
+    if (store === undefined) return
+    refreshNamedProviders()
+    const patch: Record<string, string> = {}
+    for (const entry of namedProviders) {
+      if (typeof entry.displayName !== 'string' || entry.displayName === '') continue
+      if (only !== undefined && !only.includes(entry.provider)) continue
+      patch[entry.provider] = entry.displayName
+    }
+    if (Object.keys(patch).length === 0) return
+    void store.upsert(patch).catch((error: unknown) => {
+      logger.warn('[token-usage] provider name upsert failed:', error)
+    })
+  }
   // Serialized relocations: a move runs to settlement before the next begins,
   // so two quick edits cannot interleave two migrations of the same files.
   let relocating: Promise<void> = Promise.resolve()
@@ -400,6 +424,7 @@ export function apply(ctx: Context, config: Config = {}) {
       // The metadata index writes on its own queue; drain it too, so the
       // sessions.json that migrates is final.
       await previous.meta.flush()
+      await previous.names.flush()
 
       migration = { phase: 'copying', done: 0, total: 0 }
       const report = (progress: MigrationProgress): void => {
@@ -416,7 +441,7 @@ export function apply(ctx: Context, config: Config = {}) {
       const log = new UsageLog(nextDir, logger)
       await log.scan()
       const moved = await log.refileByEventDay()
-      current = { dir: nextDir, log, meta: new SessionMetaStore(nextDir, logger) }
+      current = { dir: nextDir, log, meta: new SessionMetaStore(nextDir, logger), names: new ProviderNameStore(nextDir, logger) }
       associations.directoryChanged()
       clearRecordCache(previous.dir)
       if (moved > 0) invalidateDerivedState(nextDir)
@@ -619,6 +644,13 @@ export function apply(ctx: Context, config: Config = {}) {
     // the one authoritative source (the built-in fallback in
     // credentials.ts covers hosts without the llm service).
     llmCtx.effect(() => {
+      refreshNamedProviders = () => {
+        try {
+          namedProviders = llmCtx.llm.listConfigurableProviders()
+        } catch {
+          // Inactive context: the last snapshot still names the routes.
+        }
+      }
       quotaDirectory = (provider) => {
         const entry = llmCtx.llm.listConfigurableProviders().find(item => item.provider === provider)
         return entry === undefined ? undefined : {
@@ -627,7 +659,12 @@ export function apply(ctx: Context, config: Config = {}) {
           displayName: entry.displayName,
         }
       }
-      return () => { quotaDirectory = undefined }
+      rememberProviderNames()
+      return () => {
+        quotaDirectory = undefined
+        refreshNamedProviders = () => {}
+        namedProviders = []
+      }
     }, 'token-usage: quota provider directory')
   })
   ctx.inject(['settings'], (settingsCtx) => {
@@ -804,7 +841,7 @@ export function apply(ctx: Context, config: Config = {}) {
                   requestId,
                 })
               }
-              void target.log.record(recordFromAuxRequest({
+              const row = recordFromAuxRequest({
                 auxKind,
                 requestId,
                 time: startedAt,
@@ -812,7 +849,10 @@ export function apply(ctx: Context, config: Config = {}) {
                 ...(sessionId !== undefined ? { sessionId } : {}),
                 ...(responseModel !== undefined ? { responseModel } : {}),
                 ...(usage !== undefined ? { usage } : {}),
-              }))
+                ...(options.provider !== undefined && options.provider !== '' ? { provider: options.provider } : {}),
+              })
+              if (row.provider !== undefined) rememberProviderNames([row.provider])
+              void target.log.record(row)
             }
           }
         }
@@ -871,7 +911,8 @@ export function apply(ctx: Context, config: Config = {}) {
     const dir = resolved
     const log = new UsageLog(dir, logger)
     const meta = new SessionMetaStore(dir, logger)
-    current = { dir, log, meta }
+    current = { dir, log, meta, names: new ProviderNameStore(dir, logger) }
+    rememberProviderNames()
     associations.directoryChanged()
     void warmRecordCache(dir, undefined, logger)
 
@@ -880,6 +921,7 @@ export function apply(ctx: Context, config: Config = {}) {
     // events the sync walk does (request/context route changes, then
     // assistant/message confirmations). Bounded by the session count.
     const lastModel = new Map<string, string>()
+    const lastProvider = new Map<string, string>()
     interface ActiveStepTiming {
       turn: number
       step: number
@@ -944,10 +986,14 @@ export function apply(ctx: Context, config: Config = {}) {
       }
       const revealed = modelOfEvent(event)
       if (revealed !== undefined) lastModel.set(session.id, revealed)
+      const revealedProvider = providerOfEvent(event)
+      if (revealedProvider !== undefined) lastProvider.set(session.id, revealedProvider)
       const record = recordOfEvent(
         event, session.id, lastModel.get(session.id) ?? '', recordCompaction, timing,
+        lastProvider.get(session.id) ?? '',
       )
       if (record === null) return
+      if (record.provider !== undefined) rememberProviderNames([record.provider])
       // Fire-and-forget: the log serializes appends and reports its own failures.
       void current?.log.record(requestObserver.decorateRecord(record))
     })
@@ -985,6 +1031,18 @@ export function apply(ctx: Context, config: Config = {}) {
             invalidateDerivedState(dir)
           }
           await markTimingSynced(dir)
+        }
+        const pending = pendingCompleterIds(await readSyncState(dir, logger), FIELD_COMPLETERS.map(completer => completer.id))
+        if (pending.length > 0 && ctx.sessionPersistence !== undefined) {
+          const completion = await log.completeFields(
+            ctx.sessionPersistence,
+            FIELD_COMPLETERS.filter(completer => pending.includes(completer.id)),
+          )
+          if (completion.patched > 0) {
+            logger.info(`[token-usage] completed fields on ${String(completion.patched)} historical records`)
+            invalidateDerivedState(dir)
+          }
+          if (completion.completedIds.length > 0) await markFieldsCompleted(dir, completion.completedIds)
         }
         return warmRecordCache(dir, undefined, logger)
       })

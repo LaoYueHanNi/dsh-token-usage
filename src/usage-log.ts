@@ -14,6 +14,7 @@ import type { SessionId } from '@deepseek-ai/dsh-session'
 import { consoleLogger, type LoggerLike } from './log.ts'
 import { extractFirstTokenTimeFromStream, parseRecord, serializeRecord, type UsageRecord } from './usage-record.ts'
 import { readerOf, type SyncPersistence } from './sync.ts'
+import type { FieldCompleter } from './field-completion.ts'
 
 const DAY_FILE = /^usage-\d{4}-\d{2}-\d{2}\.jsonl$/u
 
@@ -183,6 +184,26 @@ export class UsageLog {
     return task.then(() => patched).catch((error: unknown) => {
       this.logger.error('[token-usage] timing backfill failed:', error)
       return 0
+    })
+  }
+
+  /**
+   * Fill absent fields declared by `completers` from the session logs.
+   * Runs on the append queue. A thrown walk returns no completed ids, so
+   * the caller does not stamp the pass and the next startup retries it.
+   * @param persistence - host session persistence.
+   * @param completers - the still-pending completers.
+   */
+  completeFields(persistence: SyncPersistence, completers: readonly FieldCompleter[]): Promise<FieldCompletionResult> {
+    let result: FieldCompletionResult = { patched: 0, completedIds: [], failedSessions: 0 }
+    const task = this.queue.then(async () => {
+      await this.ensureDir()
+      result = await completeDayFiles(this.dir, persistence, completers, this.logger)
+    })
+    this.queue = task.catch(() => {})
+    return task.then(() => result).catch((error: unknown) => {
+      this.logger.error('[token-usage] field completion failed:', error)
+      return { patched: 0, completedIds: [], failedSessions: 0 }
     })
   }
 
@@ -526,5 +547,126 @@ export async function backfillDayFilesTiming(
   }
 
   return patchedCount
+}
+
+/** What one field-completion pass did. `completedIds` lists only completers whose every candidate session was readable. */
+export interface FieldCompletionResult {
+  /** Rows that gained at least one field. */
+  patched: number
+  /** Completer ids safe to stamp. A completer with no candidates is included. */
+  completedIds: readonly string[]
+  /** Candidate sessions whose log could not be read. */
+  failedSessions: number
+}
+
+/**
+ * Fill absent fields from session logs. A day file is rewritten only when a
+ * row changed. An unreadable session does not block the others, and its
+ * completer is left unstamped so the next startup retries it. Rows the
+ * walk cannot prove stay blank; that does not block the stamp.
+ */
+export async function completeDayFiles(
+  dir: string,
+  persistence: SyncPersistence,
+  completers: readonly FieldCompleter[],
+  logger: LoggerLike = consoleLogger,
+): Promise<FieldCompletionResult> {
+  const none: FieldCompletionResult = { patched: 0, completedIds: [], failedSessions: 0 }
+  if (completers.length === 0) return none
+  let names: string[]
+  try {
+    names = (await readdir(dir)).filter(name => DAY_FILE.test(name)).sort()
+  } catch (error) {
+    logger.error('[token-usage] cannot list data dir ' + dir + ':', error)
+    return none
+  }
+  const fileLines = new Map<string, DayLine[]>()
+  const candidates = new Map<string, Set<string>>()
+  for (const name of names) {
+    const lines = await readDayLines(dir, name, logger)
+    let fileHasCandidate = false
+    for (const line of lines) {
+      const record = line.record
+      if (record === null) continue
+      for (const completer of completers) {
+        if (!completer.needs(record)) continue
+        fileHasCandidate = true
+        let sessions = candidates.get(completer.id)
+        if (sessions === undefined) {
+          sessions = new Set()
+          candidates.set(completer.id, sessions)
+        }
+        sessions.add(record.sessionId)
+      }
+    }
+    if (fileHasCandidate) fileLines.set(name, lines)
+  }
+  if (fileLines.size === 0) {
+    return { patched: 0, completedIds: completers.map(completer => completer.id), failedSessions: 0 }
+  }
+  const reader = readerOf(persistence)
+  const sessions = new Set<string>()
+  for (const ids of candidates.values()) for (const id of ids) sessions.add(id)
+  const failed = new Set<string>()
+  const changedFiles = new Set<string>()
+  let patched = 0
+  for (const sessionId of sessions) {
+    let events: Awaited<ReturnType<typeof reader.read>>['events']
+    try {
+      events = (await reader.read(sessionId as SessionId)).events
+    } catch (error) {
+      failed.add(sessionId)
+      logger.warn(`[token-usage] session ${sessionId} unreadable during field completion, skipped:`, error instanceof Error ? error.message : String(error))
+      continue
+    }
+    const proofs = new Map<string, ReadonlyMap<string, unknown>>()
+    for (const completer of completers) {
+      if (!candidates.get(completer.id)?.has(sessionId)) continue
+      proofs.set(completer.id, completer.prove(sessionId, events))
+    }
+    for (const [name, lines] of fileLines) {
+      let fileChanged = false
+      for (const line of lines) {
+        const record = line.record
+        if (record === null || record.sessionId !== sessionId) continue
+        let rowChanged = false
+        for (const completer of completers) {
+          if (!completer.needs(record)) continue
+          const proof = proofs.get(completer.id)?.get(record.requestId)
+          if (proof === undefined) continue
+          if (completer.fill(record, proof)) rowChanged = true
+        }
+        if (rowChanged) {
+          patched += 1
+          fileChanged = true
+        }
+      }
+      if (fileChanged) changedFiles.add(name)
+    }
+  }
+  for (const name of changedFiles) {
+    const lines = fileLines.get(name)
+    if (lines === undefined) continue
+    const stay: UsageRecord[] = []
+    const stray: string[] = []
+    for (const line of lines) {
+      if (line.record === null) stray.push(line.raw)
+      else stay.push(line.record)
+    }
+    if (stray.length > 0) {
+      const target = join(dir, name)
+      const body = `${stay.map(serializeRecord).join('\n')}${stay.length > 0 ? '\n' : ''}${stray.join('\n')}\n`
+      const tmp = join(dir, `${name}.tmp`)
+      await writeFile(tmp, body, 'utf8')
+      await unlink(target).catch(() => undefined)
+      await rename(tmp, target)
+    } else {
+      await rewriteDayFile(dir, name, stay)
+    }
+  }
+  const completedIds = completers
+    .filter(completer => ![...(candidates.get(completer.id) ?? [])].some(id => failed.has(id)))
+    .map(completer => completer.id)
+  return { patched, completedIds, failedSessions: failed.size }
 }
 

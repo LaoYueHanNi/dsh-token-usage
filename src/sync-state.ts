@@ -6,6 +6,8 @@
  * later sync is the user's decision (the manual command). A missing or
  * malformed marker reads as unmet: the next startup re-runs the gated
  * work, whose dedupe and idempotent upserts make the repetition a no-op.
+ * `completedFields` is the field-completion registry's done-set: each id
+ * is stamped only after every candidate session was readable.
  *
  * @module token-usage/sync-state
  */
@@ -30,12 +32,34 @@ export interface SyncState {
   /** Epoch milliseconds when timing figures (latencyMs, firstTokenLatencyMs)
    * were backfilled into day files; absent on pre-timing installs. */
   timingSyncedAt?: number
+  /** Field-completer ids whose candidate sessions were all readable on a
+   * finished pass. Absent means none of them have completed. */
+  completedFields?: readonly string[]
 }
 
 function isSyncState(value: unknown): value is SyncState {
   if (typeof value !== 'object' || value === null) return false
   const state = value as Record<string, unknown>
   return typeof state.initializedAt === 'number' && Number.isFinite(state.initializedAt)
+}
+
+/** Completer ids already stamped, ignoring a malformed `completedFields`. */
+export function completedFieldIds(state: SyncState | null): readonly string[] {
+  const raw = state?.completedFields
+  if (!Array.isArray(raw)) return []
+  return raw.filter((id): id is string => typeof id === 'string' && id !== '')
+}
+
+/** The done-set as a writable field, omitted when empty so older markers stay unchanged. */
+function completedFieldsOf(state: SyncState | null): { completedFields: string[] } | Record<string, never> {
+  const ids = completedFieldIds(state)
+  return ids.length > 0 ? { completedFields: [...ids] } : {}
+}
+
+/** Completer ids that still owe a pass. */
+export function pendingCompleterIds(state: SyncState | null, ids: readonly string[]): string[] {
+  const done = new Set(completedFieldIds(state))
+  return ids.filter(id => !done.has(id))
 }
 
 /**
@@ -111,6 +135,7 @@ export async function markInitialized(
     ...(existing?.timingSyncedAt !== undefined
       ? { timingSyncedAt: existing.timingSyncedAt }
       : withTiming ? { timingSyncedAt: now().getTime() } : {}),
+    ...completedFieldsOf(existing),
   })
 }
 
@@ -126,6 +151,7 @@ export async function markMetaSynced(dir: string, now: () => Date = () => new Da
     initializedAt,
     metaSyncedAt: now().getTime(),
     ...(existing?.timingSyncedAt !== undefined ? { timingSyncedAt: existing.timingSyncedAt } : {}),
+    ...completedFieldsOf(existing),
   })
 }
 
@@ -141,5 +167,27 @@ export async function markTimingSynced(dir: string, now: () => Date = () => new 
     initializedAt,
     ...(existing?.metaSyncedAt !== undefined ? { metaSyncedAt: existing.metaSyncedAt } : {}),
     timingSyncedAt: now().getTime(),
+    ...completedFieldsOf(existing),
+  })
+}
+
+/**
+ * Add field-completer ids to the done-set, preserving the other markers.
+ * A missing marker is left missing: inventing `initializedAt` would make
+ * the first-run sync look finished. The startup pass only calls this
+ * after that sync has already stamped the file.
+ * @param dir - the data directory holding the marker.
+ * @param ids - completer ids whose candidate sessions were all readable.
+ */
+export async function markFieldsCompleted(dir: string, ids: readonly string[]): Promise<void> {
+  const existing = await readSyncState(dir)
+  if (existing === null) return
+  const merged = new Set(completedFieldIds(existing))
+  for (const id of ids) if (id !== '') merged.add(id)
+  await writeSyncState(dir, {
+    initializedAt: existing.initializedAt,
+    ...(existing.metaSyncedAt !== undefined ? { metaSyncedAt: existing.metaSyncedAt } : {}),
+    ...(existing.timingSyncedAt !== undefined ? { timingSyncedAt: existing.timingSyncedAt } : {}),
+    ...(merged.size > 0 ? { completedFields: [...merged].sort() } : {}),
   })
 }
