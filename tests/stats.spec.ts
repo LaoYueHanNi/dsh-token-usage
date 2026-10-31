@@ -1,4 +1,4 @@
-import { mkdtemp, unlink, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -716,6 +716,58 @@ describe('buildSummary rollup (cold/hot split)', () => {
     expect(stored?.total.perfLatencyCount).toBe(1)
   })
 
+  it('rebuilds the provider dimension out of a format-3 rollup', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'token-usage-split-'))
+    await writeDayFile(dir, 'usage-2026-01-15.jsonl', [
+      record(new Date(2026, 0, 15, 12).getTime(), 'deepseek-chat', { input: 10 }, undefined, 'deepseek-official'),
+    ])
+    await writeDayFile(dir, 'usage-2026-01-16.jsonl', [record(new Date(2026, 0, 16, 12).getTime(), 'deepseek-chat', { input: 5 })])
+    // The rollup 0.4.13 wrote: the previous aggregate format, and no
+    // provider dimension at all — the format every upgrading user carries.
+    const { byProvider: _absent, ...legacy } = summarizeRecords([
+      record(new Date(2026, 0, 15, 12).getTime(), 'deepseek-chat', { input: 10 }, undefined, 'deepseek-official'),
+    ])
+    await writeFile(join(dir, 'rollup.json'), JSON.stringify({
+      upto: '2026-01-15',
+      ...legacy,
+      aggregateFormat: 3,
+      sourceFiles: ['usage-2026-01-15.jsonl'],
+    }))
+    const summary = await buildSummary(dir, today)
+    expect(summary.byProvider.map(row => [row.provider, row.totals.requests])).toEqual([
+      ['deepseek-official', 1],
+      ['', 1],
+    ])
+    const stored = await readRollup(dir)
+    expect(stored?.aggregateFormat).toBe(ROLLUP_AGGREGATE_FORMAT)
+    // The rebuilt rollup carries the provider dimension over the absorbed
+    // history; today's file is folded in on top of it and is not stored.
+    expect(stored?.byProvider.map(row => [row.provider, row.totals.requests])).toEqual([
+      ['deepseek-official', 1],
+    ])
+  })
+
+  it('keeps the vendor table whole when the absorbed history is incomplete', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'token-usage-split-'))
+    await writeDayFile(dir, 'usage-2026-01-16.jsonl', [record(new Date(2026, 0, 16, 12).getTime(), 'deepseek-chat', { input: 5 })])
+    // A format-3 rollup whose absorbed day file is gone: the history is
+    // incomplete, so the totals survive and the costs hide — but the
+    // vendor table must still account for every request, the absorbed
+    // half landing in the unattributed group.
+    const { byProvider: _absent, ...legacy } = summarizeRecords([
+      record(new Date(2026, 0, 15, 12).getTime(), 'deepseek-chat', { input: 10 }),
+    ])
+    await writeFile(join(dir, 'rollup.json'), JSON.stringify({
+      upto: '2026-01-15',
+      ...legacy,
+      aggregateFormat: 3,
+      sourceFiles: ['usage-2026-01-14.jsonl', 'usage-2026-01-15.jsonl'],
+    }))
+    const summary = await buildSummary(dir, today)
+    expect(summary.total.requests).toBe(2)
+    expect(summary.byProvider.reduce((sum, row) => sum + row.totals.requests, 0)).toBe(summary.total.requests)
+  })
+
   it('keeps a current-format rollup: absorbed files stay unread, timing intact', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'token-usage-split-'))
     await writeDayFile(dir, 'usage-2026-01-15.jsonl', [
@@ -859,11 +911,37 @@ describe('provider dimension', () => {
       ['deepseek-official', 1],
       ['', 1],
     ])
-    // A hand-built in-memory side without the dimension folds as if it had
-    // none (on-disk rollups normalize instead, so only memory needs this).
+    // A hand-built in-memory side without the dimension still reconciles:
+    // the provider rows are rebuilt from the rate rows, so the legacy
+    // side's usage lands in the unattributed group instead of vanishing
+    // from the vendor table while it stays in the totals.
     const bare = mergeSummaries(attributed, { ...legacy, byProvider: undefined } as typeof legacy)
-    expect(bare.byProvider.map(row => row.provider)).toEqual(['deepseek-official'])
+    expect(bare.byProvider.map(row => [row.provider, row.totals.requests])).toEqual([
+      ['deepseek-official', 1],
+      ['', 1],
+    ])
     expect(merged.rateRows.map(row => row.provider)).toEqual([undefined, 'deepseek-official'])
+  })
+
+  it('keeps the provider rows summing to the top line on every path', () => {
+    const records = [
+      record(at, 'deepseek-chat', { input: 1 }, undefined, 'deepseek-official'),
+      record(at + 1, 'deepseek-chat', { input: 2 }),
+      record(at + 2, 'deepseek-chat', { input: 4 }, undefined, 'zai-coding-cn'),
+    ]
+    const summed = (rows: readonly { totals: { requests: number } }[]): number =>
+      rows.reduce((sum, row) => sum + row.totals.requests, 0)
+    const summary = summarizeRecords(records)
+    expect(summed(summary.byProvider)).toBe(summary.total.requests)
+    // The same invariant under a merge, under a day-range filter, and under
+    // the session-scoped fold: the vendor table and the top line always
+    // describe the same usage.
+    const merged = mergeSummaries(summary, summarizeRecords([record(at + 3, 'deepseek-chat', { input: 8 })]))
+    expect(summed(merged.byProvider)).toBe(merged.total.requests)
+    const filtered = filterSummary({ dataDir: 'C:/data', ...merged }, '2026-01-15', '2026-01-15')
+    expect(summed(filtered.byProvider)).toBe(filtered.total.requests)
+    const scoped = summaryForSessions(merged, ['s1'])
+    expect(summed(scoped.byProvider)).toBe(scoped.total.requests)
   })
 
   it('re-aggregates the provider dimension under a day-range filter', () => {

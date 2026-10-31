@@ -169,8 +169,10 @@ function isAuxRow(value: unknown): value is UsageAuxRow {
  * dimensions existed omits `auxRows` / `byProvider`. Both still read as
  * valid — the writing version could not have recorded those rows, so the
  * empty dimensions lose no usage; the provider-keyed cells inside
- * `rateRows` / `bySession` likewise read as the unattributed group, and
- * `aggregateFormat` sends the whole rollup through a rebuild anyway. */
+ * `rateRows` / `bySession` likewise read as the unattributed group. A
+ * missing provider dimension asks for a rebuild (the vendor table would
+ * otherwise be empty next to whole totals); `aggregateFormat` sends the
+ * whole rollup through that rebuild anyway. */
 type StoredRollupFile = Omit<RollupFile, 'auxRows' | 'byProvider'> & {
   auxRows?: UsageAuxRow[]
   byProvider?: UsageProviderRow[]
@@ -230,6 +232,12 @@ export async function readRollup(dir: string, logger: LoggerLike = consoleLogger
     recent,
     auxRows: value.auxRows ?? [],
     byProvider: value.byProvider ?? [],
+    // A missing provider dimension needs the rebuild, like the missing
+    // session dimension: the aggregate rebuilds from the day files, so the
+    // dimension backfills over the absorbed history. Reading it as an empty
+    // dimension instead would serve a vendor table that is empty while the
+    // totals stay whole — the two would no longer reconcile.
+    ...(value.byProvider === undefined ? { requiresRebuild: true as const } : {}),
     ...(value.bySession === undefined ? { bySession: [], requiresRebuild: true as const } : {}),
   }
 }

@@ -573,20 +573,27 @@ export function mergeSummaries(
     addTotals(model, row.totals)
     models.set(row.model, model)
   }
-  // `?? []`: a hand-built or legacy-shaped summary without the provider
-  // dimension folds as if it had none (on-disk rollups are normalized when
-  // read, so only in-memory shapes need the leniency).
-  for (const row of [...(left.byProvider ?? []), ...(right.byProvider ?? [])]) {
-    const provider = providers.get(row.provider) ?? emptyTotals()
-    addTotals(provider, row.totals)
-    providers.set(row.provider, provider)
-  }
   for (const row of [...left.rateRows, ...right.rateRows]) {
     const key = rateRowKey(row.day, row.model, row.rate, row.provider)
     const cell = rated.get(key)
       ?? { day: row.day, model: row.model, rate: row.rate, ...(row.provider !== undefined && row.provider !== '' ? { provider: row.provider } : {}), totals: emptyTotals() }
     addTotals(cell.totals, row.totals)
     rated.set(key, cell)
+  }
+  // The provider dimension has ONE source of truth: the rate rows. Folding
+  // the two sides' `byProvider` arrays instead would let a legacy-shaped
+  // side (a rollup written before the dimension existed) contribute to
+  // `total` and `rateRows` while staying out of the provider dimension —
+  // the vendor table would then disagree with the top line, and adding a
+  // date filter (which rebuilds from the rate rows) would show a different
+  // table for the same data. Every record reaches a rate row (see
+  // `summarizeRecords`), so folding the rate rows reproduces the provider
+  // groups exactly, including the unattributed remainder.
+  for (const cell of rated.values()) {
+    const provider = cell.provider ?? ''
+    const perProvider = providers.get(provider) ?? emptyTotals()
+    addTotals(perProvider, cell.totals)
+    providers.set(provider, perProvider)
   }
   // `?? []`: a hand-built or legacy-shaped summary without the auxiliary
   // dimension folds as if it had none (on-disk rollups are normalized when
