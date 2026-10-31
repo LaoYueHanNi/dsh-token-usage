@@ -7,14 +7,14 @@ Status: implemented
 大屏的窄容器响应式规则复用到设置区后，八张指标卡从两行变为四行，占据了过多垂直空间。设置区下方的全宽页签、独占一行的排序、长进度条以及运行开销的最小高度留白也让内容松散，项目名称反而提前截断。设置区与主列页宽度、信息密度不同，不应要求完全一致的布局。
 
 > [!NOTE]
-> 本决策中的「`UsageRows compact` 隐藏进度条」与「`OverheadRows compact` 紧凑外壳」约定已于 2026-10-26 由 [DR: 设置明细页签统一大屏形态并移除 compact 密度](2026-10-26-settings-detail-tabs-page-density.md) 取代：两个组件的 `compact` 参数连同紧凑规则已删除，四个明细页签（项目/模型/会话/运行开销）全部恢复 page 行布局；设置区仅保留指标小卡片与紧凑工具栏控件。
+> 本决策中的「`UsageRows compact` 隐藏进度条」与「`OverheadRows compact` 紧凑外壳」约定已于 2026-10-26 由 [DR: 设置明细页签统一大屏形态并移除 compact 密度](2026-10-26-settings-detail-tabs-page-density.md) 取代：两个组件的 `compact` 参数连同紧凑规则已删除，五个明细页签（项目/模型/会话/供应商/运行开销）全部恢复 page 行布局；设置区仅保留指标小卡片与紧凑工具栏控件。
 
 ## Decision
 
 - 部分取代 [公共看板与四卡片设计](./2026-10-24-usage-dashboard-isomorphic-board.md) 和 [完整性边界](./2026-10-25-dashboard-aggregation-correctness.md) 中设置区跟随大屏重排指标和复用大屏行密度的约定；数据来源、统计口径、过滤和跳转行为不变。
 - 设置 `OverviewBoard compact` 使用八张 `size="sm"` 指标卡，四列、两行固定排列；卡片为 16px 数字、10px 标签、8px/9px 内边距。page 的九轨、五轨、窄屏两列规则只影响 page 指标网格，不能命中设置网格。
 - 设置明细单独使用 `detailPanel`：页签与紧凑排序控件位于同一工具栏，窄时允许换行；模型性能开关沿用独立展示模式，激活后排序隐位占位。列表直接跟随工具栏，取消散落的独立排序行。
-- 明细列表限高滚动，窄行按名称与数字分行。（2026-10-26 起 `UsageRows`/`OverheadRows` 的 compact 参数均已删除，四个明细页签统一 page 行布局，见上方 NOTE。）
+- 明细列表限高滚动，窄行按名称与数字分行。（2026-10-26 起 `UsageRows`/`OverheadRows` 的 compact 参数均已删除，五个明细页签统一 page 行布局，见上方 NOTE。）
 - CSS 解析回归测试约束：任何指标容器断点均不得覆盖 `.metricGridCompact` 的四列规则；组件测试同时约束小卡片、统一工具栏和页签行密度（2026-10-26 起为 page 行布局，见上方 NOTE）。
 
 ## Alternatives considered

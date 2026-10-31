@@ -1,12 +1,14 @@
 /**
- * The dashboards' flat row lists (browser half): one component, three
- * shapes — `project` (directory-tail folds), `model` (the priced rows) and
- * `session` (two-line rows). All three read the same single-line grammar
- * of the v3 demo: name | relative bar (projects/models only) | total
- * tokens · cache share | cost; sessions swap the bar for a second identity
- * line (directory · activity) under the same figures cells, all three
- * lists rendering one figures style everywhere (no hover affordance — a
- * former four-bucket popup read as clutter and went).
+ * The dashboards' flat row lists (browser half): one component, four
+ * shapes — `project` (directory-tail folds), `model` (the priced rows),
+ * `session` (two-line rows) and `provider` (the per-route rows with the
+ * unattributed remainder sunk to the bottom). All four read the same
+ * single-line grammar of the v3 demo: name | relative bar (projects /
+ * models / providers only) | total tokens · cache share | cost; sessions
+ * swap the bar for a second identity line (directory · activity) under the
+ * same figures cells, all four lists rendering one figures style everywhere
+ * (no hover affordance — a former four-bucket popup read as clutter and
+ * went).
  *
  * The relative bar scales to
  * the active sort's own measure — tokens while sorted by tokens, billed cost
@@ -305,11 +307,15 @@ export function UsageRows({
   // performance view by mean speed (ranked rows only: the dimmed
   // low-sample rows drop their bar and must not stretch the scale), or
   // the bars would contradict the order they sit in. Zero renders
-  // zero-width bars (never NaN).
+  // zero-width bars (never NaN). The provider list follows the same
+  // rule for its unattributed remainder: it is the difference between
+  // the named routes and the top line, not a route — it drops its bar
+  // and must not stretch the scale the named routes are drawn against.
   const barValueOf = (row: ProjectUsageRow | CostedModelRow | SessionUsageRow | CostedProviderRow): number =>
     perfMode ? ('perf' in row && row.perf !== undefined && row.perf.samples >= MIN_PERF_SAMPLES ? row.perf.tokensPerSec : 0)
-      : active === 'cost' ? row.cost
-        : totalTokens(row.totals)
+      : kind === 'provider' && (row as CostedProviderRow).provider === '' ? 0
+        : active === 'cost' ? row.cost
+          : totalTokens(row.totals)
   const barMax = useMemo(() => {
     let max = 0
     for (const row of rows) {
@@ -500,6 +506,7 @@ export function UsageRows({
                               <span
                                 className={styles['nameText']}
                                 aria-label={t('byProvider.unattributed')}
+                                tabIndex={0}
                               >
                                 {t('byProvider.unattributed')}
                                 <span className={styles['nameHint']} aria-hidden={true}>?</span>

@@ -72,8 +72,6 @@
 
 /* Perf pick, unranked row: no bar renders, so the name takes the width
  * the track would have held (the session rows' grammar). */
-/* Perf pick, unranked row: no bar renders, so the name takes the width
- * the track would have held (the session rows' grammar). */
 .nameGrow {
   flex: 1;
   width: auto;
@@ -99,10 +97,14 @@
   font-size: 12px;
   font-weight: 400;
   line-height: 1.4;
-  white-space: pre;
+  /* The reason list keeps its line breaks, but a long reason line wraps
+   * inside the bubble instead of running past the viewport — the shell's
+   * own width cap is overridden here, so the cap has to be restated. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   width: max-content;
-  min-width: max-content;
-  max-width: none;
+  min-width: 0;
+  max-width: min(360px, calc(100vw - 24px));
 }
 
 /* The question-mark badge beside the unattributed label: same compact

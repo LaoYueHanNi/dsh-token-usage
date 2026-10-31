@@ -1,9 +1,10 @@
 /**
- * The main page's dashboard (browser half): the four equal-height cards in
- * two rows — projects | sessions, models | runtime overhead — each a card
- * head (title + count, the session head carrying the sort) over the same
- * flat row lists the settings panel's tabs use. The runtime-overhead card
- * is the scroll/flash target of the composite metric card's overhead pill.
+ * The main page's dashboard (browser half): the equal-height cards in a
+ * two-column grid — projects | sessions, models | providers, runtime
+ * overhead on the last row — each a card head (title + count, the session
+ * head carrying the sort) over the same flat row lists the settings
+ * panel's tabs use. The runtime-overhead card is the scroll/flash target
+ * of the composite metric card's overhead pill.
  *
  * @module token-usage/client/DashboardCards
  */
@@ -75,9 +76,9 @@ export interface DashboardCardsProps {
 }
 
 /**
- * Render the four-card dashboard: projects | sessions on the first row,
- * models | runtime overhead on the second. The lists cap their own height
- * and scroll inside the cards.
+ * Render the dashboard: projects | sessions on the first row, models |
+ * providers on the second, runtime overhead on the last. The lists cap
+ * their own height and scroll inside the cards.
  */
 export function DashboardCards({
   projectRows,
@@ -107,6 +108,9 @@ export function DashboardCards({
   overheadCardRef,
   overheadFlash,
 }: DashboardCardsProps): ReactNode {
+  // The unattributed remainder is the difference between the named routes
+  // and the top line, not a route: it never counts as a provider.
+  const namedProviderCount = providerRows.filter(row => row.provider !== '').length
   return (
     <div className={styles['grid2']}>
       <div className={styles['panel']}>
@@ -209,9 +213,12 @@ export function DashboardCards({
           <span className={styles['panelTitle']}>
             {t('board.providers')}
             <span className={styles['panelCount']}>
+              {/* The unattributed remainder is the difference between the
+                  named routes and the top line, not a route: it never
+                  counts towards the number of providers. */}
               {providerSort === 'cost'
-                ? t('board.byCost', { count: providerRows.length.toLocaleString() })
-                : t('board.byTokens', { count: providerRows.length.toLocaleString() })}
+                ? t('board.byCost', { count: namedProviderCount.toLocaleString() })
+                : t('board.byTokens', { count: namedProviderCount.toLocaleString() })}
             </span>
           </span>
           <RowSortControl

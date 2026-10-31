@@ -1,6 +1,7 @@
-/* The main page's four-card dashboard: two rows of equal-height panels
- * (projects | sessions, models | runtime overhead), each panel a card head
- * over the shared flat row list. Tokens only, no literal colors. */
+/* The main page's dashboard: a two-column grid of equal-height panels
+ * (projects | sessions, models | providers, runtime overhead on the last
+ * row), each panel a card head over the shared flat row list. Tokens only,
+ * no literal colors. */
 
 /* Two equal columns; the panels stretch to the row's tallest card, and a
  * tall list scrolls inside its panel instead of growing the card. */

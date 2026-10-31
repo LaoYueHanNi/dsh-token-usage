@@ -423,7 +423,26 @@ describe('plugin integration', () => {
   })
 })
 
-describe('live data-directory relocation', { timeout: 15_000 }, () => {
+/**
+ * Framework timeout for the whole relocation group.
+ *
+ * The relocation tests below poll a directory away, so their helper must
+ * never wait longer than the framework deadline — otherwise the framework
+ * kills the test first and the real cause (a slow move) is hidden. Keeping
+ * one constant for the group keeps the helper and the framework in sync.
+ *
+ * The budget is generous on purpose: a full parallel run on a loaded
+ * machine can stretch a single case well past what it takes alone, and a
+ * budget derived from the time already spent would shrink to nothing
+ * exactly when the machine is slow.
+ */
+const RELOCATION_TIMEOUT_MS = 120_000
+
+/** How long one poll waits for a directory to disappear. Two polls in one
+ * case (a move and its way back) stay well inside the framework timeout. */
+const POLL_GONE_BUDGET_MS = 45_000
+
+describe('live data-directory relocation', { timeout: RELOCATION_TIMEOUT_MS }, () => {
   let host: Context | undefined
   let sessionsService: MockSessions | undefined
   let home: string
@@ -458,15 +477,21 @@ describe('live data-directory relocation', { timeout: 15_000 }, () => {
     // The migration is asynchronous and waits on the append queue behind any
     // in-flight startup work, so a tight deadline flakes under the parallel
     // full-suite load (Windows file locks make the removal itself slower).
-    // The headroom only matters because the relocation tests below raise
-    // vitest's own 15s test timeout to 60s — the framework deadline would
-    // otherwise cut this wait short.
-    const deadline = Date.now() + 30_000
+    //
+    // The budget is fixed and comfortably below the framework timeout: the
+    // helper must always give up *before* the framework does, otherwise the
+    // framework timeout hides the real cause. Reporting "timed out" also
+    // keeps the message honest — a slow move is not a directory that
+    // refuses to go.
+    const deadline = Date.now() + POLL_GONE_BUDGET_MS
     while (Date.now() < deadline) {
       if (!existsSync(dir)) return
       await new Promise(resolve => setTimeout(resolve, 20))
     }
-    throw new Error(`directory still exists: ${dir}`)
+    throw new Error(
+      `timed out after ${POLL_GONE_BUDGET_MS}ms waiting for the directory to be removed: ${dir}`
+      + ` (left: ${(await readdir(dir).catch(() => [])).join(', ')})`,
+    )
   }
 
   beforeEach(async () => {
@@ -533,7 +558,7 @@ describe('live data-directory relocation', { timeout: 15_000 }, () => {
     updateVolatileConfig(host!, { path: dirB })
     await pollGone(dirA)
     expect((await allIds(dirB)).sort()).toEqual(['m1', 'm2'])
-  }, 60_000)
+  })
 
   it('saves a region edit freely while conversations are active', async () => {
     const dirA = join(home, 'A')
@@ -565,7 +590,7 @@ describe('live data-directory relocation', { timeout: 15_000 }, () => {
     host!.emit('session/event', { id: 's1' }, messageEvent({ messageId: 'm2' }))
     await new Promise(resolve => setTimeout(resolve, 50))
     expect((await allIds(dirB)).sort()).toEqual(['m1', 'm2'])
-  }, 60_000)
+  })
 
   it('association conflicts abort host relocation and keep live writes in the source', async () => {
     const dirA = join(home, 'A'), dirB = join(home, 'B')
@@ -601,7 +626,7 @@ describe('live data-directory relocation', { timeout: 15_000 }, () => {
     await new Promise(resolve => setTimeout(resolve, 30))
     expect(existsSync(dirA)).toBe(false)
     expect(fetch).toHaveBeenCalledTimes(2)
-  }, 60_000)
+  })
 
   it('moves to an explicit directory and back to the entry default when the stored path clears', async () => {
     const dirA = join(home, 'A')
@@ -622,5 +647,5 @@ describe('live data-directory relocation', { timeout: 15_000 }, () => {
     updateVolatileConfig(host!, { path: undefined })
     await pollGone(dirA)
     expect((await allIds(dirDefault)).sort()).toEqual(['m1'])
-  }, 60_000)
+  })
 })

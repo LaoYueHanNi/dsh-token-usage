@@ -90,6 +90,9 @@
 .segmented {
   display: inline-flex;
   align-items: stretch;
+  /* Five dimensions do not fit one narrow row any more: let the switch
+   * wrap instead of running past the panel. */
+  flex-wrap: wrap;
   gap: 2px;
   padding: 0;
 }

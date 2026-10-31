@@ -563,12 +563,13 @@ describe('TokenUsageSection', () => {
     expect(within(providerCard).getByText('DeepSeek')).toBeTruthy()
     expect(within(providerCard).getByText('缺失供应商')).toBeTruthy()
     // Card heads: the counts ride beside the titles (two directory tails
-    // fold into two projects; one model row; two provider rows including
-    // the unattributed remainder — the same count as projects); every card
-    // head carries a sort — sessions default to cost (its 费用 pick
+    // fold into two projects; one model row; one NAMED provider — the
+    // unattributed remainder is the difference between the named routes
+    // and the top line, not a route, so it never counts as one); every
+    // card head carries a sort — sessions default to cost (its 费用 pick
     // pressed), projects and models to tokens.
-    expect(screen.getAllByText('2 个 · 按总 token')).toHaveLength(2)
-    expect(screen.getByText('1 个 · 按总 token')).toBeTruthy()
+    expect(screen.getAllByText('2 个 · 按总 token')).toHaveLength(1)
+    expect(screen.getAllByText('1 个 · 按总 token')).toHaveLength(2)
     expect(screen.getByText('共 2 条')).toBeTruthy()
     expect(screen.getByText('辅助模型请求')).toBeTruthy()
     const sessionCard = screen.getByText('共 2 条').closest('div')!.parentElement!
