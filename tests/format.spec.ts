@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
-import { currencyViewOf, failuresTooltip, formatCost, formatRate, formatRateWithSymbol } from '../src/client/format.ts'
+import { currencyViewOf, failuresTooltip, formatCost, formatRate, formatRateWithSymbol, providerLabel } from '../src/client/format.ts'
 import { zh } from '../src/client/locales.ts'
 
 const t = ((key: string): string => (zh as Record<string, string>)[key] ?? key) as TranslateNS<'token-usage'>
@@ -92,5 +92,19 @@ describe('failuresTooltip', () => {
     expect(failuresTooltip(undefined, t)).toBe('')
     expect(failuresTooltip({}, t)).toBe('')
     expect(failuresTooltip({ RATE_LIMIT: 0 }, t)).toBe('')
+  })
+})
+
+describe('providerLabel', () => {
+  it('prefers the registry name and falls back to the route key', () => {
+    expect(providerLabel('zai-coding-cn', { 'zai-coding-cn': '智谱 Coding' })).toBe('智谱 Coding')
+    // A route the registry never saw still displays — the key is the identity.
+    expect(providerLabel('gone', { 'zai-coding-cn': '智谱 Coding' })).toBe('gone')
+    expect(providerLabel('gone')).toBe('gone')
+    expect(providerLabel('gone', {})).toBe('gone')
+  })
+
+  it('treats an empty registry entry as no name', () => {
+    expect(providerLabel('zai-coding-cn', { 'zai-coding-cn': '' })).toBe('zai-coding-cn')
   })
 })

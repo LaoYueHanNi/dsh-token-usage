@@ -512,8 +512,10 @@ export function createStatsRoute(dir: () => string, options: StatsRouteOptions =
         const currency = options.currency?.() ?? 'CNY'
         // The provider-name registry rides every payload that carries the
         // provider dimension; a host without the registry seam serves the
-        // raw keys and the client falls back to them.
-        const providerNames = options.providerNames !== undefined
+        // raw keys and the client falls back to them. The `chip` payload
+        // carries no provider dimension — it is polled on every request —
+        // so the registry is not read for it at all.
+        const providerNames = filter.fields !== 'chip' && options.providerNames !== undefined
           ? await options.providerNames().catch(() => undefined)
           : undefined
         // The session table's final rows: the costed bySession cells fold

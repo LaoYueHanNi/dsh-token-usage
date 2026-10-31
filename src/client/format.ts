@@ -37,11 +37,9 @@ const FAILURE_CODE_LABEL_KEYS = {
 
 /** Display label of a provider route key: the payload's name registry
  * (route key → latest display name) wins; a missing or empty entry falls
- * back to the key itself, so a route the registry never saw still shows. */
-export function providerLabel(id: string, names?: Readonly<Record<string, string>>): string {
-  const name = names?.[id]
-  return name !== undefined && name !== '' ? name : id
-}
+ * back to the key itself, so a route the registry never saw still shows.
+ * The rule is shared with the host side (`src/provider-label.ts`). */
+export { providerLabel } from '../provider-label.ts'
 
 /** One decimal below 10, integer otherwise, trailing `.0` stripped. */
 function scale(value: number): string {

@@ -309,6 +309,28 @@ async function readDayLines(dir: string, name: string, logger: LoggerLike): Prom
   return lines
 }
 
+/**
+ * Replace a file with new content, atomically for the reader: the new bytes
+ * land in a sibling temp file, and the rename swaps it in. `rename` replaces
+ * an existing target on Windows (MoveFileEx + REPLACE_EXISTING), so no window
+ * exists in which the day file is missing — unlinking the target first would
+ * drop every row of that day should the process die between the two calls.
+ * The unlink survives only as a fallback for filesystems that refuse to
+ * overwrite.
+ * @param tmp - the temp file holding the new content.
+ * @param target - the file to replace.
+ */
+async function replaceFile(tmp: string, target: string): Promise<void> {
+  try {
+    await rename(tmp, target)
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    if (code !== 'EPERM' && code !== 'EEXIST' && code !== 'EACCES') throw error
+    await unlink(target).catch(() => undefined)
+    await rename(tmp, target)
+  }
+}
+
 async function rewriteDayFile(dir: string, name: string, records: UsageRecord[]): Promise<void> {
   const target = join(dir, name)
   if (records.length === 0) {
@@ -317,8 +339,7 @@ async function rewriteDayFile(dir: string, name: string, records: UsageRecord[])
   }
   const tmp = join(dir, `${name}.tmp`)
   await writeFile(tmp, `${records.map(serializeRecord).join('\n')}\n`, 'utf8')
-  await unlink(target).catch(() => undefined)
-  await rename(tmp, target)
+  await replaceFile(tmp, target)
 }
 
 /**
@@ -368,8 +389,7 @@ async function refileDayFiles(dir: string, logger: LoggerLike): Promise<number> 
       const body = `${stay.map(serializeRecord).join('\n')}${stay.length > 0 ? '\n' : ''}${stray.join('\n')}\n`
       const tmp = join(dir, `${source}.tmp`)
       await writeFile(tmp, body, 'utf8')
-      await unlink(target).catch(() => undefined)
-      await rename(tmp, target)
+      await replaceFile(tmp, target)
     } else {
       await rewriteDayFile(dir, source, stay)
     }
@@ -431,8 +451,7 @@ async function reconcileDayFiles(dir: string, sets: ReconcileSets, logger: Logge
       const body = `${stay.map(serializeRecord).join('\n')}${stay.length > 0 ? '\n' : ''}${stray.join('\n')}\n`
       const tmp = join(dir, `${name}.tmp`)
       await writeFile(tmp, body, 'utf8')
-      await unlink(target).catch(() => undefined)
-      await rename(tmp, target)
+      await replaceFile(tmp, target)
     } else {
       await rewriteDayFile(dir, name, stay)
     }
@@ -539,8 +558,7 @@ export async function backfillDayFilesTiming(
       const body = `${stay.map(serializeRecord).join('\n')}${stay.length > 0 ? '\n' : ''}${stray.join('\n')}\n`
       const tmp = join(dir, `${name}.tmp`)
       await writeFile(tmp, body, 'utf8')
-      await unlink(target).catch(() => undefined)
-      await rename(tmp, target)
+      await replaceFile(tmp, target)
     } else {
       await rewriteDayFile(dir, name, stay)
     }
@@ -664,8 +682,7 @@ export async function completeDayFiles(
       const body = `${stay.map(serializeRecord).join('\n')}${stay.length > 0 ? '\n' : ''}${stray.join('\n')}\n`
       const tmp = join(dir, `${name}.tmp`)
       await writeFile(tmp, body, 'utf8')
-      await unlink(target).catch(() => undefined)
-      await rename(tmp, target)
+      await replaceFile(tmp, target)
     } else {
       await rewriteDayFile(dir, name, stay)
     }

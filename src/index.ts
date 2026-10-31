@@ -358,11 +358,22 @@ export function apply(ctx: Context, config: Config = {}) {
   let namedProviders: readonly { provider: string; displayName?: string }[] = []
   /** Replaced while the llm service is attached. Never throws. */
   let refreshNamedProviders: () => void = () => {}
-  /** Snapshot display names. With `only`, just the route keys a new row named. */
-  const rememberProviderNames = (only?: readonly string[]): void => {
+  /** When the provider directory was last read. Every recorded row asks for
+   * the display names, so the host directory is consulted at most once per
+   * interval instead of once per request. */
+  let namedProvidersAt = 0
+  const PROVIDER_REFRESH_MS = 1_000
+  /** Snapshot display names. With `only`, just the route keys a new row named.
+   * `force` reads the directory right away — the startup and the llm attach
+   * path use it so a rename lands on disk without waiting for a request. */
+  const rememberProviderNames = (only?: readonly string[], force = false): void => {
     const store = current?.names
     if (store === undefined) return
-    refreshNamedProviders()
+    const now = Date.now()
+    if (force || now - namedProvidersAt >= PROVIDER_REFRESH_MS) {
+      namedProvidersAt = now
+      refreshNamedProviders()
+    }
     const patch: Record<string, string> = {}
     for (const entry of namedProviders) {
       if (typeof entry.displayName !== 'string' || entry.displayName === '') continue
@@ -398,6 +409,15 @@ export function apply(ctx: Context, config: Config = {}) {
   const associations = new PricingAssociationService(currentDir, logger)
 
   /**
+   * The startup chain: the first-run history sync and the marker writes
+   * that follow it. A relocation waits for it — the chain writes the sync
+   * markers into the directory it started in, and a marker written after
+   * the copy would leave the source with a file the target never received.
+   * The source would then keep a stale copy and never be emptied.
+   */
+  let startup: Promise<void> = Promise.resolve()
+
+  /**
    * Move the running data directory as a two-phase commit: refuse while any
    * session is live (their events append to the source mid-copy), copy every
    * owned file verbatim with size verification, flip the running directory,
@@ -426,6 +446,12 @@ export function apply(ctx: Context, config: Config = {}) {
       // sessions.json that migrates is final.
       await previous.meta.flush()
       await previous.names.flush()
+      // The startup chain writes the sync markers into the directory it
+      // started in. It must finish before the copy: a marker written
+      // afterwards lands in the source only, and the size check would then
+      // refuse to delete it — the source directory would keep a stale
+      // marker and never be emptied.
+      await startup
 
       migration = { phase: 'copying', done: 0, total: 0 }
       const report = (progress: MigrationProgress): void => {
@@ -660,7 +686,9 @@ export function apply(ctx: Context, config: Config = {}) {
           displayName: entry.displayName,
         }
       }
-      rememberProviderNames()
+      // The llm service is attached: read the directory right away, so the
+      // names land on disk without waiting for the next recorded row.
+      rememberProviderNames(undefined, true)
       return () => {
         quotaDirectory = undefined
         refreshNamedProviders = () => {}
@@ -913,7 +941,7 @@ export function apply(ctx: Context, config: Config = {}) {
     const log = new UsageLog(dir, logger)
     const meta = new SessionMetaStore(dir, logger)
     current = { dir, log, meta, names: new ProviderNameStore(dir, logger) }
-    rememberProviderNames()
+    rememberProviderNames(undefined, true)
     associations.directoryChanged()
     void warmRecordCache(dir, undefined, logger)
 
@@ -1026,7 +1054,7 @@ export function apply(ctx: Context, config: Config = {}) {
     // one-shot backfill. Both share the log's append queue, so a live write
     // cannot interleave with the rewrite. History sync then lands each new
     // row on the event's own day.
-    void log.refileByEventDay()
+    startup = log.refileByEventDay()
       .then((moved) => {
         if (moved > 0) {
           logger.info(`[token-usage] refiled ${String(moved)} rows onto event-day files`)
@@ -1038,6 +1066,12 @@ export function apply(ctx: Context, config: Config = {}) {
           } }, dir)
       })
       .then(async (result) => {
+        // The directory may have moved while the first-run sync ran: the
+        // markers below belong to the directory now in force. Writing them
+        // into the directory that just moved would leave a stray marker —
+        // and, mid-write, its temp file — behind in the source.
+        const liveDir = current?.dir ?? dir
+        const liveLog = current?.log ?? log
         if (result !== null) {
           logger.info(`[token-usage] first-run sync: ${result.added} added, ${result.skipped} skipped, ${String(result.removed)} removed, ${String(result.failedSessions)} failed sessions`)
           // Appended rows (compactions backfilled by an upgrade, or requests
@@ -1045,28 +1079,28 @@ export function apply(ctx: Context, config: Config = {}) {
           // invalidate the derived stats state before the cache re-warms over
           // the new contents — including writes into frozen day files the
           // rollup may already have absorbed.
-          if (result.added > 0 || result.removed > 0) invalidateDerivedState(dir)
+          if (result.added > 0 || result.removed > 0) invalidateDerivedState(liveDir)
         }
-        const state = await readSyncState(dir, logger)
+        const state = await readSyncState(liveDir, logger)
         if (state !== null && state.timingSyncedAt === undefined && ctx.sessionPersistence !== undefined) {
-          const patched = await log.backfillTiming(ctx.sessionPersistence)
+          const patched = await liveLog.backfillTiming(ctx.sessionPersistence)
           if (patched > 0) {
             logger.info(`[token-usage] backfilled timing figures for ${String(patched)} historical records`)
-            invalidateDerivedState(dir)
+            invalidateDerivedState(liveDir)
           }
-          await markTimingSynced(dir)
+          await markTimingSynced(liveDir)
         }
-        const pending = pendingCompleterIds(await readSyncState(dir, logger), FIELD_COMPLETERS.map(completer => completer.id))
+        const pending = pendingCompleterIds(await readSyncState(liveDir, logger), FIELD_COMPLETERS.map(completer => completer.id))
         if (pending.length > 0 && ctx.sessionPersistence !== undefined) {
-          const completion = await log.completeFields(
+          const completion = await liveLog.completeFields(
             ctx.sessionPersistence,
             FIELD_COMPLETERS.filter(completer => pending.includes(completer.id)),
           )
           if (completion.patched > 0) {
             logger.info(`[token-usage] completed fields on ${String(completion.patched)} historical records`)
-            invalidateDerivedState(dir)
+            invalidateDerivedState(liveDir)
           }
-          const settled = await markFieldCompletionOutcome(dir, {
+          const settled = await markFieldCompletionOutcome(liveDir, {
             cleanIds: completion.cleanIds,
             retriedIds: completion.retriedIds,
           })
@@ -1075,7 +1109,7 @@ export function apply(ctx: Context, config: Config = {}) {
             logger.warn(`[token-usage] field completion gave up on unreadable sessions for: ${abandoned.join(', ')}`)
           }
         }
-        return warmRecordCache(dir, undefined, logger)
+        return warmRecordCache(liveDir, undefined, logger)
       })
       .catch((error: unknown) => {
         logger.error('[token-usage] first-run sync failed:', error)

@@ -1,4 +1,4 @@
-import { mkdtemp, readFile } from 'node:fs/promises'
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -31,5 +31,30 @@ describe('ProviderNameStore', () => {
     const before = await readFile(join(dir, 'providers.json'), 'utf8')
     await store.upsert({ 'deepseek-official': 'DeepSeek' })
     expect(await readFile(join(dir, 'providers.json'), 'utf8')).toBe(before)
+  })
+
+  it('never overwrites a registry it cannot read back', async () => {
+    const dir = await tempDir()
+    const store = new ProviderNameStore(dir)
+    // A registry that lost its shape (a torn write, a hand edit) must not
+    // be replaced by the incoming patch alone: the display names it still
+    // holds are not recoverable from the session logs.
+    await writeFile(join(dir, 'providers.json'), '{"deepseek-official": "DeepSeek"', 'utf8')
+    await store.upsert({ 'zai-coding-cn': 'Z.ai' })
+    expect(await readFile(join(dir, 'providers.json'), 'utf8')).toBe('{"deepseek-official": "DeepSeek"')
+    // The read path still serves what it can, so the page degrades to the
+    // raw route keys instead of failing.
+    expect(await store.read()).toEqual({})
+  })
+
+  it('writes over a registry it can read back', async () => {
+    const dir = await tempDir()
+    const store = new ProviderNameStore(dir)
+    await store.upsert({ 'deepseek-official': 'DeepSeek' })
+    await store.upsert({ 'zai-coding-cn': 'Z.ai' })
+    expect(await store.read()).toEqual({
+      'deepseek-official': 'DeepSeek',
+      'zai-coding-cn': 'Z.ai',
+    })
   })
 })

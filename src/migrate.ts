@@ -188,6 +188,16 @@ export async function cleanSource(
   // The source rollup is derived state with no target-side counterpart; it
   // leaves with the directory so an emptied source can actually go away.
   await unlink(join(oldDir, ROLLUP_FILE)).catch(() => undefined)
+  // A file written temp-then-rename leaves its `.tmp` sibling behind when
+  // the process dies between the two, and a marker written concurrently with
+  // the move can leave one too. Such a leftover is not data — the file it
+  // was written for has landed in the target — but it keeps the source
+  // directory non-empty, and an emptied source is what lets the directory
+  // itself go away.
+  for (const name of removable) {
+    await unlink(join(oldDir, `${name}.tmp`)).catch(() => undefined)
+  }
+  await unlink(join(oldDir, `${ROLLUP_FILE}.tmp`)).catch(() => undefined)
   // The directory itself goes only when nothing owned or unknown remains.
   if ((await readdir(oldDir).catch(() => null))?.length === 0) {
     await rmdir(oldDir).catch(() => undefined)
