@@ -1,14 +1,14 @@
 /**
  * Request-driven cost-figure inflate animation for the composer-dock usage
- * pill: detects new usage from summary deltas and drives WAAPI motion on
- * the cost figure and ephemeral +Δ fly labels.
+ * pill: detects new usage from summary deltas and drives the WAAPI motion on
+ * the cost figure (a scale + colour pop whose amplitude follows the step's
+ * token intensity).
  *
  * @module token-usage/client/use-cost-inflate
  */
 
-import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
+import { useCallback, useEffect, useRef, type RefObject } from 'react'
 import type { UsageSummary } from '../wire.ts'
-import { currencyViewOf } from './format.ts'
 import { costsAvailable } from './PricingStatus.tsx'
 import { totalTokens } from './day.ts'
 import { motionAllowed, runCostPop } from './cost-inflate-motion.ts'
@@ -16,15 +16,7 @@ import {
   animVars,
   computeIntensityFromDelta,
   deltaTotals,
-  type CostInflateVars,
 } from './cost-inflate.ts'
-
-/** One +Δ label mid-flight. */
-export interface CostDeltaFly {
-  id: number
-  text: string
-  vars: CostInflateVars
-}
 
 interface PrevChipSnapshot {
   totals: UsageSummary['total']
@@ -32,13 +24,9 @@ interface PrevChipSnapshot {
 }
 
 export interface UseCostInflateResult {
-  /** Active +Δ fly labels (removed after their animation). */
-  flies: readonly CostDeltaFly[]
-  /** Strip gets `overflow: visible` while a fly or pop may extend outside. */
-  flyOverflow: boolean
   /** Call when a fresh chip summary lands (after first paint baseline). */
   onSummary: (summary: UsageSummary) => void
-  /** Clear baseline and in-flight flies (session / scope change). */
+  /** Clear baseline and the in-flight pop (session / scope change). */
   reset: () => void
 }
 
@@ -52,7 +40,7 @@ function hasUsageChurn(prev: PrevChipSnapshot, summary: UsageSummary): boolean {
 }
 
 /**
- * Hook the pill uses to play costPop + deltaFall on each new request.
+ * Hook the pill uses to play the costPop on each new request.
  * @param scopeKey - changes reset the diff baseline.
  * @param costRef - the live cost figure span (WAAPI target).
  */
@@ -61,46 +49,21 @@ export function useCostInflate(
   costRef: RefObject<HTMLElement | null>,
 ): UseCostInflateResult {
   const prevRef = useRef<PrevChipSnapshot | null>(null)
-  const flyIdRef = useRef(0)
-  const timersRef = useRef<number[]>([])
-  const flyCountRef = useRef(0)
   const popAnimRef = useRef<Animation | null>(null)
 
-  const [flies, setFlies] = useState<CostDeltaFly[]>([])
-  const [flyOverflow, setFlyOverflow] = useState(false)
-
-  const clearTimers = useCallback(() => {
-    for (const id of timersRef.current) window.clearTimeout(id)
-    timersRef.current = []
-  }, [])
-
-  const schedule = useCallback((fn: () => void, ms: number) => {
-    const id = window.setTimeout(fn, ms)
-    timersRef.current.push(id)
-  }, [])
-
   const reset = useCallback(() => {
-    clearTimers()
     popAnimRef.current?.cancel()
     popAnimRef.current = null
     prevRef.current = null
-    flyIdRef.current = 0
-    flyCountRef.current = 0
-    setFlies([])
-    setFlyOverflow(false)
-  }, [clearTimers])
+  }, [])
 
   useEffect(() => {
     reset()
   }, [scopeKey, reset])
 
-  useEffect(() => () => { clearTimers() }, [clearTimers])
+  useEffect(() => () => { popAnimRef.current?.cancel() }, [])
 
-  const maybeClearOverflow = useCallback(() => {
-    if (flyCountRef.current <= 0) setFlyOverflow(false)
-  }, [])
-
-  const playCostPop = useCallback((v: CostInflateVars) => {
+  const playCostPop = useCallback((v: ReturnType<typeof animVars>) => {
     const el = costRef.current
     if (el === null) return
     popAnimRef.current?.cancel()
@@ -117,33 +80,16 @@ export function useCostInflate(
     prevRef.current = nextSnapshot
     if (prev === null) return
     if (!hasUsageChurn(prev, summary)) return
-    // Reduced motion: the baseline is already stored above, so the figures
-    // repaint silently — no pop, no fly, no overflow churn.
+    // Reduced motion: the baseline is already stored above, so the figure
+    // repaints silently — no pop.
     if (!motionAllowed()) return
 
     const delta = deltaTotals(prev.totals, summary.total)
     const I = computeIntensityFromDelta(delta)
     const v = animVars(I)
 
-    setFlyOverflow(true)
     window.requestAnimationFrame(() => { playCostPop(v) })
+  }, [playCostPop, reset])
 
-    const wireDeltaCost = summary.totalCost - prev.totalCost
-    if (wireDeltaCost > MIN_WIRE_DELTA_COST) {
-      const view = currencyViewOf(summary)
-      const text = `+${(wireDeltaCost / view.rate).toFixed(2)}${view.symbol}`
-      const id = ++flyIdRef.current
-      flyCountRef.current += 1
-      setFlies(current => [...current, { id, text, vars: v }])
-      schedule(() => {
-        flyCountRef.current -= 1
-        setFlies(current => current.filter(fly => fly.id !== id))
-        maybeClearOverflow()
-      }, v.inflateMs + 40)
-    } else {
-      schedule(maybeClearOverflow, v.inflateMs + 40)
-    }
-  }, [maybeClearOverflow, playCostPop, schedule, reset])
-
-  return { flies, flyOverflow, onSummary, reset }
+  return { onSummary, reset }
 }

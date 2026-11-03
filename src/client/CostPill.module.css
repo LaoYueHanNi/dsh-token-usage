@@ -53,39 +53,6 @@ button.pill[aria-expanded='true'] {
   z-index: 2;
 }
 
-.deltaLayer {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  overflow: visible;
-  z-index: 3;
-}
-
-/* +Δ fly: FALLS below the pill. The dock sits under the composer, so the
- * header chip's upward rise would climb into the message scrollport. */
-.deltaFly {
-  position: absolute;
-  left: 50%;
-  top: 100%;
-  margin-top: 2px;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--dsw-alias-state-warn-primary);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  pointer-events: none;
-  text-shadow: 0 0 8px color-mix(in srgb, var(--dsw-alias-state-warn-primary) 35%, transparent);
-}
-
-/* Defense in depth for reduced motion: the inflate hook refuses to spawn
- * flies and WAAPI ignores `animation: none`, so hiding the class is the
- * only CSS-level guard that actually holds. */
-@media (prefers-reduced-motion: reduce) {
-  .deltaFly {
-    display: none;
-  }
-}
-
 /* Detail panel: menu chrome, upward of the dock row. */
 .panel {
   position: absolute;

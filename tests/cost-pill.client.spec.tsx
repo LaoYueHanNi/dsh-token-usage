@@ -6,7 +6,7 @@
  * trigger's totals fetch while closed; opening fires the byModel detail
  * read and the solo-session split read), the panel's explanation of the
  * total (tokens, hit rate, session/subagents split, per-model rows,
- * unpriced footnote), and the falling +Δ fly on cost churn.
+ * unpriced footnote), and the figure's pop on cost churn.
  *
  * A fake `fetch` routes on the query shape the host's `/token-usage/stats`
  * route serves: `fields=session` → the byModel detail payload, a multi-id
@@ -378,19 +378,18 @@ describe('CostPill', () => {
     await waitFor(() => { expect(screen.queryByRole('dialog')).toBeNull() })
   })
 
-  it('spawns a falling +Δ fly when a request-driven refresh raises the cost', async () => {
+  it('pops the figure on a request-driven refresh and mounts no fly label', async () => {
     const fetchMock = stubTreeSequence([TREE_SUMMARY, UPDATED_SUMMARY])
     const { rerender, container } = render(<CostPill {...propsOf('session-a', TREE_BY_ID)} />)
     await screen.findByRole('button')
     rerender(<CostPill {...propsOf('session-a', TREE_BY_ID, { ...LIVE_STATS, steps: LIVE_STATS.steps + 1 })} />)
     await waitFor(() => { expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(2) })
     await waitFor(() => {
-      expect(container.querySelector('[class*="deltaFly"]')?.textContent).toBe('+7.66￥')
+      expect(container.querySelector('[class*="cost"]')?.textContent).toBe('20.00￥')
     }, { timeout: 200 })
-    // jsdom ships no WAAPI: the fly mounts but hides itself instead of
-    // sitting statically for the whole inflate window.
-    const fly = container.querySelector<HTMLElement>('[class*="deltaFly"]')
-    expect(fly?.style.visibility).toBe('hidden')
+    // The animation is the figure's own scale + colour pop: no separate
+    // label element is ever mounted.
+    expect(container.querySelector('[class*="deltaFly"]')).toBeNull()
   })
 
   it('recovers by itself when the first fetch fails', async () => {

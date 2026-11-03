@@ -10,13 +10,16 @@ Status: implemented
 
 ## Decision
 
+> [!NOTE]
+> 本决策中的 `+Δ` 飞出已于 2026-11-03 由 [DR: 移除 +Δ 飞字，费用动效只留数字弹跳](../implemented/2026-11-03-remove-cost-delta-fly.md) 取代。
+
 费用展示整体迁入 composer 下方 dock，右上角小组件退役：
 
 - **触发 pill**：注册进 `conversation.composer.dock`（`id: 'token-usage-cost'`，`order: 10`，官方 StatsPills 为 0），逐字段复刻官方 pill 样式（无边框、`label-tertiary` 三级文字、hover/展开才升亮并带 hover 背景）。常驻数字只有一个——含子会话折叠费用（官方无任何费用表面），裸显金额不带口径后缀；单会话与官方 pill 同口径并列，折叠口径由读屏名（aria-label）与面板标注。会话无记录请求时整块不渲染；瞬时拉取失败保留上次渲染，首次失败按 3 秒自愈重试。
 - **点击展开用量明细面板**（宿主菜单 chrome，dock 行上方）：标题右侧为折叠总费用，其下一行是**折叠 token 与缓存命中率**（`8.7M tok · 缓存命中 91%`）——官方只有单会话 token（5.2M），两行数字在面板内直接对照，子树增量与命中率变化（子会话缓存利用率低拉低总体）由此可解释；其下为本会话 / 子会话 ×N 分摊行（子会话 = 折叠减单会话，钳零防负），再加按模型分摊（费用 + token + 请求数）与未定价模型脚注。命中率是比值不可减，只在折叠行重算，不做分摊。
 - **数据分层懒加载**：触发 pill 常驻轮询 `fields=chip`（树 scope，totals only）；面板打开才发两路读——`fields=session`（树 scope，取 byModel）与单会话 `fields=chip`（取分摊基线），请求churn 去抖穿透时随开随新。路由无需改动。
 - **金额读数格式**：全局统一为数字在前、货币符号后置（`3.78￥`，CNY 用全角 ￥；USD `0.18$`），与 dock 行的单位后置习语（`12.2M tok`、`98%`）一致；价格表的每百万单价（`￥8`）保持符号前置的行话不动。
-- **动效**：费用上涨的 `costPop` 弹跳与 `+Δ` 飞出保留，但飞出方向改为**向下**——dock 位于 composer 之下，原向上飞行会窜入消息滚动区；reduced-motion 用户仍只静默更新数字。
+- **动效**：费用上涨的 `costPop` 弹跳保留；`+Δ` 飞出已于 2026-11-03 移除（见 [DR: 移除 +Δ 飞字，费用动效只留数字弹跳](../implemented/2026-11-03-remove-cost-delta-fly.md)——它会把 composer 顶飞）；reduced-motion 用户仍只静默更新数字。
 - **右上角 `SessionStatsChip` 物理删除**（组件、CSS module、注册、测试）；`HitRateText` 与四档色带由设置页与 Usage 视图继续使用，仅不再进入会话头部。刷新管线（250ms 去抖、sessionStats 投影 + 镜像 updatedAt 指纹）原样迁移给 pill。
 
 ## Alternatives considered
@@ -30,5 +33,5 @@ Status: implemented
 ## Consequences
 
 - 换来：费用与折叠口径（token/命中率）获得唯一且可解释的家；输入框下形成"官方单会话 pill + 插件折叠 pill"的完整对照行；右上角归还官方；dock 行信息密度提升而零重复。
-- 代价：面板展开需要 1–2 次额外 fetch（懒加载已把代价压到首次展开与churn 穿透时）；pill 常驻数字只剩费用，单看 pill 无法得知折叠 token（需点开面板）；`+Δ` 改为下落后紧邻输入框上缘，动画幅度需克制（沿用原强度变量）。
+- 代价：面板展开需要 1–2 次额外 fetch（懒加载已把代价压到首次展开与churn 穿透时）；pill 常驻数字只剩费用，单看 pill 无法得知折叠 token（需点开面板）；`+Δ` 飞出已于 2026-11-03 移除（见 [DR: 移除 +Δ 飞字，费用动效只留数字弹跳](../implemented/2026-11-03-remove-cost-delta-fly.md)）。
 - 兼容：`fields=chip` / `fields=session` 两种 wire 形状均无变化，宿主路由零改动；`hit-rate-band` 色带与 `format` 纯函数由设置页继续消费。

@@ -21,10 +21,9 @@
  * cadence, inherited whole): `sessionStats` projection churn plus mirror
  * `updatedAt` is debounced 250 ms into one fetch, a failed FIRST fetch
  * retries itself on a 3 s cadence, and later failures keep the prior
- * figures. When cost rises on a new request the figure plays `costPop`
- * and a +Δ label FALLS below the pill (the dock sits under the composer;
- * the header chip's upward rise would climb into the message scrollport).
- * Reduced-motion users get silent figure updates.
+ * figures. When usage grows on a new request the figure plays `costPop` —
+ * a scale + colour pop whose amplitude follows that step's token
+ * intensity. Reduced-motion users get silent figure updates.
  *
  * Visibility contract: a session with no recorded requests renders
  * nothing; a transient fetch miss keeps the previous render.
@@ -53,7 +52,6 @@ import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import { usePricingAssociationRefresh } from './pricing-associations.ts'
 import { buildChildIndex, buildStatsFreshnessKey, subtreeIds } from './session-stats.ts'
 import { useColorSchemeMirror } from './use-color-scheme.ts'
-import { CostDeltaFlyLabel } from './CostDeltaFlyLabel.tsx'
 import { useCostInflate } from './use-cost-inflate.ts'
 import styles from './CostPill.module.css'
 
@@ -142,7 +140,7 @@ export function CostPill({ sessionId, useSessions, useProjection, t }: CostPillP
   const requestKey = `${scopeIds.join('\n')}\n\t${freshnessKey}`
   const debouncedKey = useDebouncedValue(requestKey, REFRESH_DEBOUNCE_MS)
   const scopeResetKey = scopeIds.join('\n')
-  const { flies, onSummary } = useCostInflate(scopeResetKey, costRef)
+  const { onSummary } = useCostInflate(scopeResetKey, costRef)
 
   // The trigger's poll: subtree totals only (`fields=chip`), the lightest
   // read that feeds cost / tokens / hit rate.
@@ -274,11 +272,6 @@ export function CostPill({ sessionId, useSessions, useProjection, t }: CostPillP
           />
         </svg>
         <span ref={costRef} className={styles.cost}>{costText}</span>
-        <span className={styles.deltaLayer} aria-hidden="true">
-          {flies.map(fly => (
-            <CostDeltaFlyLabel key={fly.id} text={fly.text} vars={fly.vars} />
-          ))}
-        </span>
       </button>
       {open && (
         <div className={styles.panel} role="dialog" aria-label={t('panel.title')} style={{ left: panelLeft }}>

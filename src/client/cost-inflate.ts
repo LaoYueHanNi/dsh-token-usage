@@ -1,7 +1,7 @@
 /**
- * SessionStatsChip cost-cell inflate animation: per-request intensity from
- * token deltas and parameters for `costPop` / `deltaRise`. Pure functions
- * only — the chip hook owns timers and DOM.
+ * Composer-dock usage pill cost-figure inflate animation: per-request
+ * intensity from token deltas and the parameters for `costPop`. Pure
+ * functions only — the hook owns timers and DOM.
  *
  * @module token-usage/client/cost-inflate
  */
@@ -39,13 +39,11 @@ export function computeIntensityFromDelta(delta: UsageTotals): number {
   return clamp01(0.55 * miss + 0.45 * out)
 }
 
-/** Parameters driving `costPop` and `deltaRise` for one request step. */
+/** Parameters driving `costPop` for one request step. */
 export interface CostInflateVars {
   inflateMs: number
   popScale: string
   warnMix: string
-  flyY: string
-  flyX: string
 }
 
 function lerp(a: number, b: number, t: number): number {
@@ -59,7 +57,5 @@ export function animVars(I: number): CostInflateVars {
     inflateMs,
     popScale: lerp(1.08, 1.32, I).toFixed(3),
     warnMix: `${Math.round(lerp(0, 55, I))}%`,
-    flyY: `${lerp(22, 38, I).toFixed(1)}px`,
-    flyX: `${((Math.random() - 0.5) * 10).toFixed(1)}px`,
   }
 }

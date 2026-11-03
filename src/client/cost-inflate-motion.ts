@@ -47,22 +47,3 @@ export function runCostPop(el: HTMLElement, v: CostInflateVars): Animation | nul
     easing: 'cubic-bezier(0.25, 0.85, 0.35, 1)',
   })
 }
-
-/** +Δ label fall (`deltaFall`). Caller must position the element (absolute,
- * below the pill — the dock sits under the composer, so the label falls
- * away from the message scrollport rather than climbing into it). */
-export function runDeltaFly(el: HTMLElement, v: CostInflateVars): Animation | null {
-  if (!motionAllowed() || !waapiAvailable(el)) return null
-  return el.animate([
-    { opacity: 0, transform: 'translate(-50%, 20%)' },
-    { opacity: 1, transform: 'translate(-50%, 20%)', offset: 0.15 },
-    {
-      opacity: 0,
-      transform: `translate(calc(-50% + ${v.flyX}), calc(100% + ${v.flyY}))`,
-    },
-  ], {
-    duration: v.inflateMs,
-    easing: 'cubic-bezier(0.22, 0.55, 0.25, 1)',
-    fill: 'both',
-  })
-}
