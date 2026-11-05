@@ -449,6 +449,20 @@ describe('UsageView', () => {
     expect(badge.textContent).toBe('(1)')
   })
 
+  it('keeps the subagent table focusable so a click hands it the wheel', async () => {
+    stubFetch()
+    renderView({ liveStats: LIVE_STATS })
+    await waitFor(() => expectText('12.34￥'))
+    // The wheel belongs to the page until the list has the focus — the
+    // stylesheet's `.subagentsWrap:focus-within` is what turns it into a
+    // scroll area. The shell must therefore be click-to-focus (tabindex 0)
+    // and the data rows must live inside it.
+    const region = screen.getByRole('region', { name: t('view.subagents.scroll') })
+    expect(region.getAttribute('tabindex')).toBe('0')
+    const table = within(region).getByRole('table', { name: t('view.subagents.title', { count: '1' }) })
+    expect(within(table).getByText('Child Agent')).toBeTruthy()
+  })
+
   it('in tree scope, a child row includes nested descendants so totals add up', async () => {
     const childTree = {
       total: { requests: 8, inputTokens: 80_000, outputTokens: 5_000, cacheReadTokens: 20_000, cacheWriteTokens: 1_000 },

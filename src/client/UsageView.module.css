@@ -236,6 +236,86 @@
   border-bottom: 1.5px solid var(--dsw-alias-border-l2);
 }
 
+/* Band 3's subagent table: capped at 15 data rows, and scrollable only
+ * while it owns the focus. A nested scroller that listens to every hover is
+ * the trap this avoids: with `overflow: hidden` the pointer keeps scrolling
+ * the PAGE under the table — the wheel over a nested scroll area otherwise
+ * scrolls that area and the page stops dead (the real-world complaint). A
+ * click anywhere in the list (or a Tab) moves focus inside, `:focus-within`
+ * turns the shell into the scroll area, and the scrollbar appears as the
+ * mode cue; clicking/tabbing away hands the wheel back to the page. Every
+ * row gets one fixed height, so the cap is exactly `head + 15 × row`
+ * whatever the labels are — a collapsed-border row whose height is set on
+ * `tr` reads that exact height in the browser, and a long title ellipsises
+ * inside its cell instead of growing the row. The scrollbar reads like the
+ * request pool's fade bar: no track, no arrow buttons, the thumb is visible
+ * while the shell is active and tints deeper while scrolling (.scrolling,
+ * dropped 800ms after the last event). (No `scrollbar-width` here: a
+ * non-auto standard value disables the ::-webkit-* rules below.) */
+.subagentsWrap {
+  --subagents-row-height: 26px;
+  /* 16 = one head row + the 15 listed data rows. */
+  max-height: calc(var(--subagents-row-height) * 16);
+  /* Not activated yet: the wheel belongs to the page. */
+  overflow: hidden;
+}
+
+/* Focused from a click or Tab: the list takes the wheel. Reaching either
+ * end chains to the page (no `overscroll-behavior: contain`), so the
+ * reader is never trapped inside the shell. */
+.subagentsWrap:focus-within {
+  overflow: auto;
+}
+
+.subagentsWrap::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.subagentsWrap::-webkit-scrollbar-track,
+.subagentsWrap::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.subagentsWrap::-webkit-scrollbar-button {
+  display: none;
+}
+
+/* Idle: no thumb (the shell is not a scroll area until it has the focus).
+ * Active: the thumb shows as the mode cue, and scrolling deepens the tint. */
+.subagentsWrap::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 4px;
+}
+
+.subagentsWrap:focus-within::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--dsw-alias-label-primary) 12%, transparent);
+}
+
+.subagentsWrap:focus-within.scrolling::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--dsw-alias-label-primary) 22%, transparent);
+}
+
+.subagentsWrap:focus-visible {
+  outline: 2px solid var(--dsw-alias-border-l2);
+  outline-offset: 2px;
+}
+
+.subagentsWrap .table thead tr,
+.subagentsWrap .table tbody tr {
+  height: var(--subagents-row-height);
+}
+
+/* The head stays up while the rows scroll underneath: scrolled rows pass
+ * behind it, so the background must be opaque (same token as the request
+ * pool's sticky head). */
+.subagentsWrap .table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--dsw-alias-bg-base, var(--dsw-alias-bg-layer-1));
+}
+
 .costCol {
   font-weight: 600;
 }

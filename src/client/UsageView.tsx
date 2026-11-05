@@ -116,6 +116,25 @@ export function UsageView({ useSessions, useProjection, sessionId, t }: UsageVie
   const [retryToken, setRetryToken] = useState(0)
   const retry = (): void => { setRetryToken(token => token + 1) }
   usePricingAssociationRefresh(retry)
+  // The subagent list's fade scrollbar: the list scrolls only once it has
+  // the focus (see `.subagentsWrap:focus-within` in the stylesheet — a
+  // plain hover must leave the page's wheel alone), and the thumb tints in
+  // only while it is actually being scrolled, then fades back 800ms after
+  // the last event (the request-pool history table's grammar). Direct
+  // classList writes, no re-render.
+  const subagentsRef = useRef<HTMLDivElement | null>(null)
+  const subagentsTimer = useRef<number | undefined>(undefined)
+  useEffect(() => () => window.clearTimeout(subagentsTimer.current), [])
+  const handleSubagentsScroll = (): void => {
+    const box = subagentsRef.current
+    const cls = styles['scrolling']
+    if (box === null || cls === undefined) return
+    box.classList.add(cls)
+    window.clearTimeout(subagentsTimer.current)
+    subagentsTimer.current = window.setTimeout(() => {
+      box.classList.remove(cls)
+    }, 800)
+  }
 
   const byId = useSessions(state => state.byId)
   // Build the child index once per mirror churn and share it across the
@@ -455,7 +474,14 @@ export function UsageView({ useSessions, useProjection, sessionId, t }: UsageVie
         {children.length === 0
           ? <p className={styles['muted']}>{t('view.subagents.none')}</p>
           : (
-            <div className={styles['tableWrap']}>
+            <div
+              ref={subagentsRef}
+              onScroll={handleSubagentsScroll}
+              className={styles['subagentsWrap']}
+              tabIndex={0}
+              role="region"
+              aria-label={t('view.subagents.scroll')}
+            >
               <table className={styles['table']} aria-label={t('view.subagents.title', { count: String(children.length) })}>
                 <thead>
                   <tr>
