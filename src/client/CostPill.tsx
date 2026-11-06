@@ -132,23 +132,52 @@ export function CostPill({ sessionId, useSessions, useProjection, t }: CostPillP
   )
   const hasSubs = scopeIds.length > 1
   const liveStats = useProjection('sessionStats')
+  // Identity of the id SET: a late mirror delivery changes it, while a real
+  // settled request only changes updatedAt / projection fingerprints.
+  const scopeIdsKey = scopeIds.join(',')
   const freshnessKey = buildStatsFreshnessKey(scopeIds, {
     activeSessionId: sessionId,
     rows: byId,
     liveSessionStats: liveStats,
   })
-  const requestKey = `${scopeIds.join('\n')}\n\t${freshnessKey}`
+  const requestKey = `${sessionId}\t${freshnessKey}`
   const debouncedKey = useDebouncedValue(requestKey, REFRESH_DEBOUNCE_MS)
-  const scopeResetKey = scopeIds.join('\n')
+  const scopeResetKey = `${sessionId}:${scopeIds.length}`
   const { onSummary } = useCostInflate(scopeResetKey, costRef)
 
   // The trigger's poll: subtree totals only (`fields=chip`), the lightest
   // read that feeds cost / tokens / hit rate.
+  // A late session-mirror / sessionStats delivery reruns the trigger's
+  // effect inside the first debounce window. Coalesce that run: it belongs
+  // to the same batch of events as the mount read, not a new settled
+  // request. A real pricing-association change is a new intent and refetches.
+  const recentRef = useRef<{
+    scopeIdsKey: string
+    associationTick: number
+    at: number
+    value: UsageSummary
+    coalesced: boolean
+  } | undefined>(undefined)
   const [treeRes, retryTree] = useAsyncResource<UsageSummary | null>(
     signal => {
-      const [idsPart] = debouncedKey.split('\n\t')
-      const ids = (idsPart ?? '').split('\n').filter(id => id !== '')
-      return fetchSummary(ids, 'chip', signal)
+      const recent = recentRef.current
+      // Two debounce windows cover a mirror that arrives a little after
+      // mount; `coalesced` allows it at most once. Only a changed id SET
+      // coalesces — projection / updatedAt churn is a real request and must
+      // refresh, as must a pricing-association change.
+      const canReuse = recent !== undefined
+        && !recent.coalesced
+        && recent.scopeIdsKey !== scopeIdsKey
+        && recent.associationTick === associationTick
+        && Date.now() - recent.at < REFRESH_DEBOUNCE_MS * 2
+      if (canReuse && recent !== undefined) {
+        recentRef.current = { ...recent, scopeIdsKey, at: Date.now(), coalesced: true }
+        return Promise.resolve(recent.value)
+      }
+      return fetchSummary(sessionId, 'subtree', 'chip', signal).then(value => {
+        if (value !== null) recentRef.current = { scopeIdsKey, associationTick, at: Date.now(), value, coalesced: false }
+        return value
+      })
     },
     [debouncedKey, associationTick],
     { silentAfterFirst: true, retryToken: 0 },
@@ -171,20 +200,12 @@ export function CostPill({ sessionId, useSessions, useProjection, t }: CostPillP
   // read (`fields=session`) carries byModel; the solo read splits the fold.
   // Both re-fire when request churn debounces through while open.
   const [detailRes] = useAsyncResource<UsageSummary | null>(
-    signal => {
-      if (!open) return Promise.resolve(null)
-      const [idsPart] = debouncedKey.split('\n\t')
-      const ids = (idsPart ?? '').split('\n').filter(id => id !== '')
-      return fetchSummary(ids, 'session', signal)
-    },
+    signal => open ? fetchSummary(sessionId, 'subtree', 'session', signal) : Promise.resolve(null),
     [open, debouncedKey, associationTick],
     { silentAfterFirst: true, retryToken: 0 },
   )
   const [selfRes] = useAsyncResource<UsageSummary | null>(
-    signal => {
-      if (!open || sessionId === '') return Promise.resolve(null)
-      return fetchSummary([sessionId], 'chip', signal)
-    },
+    signal => open && sessionId !== '' ? fetchSummary(sessionId, 'self', 'chip', signal) : Promise.resolve(null),
     [open, sessionId, debouncedKey, associationTick],
     { silentAfterFirst: true, retryToken: 0 },
   )
@@ -364,23 +385,25 @@ function looksLikeUsageSummary(value: unknown): value is UsageSummary {
 }
 
 /**
- * Fetch one stats summary. Throws on transport failure (network, abort,
- * non-2xx response, or a payload that doesn't look like a stats summary) so
- * the hook can keep the previous render in place.
- * @param sessionIds - the scope's session ids; an empty list skips the
- * fetch (returning null rather than throwing, so the hook's first-load
- * gate stays at "loading").
- * @param fields - `chip` for totals-only reads, `session` when byModel is
- * needed (the detail panel's per-model block).
+ * Fetch one stats summary. The request carries a RANGE RULE (root + scope),
+ * never an enumerated subtree — the host expands it from its lineage index,
+ * so the pill's chip/detail reads stay short even for hundreds of subagents.
+ * Throws on transport failure (network, abort, non-2xx response, or a payload
+ * that doesn't look like a stats summary) so the hook can keep the previous
+ * render in place.
+ * @param root - the scope's root session id; empty skips the fetch.
+ * @param scope - `subtree` for the folded total, `self` for the split.
+ * @param fields - `chip` for totals-only reads, `session` for byModel.
  * @param signal - the cancellation signal from the hook.
  */
 async function fetchSummary(
-  sessionIds: readonly string[],
+  root: string,
+  scope: 'self' | 'subtree',
   fields: 'chip' | 'session',
   signal: AbortSignal,
 ): Promise<UsageSummary | null> {
-  if (sessionIds.length === 0) return null
-  const response = await fetch(STATS_PATH + encodeStatsQuery({ sessionIds, fields }), {
+  if (root === '') return null
+  const response = await fetch(STATS_PATH + encodeStatsQuery({ root, scope, fields }), {
     headers: { accept: 'application/json' },
     signal,
   })

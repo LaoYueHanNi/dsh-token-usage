@@ -6,15 +6,16 @@
  * pill, 4 token buckets, cost, hit rate, TTFT average, decode throughput) with a
  * scope switch between the session alone and its whole subagent subtree, a
  * per-hour trend chart and the per-model table from the host stats route
- * (`sessionId`-scoped), and a subagent table below — each row drill-in
+ * (`root` + `scope` scoped), and a subagent table below — each row drill-in
  * switches the focus to that child.
  *
  * Data sources: token/cost figures come from the host route (the pricing
- * rule chain's authority); TTFT and throughput come from the framework's
- * retained `sessionStats` projection values (`useProjection` for the current
- * session, `byId[].projectionValues` for every other session), which cover
- * the whole log including history written before this plugin was installed.
- * A footnote states the two scopes so the difference is not a surprise.
+ * rule chain's authority). The header's TTFT and throughput come from the
+ * framework's retained `sessionStats` projection (`useProjection`), which
+ * covers history written before this plugin was installed; the SUBAGENT
+ * table's two timing columns instead read `children[].timing`, folded by the
+ * host from recorded requests (post-install, timed requests only). A
+ * footnote states both scopes so the difference is not a surprise.
  *
  * The root declares `data-conversation-composer-overlay` — the same host
  * opt-in Trajectory uses. ConversationRoot hides the chat-column width
@@ -74,14 +75,20 @@ export interface UsageViewProps {
   t: TranslateNS<'token-usage'>
 }
 
-/** One fetch of the session-scoped summary from the host stats route,
- * including the direct-child breakdown for the subagent table. */
+/** One fetch of the session-scoped summary from the host stats route.
+ * The request carries a RANGE RULE (root + scope), never the enumerated
+ * subtree: the host expands it from its session-metadata lineage, so the URL
+ * stays O(1) however many subagents the conversation has. */
 function fetchSessionSummary(
-  sessionIds: readonly string[],
-  childGroups: readonly (readonly string[])[],
+  root: string,
+  scope: UsageScope,
   signal: AbortSignal,
 ): Promise<UsageSummary> {
-  return fetch(STATS_PATH + encodeStatsQuery({ sessionIds, childGroups, fields: 'session' }), { signal })
+  return fetch(STATS_PATH + encodeStatsQuery({
+    root,
+    scope: scope === 'tree' ? 'subtree' : 'self',
+    fields: 'session',
+  }), { signal })
     .then(response => {
       if (!response.ok) throw new Error(`HTTP ${String(response.status)}`)
       return response.json() as Promise<unknown>
@@ -147,21 +154,26 @@ export function UsageView({ useSessions, useProjection, sessionId, t }: UsageVie
     [byId, scope, focusId, childIndex],
   )
   const children = useMemo(() => directSubagentIds(byId, focusId, childIndex), [byId, focusId, childIndex])
-  // Tree scope folds each direct child with its own descendants so the
-  // subagent-table numbers add back up to the header total.
-  const childGroups = useMemo(
-    () => children.map(id => (scope === 'tree' ? subtreeIds(byId, id, childIndex) : [id])),
-    [children, scope, byId, childIndex],
-  )
+  // The per-child breakdown is derived server-side from the same lineage;
+  // the view only needs the child ids to render rows and drill in.
   const backParent = subagentParentOf(byId, focusId)
   // Live sessionStats updates every request step; mirror updatedAt alone
   // does not — fold both into the debounce key (same cadence as TTFT).
   const liveStats = useProjection('sessionStats')
+  const scopedIds = [...new Set([...scopeIds, ...children])]
+  // Identity of the id SET (not its per-id figures). A late mirror delivery
+  // changes this; a real settled request only changes updatedAt / projection
+  // fingerprints and must still trigger a refresh.
+  const scopeIdsKey = scopedIds.join(',')
   const freshnessKey = buildStatsFreshnessKey(
-    [...new Set([...scopeIds, ...children])],
+    scopedIds,
     { activeSessionId: sessionId, rows: byId, liveSessionStats: liveStats },
   )
-  const requestKey = `${scopeIds.join('\n')}\n\t${childGroups.map(group => group.join(',')).join(';')}\n\t${freshnessKey}`
+  // The debounce identity is root + scope + freshness, NOT the enumerated
+  // subtree: scopeIds still drive TTFT aggregation above (browser memory
+  // only), but joining hundreds of ids into a request key used to build a
+  // 17 KiB string on every render and, on the wire, HTTP 431.
+  const requestKey = `${focusId}\t${scope}\t${freshnessKey}`
   const debouncedKey = useDebouncedValue(requestKey, REFRESH_DEBOUNCE_MS)
 
   // Visibility fallback polling for the request pool: the event-driven
@@ -179,31 +191,59 @@ export function UsageView({ useSessions, useProjection, sessionId, t }: UsageVie
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const fetchingRef = useRef(false)
   const fetchVersionRef = useRef(0)
+  /** The last successful read. A late session-mirror / sessionStats delivery
+   * bumps the freshness key inside the first debounce window and reruns the
+   * effect; coalescing that run avoids two identical GETs on opening the tab. */
+  const recentRef = useRef<{
+    scopeKey: string
+    idsKey: string
+    retryToken: number
+    pollTick: number
+    at: number
+    value: UsageSummary
+    coalesced: boolean
+  } | undefined>(undefined)
   // Scope changes are immediate; only event freshness is debounced. The
-  // request and its cache identity must always describe the same range.
-  const scopeKey = `${scopeIds.join('\n')}\n\t${childGroups.map(group => group.join(',')).join(';')}`
+  // request and its cache identity must always describe the same range —
+  // a constant-size root + scope, never an enumerated id list.
+  const scopeKey = `${focusId}\t${scope}`
 
   const [summaryState] = useAsyncResource<UsageSummary>(
     signal => {
       clearTimeout(pollTimerRef.current)
       fetchingRef.current = true
       const version = ++fetchVersionRef.current
-      const [idsPart, groupsPart] = scopeKey.split('\n\t')
-      const sessionIds = (idsPart ?? '').split('\n').filter(id => id !== '')
-      const childGroups = (groupsPart ?? '').split(';').filter(group => group !== '').map(group => group.split(','))
+      const recent = recentRef.current
+      // Only a mirror delivery coalesces: the id SET changed while the
+      // scope / retry / poll intent stayed the same. A projection or
+      // updatedAt churn (a real settled request) keeps the same ids and must
+      // hit the route. Two debounce windows cover a mirror arriving a little
+      // after mount; `coalesced` allows this at most once per range.
+      const canReuse = recent !== undefined
+        && !recent.coalesced
+        && recent.idsKey !== scopeIdsKey
+        && recent.scopeKey === scopeKey
+        && recent.retryToken === retryToken
+        && recent.pollTick === pollTick
+        && Date.now() - recent.at < REFRESH_DEBOUNCE_MS * 2
+      const settle = (value: UsageSummary): UsageSummary => {
+        recentRef.current = { scopeKey, idsKey: scopeIdsKey, retryToken, pollTick, at: Date.now(), value, coalesced: canReuse }
+        if (!signal.aborted) {
+          lastOkAtRef.current = Date.now()
+          setStaleAt(undefined)
+        }
+        return value
+      }
       // Stale-snapshot honesty: a failed refresh keeps the previous
       // snapshot on screen (silentAfterFirst) and stamps the failure so the
       // pool shows "数据截至 …" instead of pretending to be live. A new
       // scope's first failure still lands in `error` (no snapshot to keep —
       // the scopeKey switch resets both the kept value and this stamp).
-      return fetchSessionSummary(sessionIds, childGroups, signal)
-        .then(value => {
-          if (!signal.aborted) {
-            lastOkAtRef.current = Date.now()
-            setStaleAt(undefined)
-          }
-          return value
-        })
+      const request: Promise<UsageSummary> = canReuse && recent !== undefined
+        ? Promise.resolve(recent.value)
+        : fetchSessionSummary(focusId, scope, signal)
+      return request
+        .then(settle)
         .catch((error: unknown) => {
           if (!signal.aborted && lastOkAtRef.current !== undefined) setStaleAt(lastOkAtRef.current)
           throw error
@@ -217,7 +257,7 @@ export function UsageView({ useSessions, useProjection, sessionId, t }: UsageVie
           }
         })
     },
-    [debouncedKey.split('\n\t')[2], retryToken, pollTick],
+    [debouncedKey.split('\t')[2], retryToken, pollTick],
     { silentAfterFirst: true, retryToken, scopeKey },
   )
   // A range switch also drops the freshness stamp — it belonged to the
@@ -498,9 +538,10 @@ export function UsageView({ useSessions, useProjection, sessionId, t }: UsageVie
                   {children.map(id => {
                     const child = byId[id as SessionId]
                     const row = summary.children?.[id]
-                    const childStats = aggregateProjections([
-                      byId[id as SessionId]?.projectionValues?.sessionStats,
-                    ])
+                    // TTFT / throughput come from the host's record-derived
+                    // breakdown, NOT the runtime mirror: finished subagents
+                    // do not retain a sessionStats projection.
+                    const timing = row?.timing
                     // A nested-subagent marker: the count of THIS child's own
                     // direct subagents, so the table signals before the
                     // drill-in that the row has a subtree of its own.
@@ -532,8 +573,8 @@ export function UsageView({ useSessions, useProjection, sessionId, t }: UsageVie
                           {row !== undefined && costsAvailable(summary.costState) && costsAvailable(row.costState) ? formatCost(row.totalCost, view) : '—'}
                         </td>
                         <td>{row !== undefined ? <HitRateText totals={row.total} /> : '—'}</td>
-                        <td>{childStats !== undefined && childStats.ttftSteps > 0 ? formatTtft(childStats.ttftMs / childStats.ttftSteps) : '—'}</td>
-                        <td>{childStats !== undefined && childStats.decodeMs > 0 ? `${formatSpeed(childStats.decodeTokens / (childStats.decodeMs / 1_000))} tok/s` : '—'}</td>
+                        <td>{timing !== undefined && timing.ttftSteps > 0 ? formatTtft(timing.ttftMs / timing.ttftSteps) : '—'}</td>
+                        <td>{timing !== undefined && timing.decodeMs > 0 ? `${formatSpeed(timing.decodeTokens / (timing.decodeMs / 1_000))} tok/s` : '—'}</td>
                       </tr>
                     )
                   })}

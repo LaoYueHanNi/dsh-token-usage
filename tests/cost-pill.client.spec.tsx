@@ -25,7 +25,7 @@ import { CostPill, FETCH_FAILURE_RETRY_MS, type CostPillProps } from '../src/cli
 import { zh } from '../src/client/locales.ts'
 import { ASSOCIATIONS_PATH, PRICING_PATH } from '../src/wire.ts'
 import type { ModelResolution, UsageSummary } from '../src/wire.ts'
-import { makeUseProjection, useSessionsFromState } from './test-kit.ts'
+import { makeSessionStateHook, makeUseProjection, useSessionsFromState } from './test-kit.ts'
 
 vi.mock('@deepseek-ai/dsh-client-ui-primitives', async () => {
   const { cloneElement, useState } = await import('react')
@@ -160,16 +160,16 @@ function stubFetchSequence(payloads: ReadonlyArray<UsageSummary | Error>): Retur
 }
 
 /** Stub fetch routed the way the host route serves the pill's three reads:
- * `fields=session` → the byModel detail; a multi-id `chip` → subtree
- * totals; a single-id `chip` → the solo totals. */
+ * `fields=session` → the byModel detail; a `subtree` chip → folded totals;
+ * a `self` chip → the solo totals. */
 function stubFetchRouted(): ReturnType<typeof vi.fn> {
   const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
     const url = new URL(String(input), 'http://localhost')
-    const ids = url.searchParams.getAll('sessionId')
     const fields = url.searchParams.get('fields') ?? 'full'
+    const tree = url.searchParams.get('scope') === 'subtree'
     const body = fields === 'session'
       ? TREE_DETAIL
-      : ids.length > 1
+      : tree
         ? TREE_SUMMARY
         : SELF_SUMMARY
     return new Response(JSON.stringify(body), { status: 200 })
@@ -184,10 +184,10 @@ function stubTreeSequence(payloads: ReadonlyArray<UsageSummary | Error>): Return
   const queue = [...payloads]
   const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
     const url = new URL(String(input), 'http://localhost')
-    const ids = url.searchParams.getAll('sessionId')
     const fields = url.searchParams.get('fields') ?? 'full'
+    const tree = url.searchParams.get('scope') === 'subtree'
     if (fields === 'session') return new Response(JSON.stringify(TREE_DETAIL), { status: 200 })
-    if (ids.length <= 1) return new Response(JSON.stringify(SELF_SUMMARY), { status: 200 })
+    if (!tree) return new Response(JSON.stringify(SELF_SUMMARY), { status: 200 })
     const next = queue.shift() ?? TREE_SUMMARY
     if (next instanceof Error) throw next
     return new Response(JSON.stringify(next), { status: 200 })
@@ -299,10 +299,40 @@ describe('CostPill', () => {
     // the accessible name and the open panel, not in the dock row.
     expect(pill.textContent).not.toContain('含子会话')
     expect(pill.getAttribute('aria-label')).toBe('费用（含子会话）12.34￥，点击展开用量明细')
-    // The trigger polls the subtree totals read.
+    // The trigger polls the subtree totals read: a constant-size range
+    // rule, never an enumerated id list.
     expect(fetchMock.mock.calls[0]?.[0]).toBe(
-      '/token-usage/stats?sessionId=session-a&sessionId=child&fields=chip',
+      '/token-usage/stats?root=session-a&scope=subtree&fields=chip',
     )
+  })
+
+  it('does not refetch the chip when the session mirror is delivered after mount', async () => {
+    const fetchMock = stubFetch(TREE_SUMMARY)
+    const rootOnly = {
+      ids: ['session-a'],
+      byId: { 'session-a': TREE_BY_ID['session-a']! },
+      current: 'session-a',
+      phase: 'ready',
+      subagentsByParent: {},
+      jobsBySession: {},
+      currentAddress: undefined,
+    } as SessionListState
+    const kit = makeSessionStateHook<SessionListState>(rootOnly)
+    const props = {
+      sessionId: 'session-a',
+      t,
+      useProjection: makeUseProjection(LIVE_STATS),
+      useSessions: kit.hook,
+    } as CostPillProps
+    const view = render(<CostPill {...props} />)
+    await screen.findByRole('button')
+    const calls = fetchMock.mock.calls.length
+    // Late mirror delivery bumps the freshness key; the second effect run
+    // must reuse the mount result instead of a duplicate chip GET.
+    kit.setState({ ...rootOnly, ids: ['session-a', 'child'], byId: TREE_BY_ID } as SessionListState)
+    view.rerender(<CostPill {...props} />)
+    await new Promise(resolve => setTimeout(resolve, 700))
+    expect(fetchMock.mock.calls.length).toBe(calls)
   })
 
   it('renders a bare cost for a solo session (official pills share the scope)', async () => {

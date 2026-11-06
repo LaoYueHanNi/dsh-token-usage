@@ -36,6 +36,20 @@ export interface PricingSyncResult {
  * is the header strip (totals only). */
 export type StatsFields = 'chip' | 'session' | 'full'
 
+/**
+ * How a session-scoped read describes its range. `self` is the root session
+ * alone; `subtree` folds the root and every subagent descendant. The host
+ * expands the range from its own session-metadata lineage index, so a scope
+ * read's URL stays a constant length no matter how large the subtree is —
+ * the reason this vocabulary replaced explicit `sessionId` lists.
+ */
+export type StatsScope = 'self' | 'subtree'
+
+/** Query key carrying the scope's root session id. */
+export const ROOT_PARAM = 'root'
+/** Query key carrying the scope kind; omitted means `self`. */
+export const SCOPE_PARAM = 'scope'
+
 /** Encode one repeated query key (`sessionId=a&sessionId=b`). Empty list yields ''. */
 export function encodeRepeatedParam(key: string, values: readonly string[]): string {
   return values.map(value => `${key}=${encodeURIComponent(value)}`).join('&')
@@ -93,20 +107,36 @@ export function decodeChildGroups(source: URL | URLSearchParams): ChildGroup[] {
 
 /**
  * Build the stats query string (including the leading `?`, or '' when
- * unconstrained). `fields: 'full'` is omitted — that is the default the
- * settings page already hits.
+ * unconstrained). A `root` request describes a RANGE RULE: the host expands
+ * `scope` from its session-metadata lineage index, so the URL never grows
+ * with the number of subagents — a subtree of 150+ sessions used to push the
+ * request line past Node's 16 KiB header limit (HTTP 431). `scope=self` is
+ * the default and is omitted from the wire.
+ *
+ * The explicit `sessionIds` / `childGroups` form is retained for legacy
+ * callers (older browser bundles, hand-written URLs and tests); new client
+ * code must use `root`, and the two forms are mutually exclusive.
+ * `fields: 'full'` is omitted — that is the default the settings page hits.
  */
 export function encodeStatsQuery(options: {
+  root?: string
+  scope?: StatsScope
   sessionIds?: readonly string[]
   childGroups?: readonly (readonly string[])[]
   fields?: StatsFields
 }): string {
   const parts: string[] = []
-  if (options.sessionIds !== undefined && options.sessionIds.length > 0) {
-    parts.push(encodeRepeatedParam('sessionId', options.sessionIds))
+  if (options.root !== undefined && options.root !== '') {
+    parts.push(`${ROOT_PARAM}=${encodeURIComponent(options.root)}`)
+    if (options.scope === 'subtree') parts.push(`${SCOPE_PARAM}=subtree`)
+  } else {
+    // Legacy explicit-id form. Never produced by the browser half.
+    if (options.sessionIds !== undefined && options.sessionIds.length > 0) {
+      parts.push(encodeRepeatedParam('sessionId', options.sessionIds))
+    }
+    const children = options.childGroups !== undefined ? encodeChildGroups(options.childGroups) : ''
+    if (children !== '') parts.push(children)
   }
-  const children = options.childGroups !== undefined ? encodeChildGroups(options.childGroups) : ''
-  if (children !== '') parts.push(children)
   if (options.fields !== undefined && options.fields !== 'full') {
     parts.push(`fields=${options.fields}`)
   }
@@ -135,6 +165,19 @@ export function encodeSessionScope(ids: readonly string[]): string {
  */
 export function decodeSessionScope(source: URL | URLSearchParams): string[] {
   return decodeRepeatedParam(source, 'sessionId')
+}
+
+/**
+ * Parse a scope-rule read off a URL or its parsed params. Returns undefined
+ * when no `root` is present — a whole-log read, or a legacy explicit-id read
+ * that still carries `sessionId` / `childId` parameters. A missing or
+ * unrecognized `scope` means `self`.
+ */
+export function decodeStatsScope(source: URL | URLSearchParams): { root: string; scope: StatsScope } | undefined {
+  const params = source instanceof URL ? source.searchParams : source
+  const root = params.get(ROOT_PARAM)
+  if (root === null || root === '') return undefined
+  return { root, scope: params.get(SCOPE_PARAM) === 'subtree' ? 'subtree' : 'self' }
 }
 
 /**
@@ -281,6 +324,24 @@ export interface ChildUsageSummary {
   total: UsageTotals
   totalCost: number
   unpricedModels: string[]
+  /** Timing aggregates derived server-side from this group's usage records.
+   * Absent when no request in the group carried timing. Covers only
+   * post-install recorded requests, unlike the header's projection figures. */
+  timing?: ChildTiming
+}
+
+/** The buckets the usage view's TTFT / throughput cells read. Same shape as
+ * the framework's `SessionStatsProjection` aggregates, but computed by the
+ * host from persisted records instead of the runtime session mirror. */
+export interface ChildTiming {
+  /** Summed first-token latency over `ttftSteps`. */
+  ttftMs: number
+  /** Steps carrying a recorded first token. */
+  ttftSteps: number
+  /** Summed decode wall time (first token → message). */
+  decodeMs: number
+  /** Summed provider output tokens over the same steps. */
+  decodeTokens: number
 }
 
 /** One per-hour × per-model aggregation row, keyed by local `YYYY-MM-DDTHH`. */
@@ -774,7 +835,8 @@ export type StatsPayload = (CostedSummaryWire & {
   /** Route key → latest display name for the provider dimension; absent
    * when the host has no registry seam (the client falls back to keys). */
   providerNames?: Readonly<Record<string, string>>
-  /** Direct-child breakdown keyed by child id, when the request named `childId`. */
+  /** Direct-child breakdown keyed by child id, derived server-side from the
+   * scope root's lineage on `fields=session` reads (absent on chip / whole). */
   children?: Readonly<Record<string, ChildUsageSummary>>
 })
 

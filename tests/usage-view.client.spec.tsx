@@ -2,7 +2,7 @@
 /**
  * Usage conversation-view tab tests: renders loading / error / ready over a
  * stubbed fetch, pins the stat cards (4 token buckets, cost, hit rate, TTFT,
- * throughput), the sessionId query parameters for the scope switch and the
+ * throughput), the root + scope query for the range switch and the
  * subagent drill-in, and the empty-session em-dash degradation.
  */
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
@@ -174,11 +174,19 @@ const NESTED_BY_ID: SessionListState['byId'] = {
   grandchild: { id: 'grandchild', displayTitle: 'Deep Agent', parentId: 'child', origin: 'subagent', blank: false, running: false, updatedAt: 3 },
 }
 
-/** A fetch stub answering per sessionId query (joined with '+'). */
+/** A fetch stub answering per root + scope query. Override keys keep their
+ * legacy "scope ids joined with '+'" names so existing fixtures stay
+ * readable: a `subtree` read matches a key naming that root's descendants,
+ * a `self` read matches the root key itself. */
 function stubFetch(overrides: Partial<Record<string, UsageSummary>> = {}): ReturnType<typeof vi.fn> {
   const mock = vi.fn(async (input: unknown): Promise<unknown> => {
     const url = new URL(String(input), 'http://localhost')
-    const key = url.searchParams.getAll('sessionId').join('+')
+    const root = url.searchParams.get('root') ?? ''
+    const tree = url.searchParams.get('scope') === 'subtree'
+    const overrideKey = tree
+      ? Object.keys(overrides).find(key => key.startsWith(`${root}+`))
+      : root
+    const key = overrideKey ?? (tree ? `${root}+child` : root)
     const body = overrides[key] ?? (key === 'root' ? ROOT_SUMMARY
       : key === 'child' ? CHILD_SUMMARY
         : key === 'root+child' ? TREE_SUMMARY
@@ -194,25 +202,26 @@ function renderView(overrides: {
   liveStats?: SessionStatsProjection | undefined
   sessionId?: string
   state?: SessionListState
-} = {}): { setMirror: (next: SessionListState) => void; unmount: () => void } {
+} = {}): { setMirror: (next: SessionListState) => void; rerender: () => void; unmount: () => void } {
   const kit = makeSessionStateHook<SessionListState>(
     overrides.state ?? { ...SESSION_STATE, byId: overrides.byId ?? SESSION_STATE.byId } as SessionListState,
   )
-  // Build the props from the kit so the framework-hook types flow through
-  // without `as never` casts. The session/view/sessionKit shape is faked
-  // by `noSnapshot` so the per-test fakes set up only what the test cares
-  // about (the session-list mirror + the live projection).
-  const view = render(<UsageView
-    useSessions={kit.hook}
-    useProjection={makeUseProjection(overrides.liveStats)}
-    sessionId={overrides.sessionId ?? 'root'}
-    t={t}
-  />)
-  return { setMirror: kit.setState, unmount: view.unmount }
+  // Re-render on demand so a test can deliver the mirror AFTER mount
+  // (the framework's own async delivery is what the coalescing guards).
+  const props = {
+    useSessions: kit.hook,
+    useProjection: makeUseProjection(overrides.liveStats),
+    sessionId: overrides.sessionId ?? 'root',
+    t,
+  }
+  const view = render(<UsageView {...props} />)
+  return { setMirror: kit.setState, rerender: () => view.rerender(<UsageView {...props} />), unmount: view.unmount }
 }
 
-/** Whether a stubbed fetch received a call with exactly the given session ids
- * and optional childId groups. */
+/** Whether a stubbed fetch received a call for the given range. The first
+ * id is the expected root; more than one id means the subtree scope. The
+ * third argument asserts the legacy `childId` groups are no longer on the
+ * wire — child breakdowns are derived server-side now. */
 function sawCall(
   fetch: ReturnType<typeof vi.fn>,
   ids: readonly string[],
@@ -220,13 +229,13 @@ function sawCall(
 ): boolean {
   return fetch.mock.calls.some((call) => {
     const url = new URL(String(call[0]), 'http://localhost')
-    const got = url.searchParams.getAll('sessionId')
-    if (!(got.length === ids.length && got.every((value, index) => value === ids[index]))) return false
     if (url.searchParams.get('fields') !== 'session') return false
-    if (childGroups === undefined) return true
-    const child = url.searchParams.getAll('childId')
-    const expected = childGroups.map(group => group.join(','))
-    return child.length === expected.length && child.every((value, index) => value === expected[index])
+    const root = url.searchParams.get('root')
+    if (root === null || root !== ids[0]) return false
+    const scope = url.searchParams.get('scope') ?? 'self'
+    if (scope !== (ids.length > 1 ? 'subtree' : 'self')) return false
+    if (childGroups !== undefined && url.searchParams.getAll('childId').length > 0) return false
+    return true
   })
 }
 
@@ -263,7 +272,7 @@ describe('UsageView', () => {
       if (url.pathname === PRICING_PATH) return Response.json({ currency: 'CNY', usdExchangeRate: 7, costState: 'ready', models: [{ modelId: targetModelId, aliasPatterns: [], rules: {
         base: { inputPerMillion: 1, outputPerMillion: 2 }, timeRules: [], contextTiers: [], dailySlots: [],
       } }] })
-      const original = url.searchParams.getAll('sessionId').length > 1 ? TREE_SUMMARY : ROOT_SUMMARY
+      const original = url.searchParams.get('scope') === 'subtree' ? TREE_SUMMARY : ROOT_SUMMARY
       return Response.json({ ...original, costState: 'ready', modelResolutions: [associations().resolution], unpricedModels: saved ? [] : [sourceModel],
         byModel: [{ ...original.byModel[0]!, model: saved ? targetModelId : sourceModel }] })
     })
@@ -346,8 +355,8 @@ describe('UsageView', () => {
     // Model table + chart titles.
     expect(screen.getByText('deepseek-chat')).toBeTruthy()
     expect(screen.getByText('趋势')).toBeTruthy()
-    // The scope default fetches only the root session, with the direct child
-    // as a childId on the SAME request (no N+1).
+    // The scope default fetches the root alone in ONE request (no N+1);
+    // the child breakdown rides the response, not the query string.
     await waitFor(() => expect(sawCall(fetch, ['root'], [['child']])).toBe(true))
     expect(fetch.mock.calls).toHaveLength(1)
     // The subagent table lists the child with its own totals from `children`.
@@ -356,7 +365,7 @@ describe('UsageView', () => {
     expectText('3.21￥')
   })
 
-  it('switches the scope to the whole subtree with repeated sessionId params', async () => {
+  it('switches the scope to the whole subtree with a scope rule', async () => {
     const fetch = stubFetch()
     renderView({ liveStats: LIVE_STATS })
     // Initial scope is session-only; switch to the tree.
@@ -398,6 +407,46 @@ describe('UsageView', () => {
     // Wait for the ready state, then check both TTFT and throughput cards
     // degrade to the unavailable marker.
     await waitFor(() => expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(2))
+  })
+
+  it('renders child TTFT and throughput from the host timing breakdown', async () => {
+    const withTiming: UsageSummary = {
+      ...ROOT_SUMMARY,
+      children: {
+        child: {
+          total: { requests: 3, inputTokens: 30_000, outputTokens: 2_000, cacheReadTokens: 10_000, cacheWriteTokens: 500 },
+          totalCost: 3.21,
+          unpricedModels: [],
+          timing: { ttftMs: 1_000, ttftSteps: 2, decodeMs: 2_000, decodeTokens: 100 },
+        },
+      },
+    }
+    stubFetch({ root: withTiming })
+    // No live projection: the header cards must still show em-dashes while
+    // the child row gets its figures from the response, proving the two
+    // columns no longer depend on the runtime mirror.
+    renderView({ liveStats: undefined })
+    expect(await screen.findByText('0.5s')).toBeTruthy() // 1000ms / 2 steps
+    expect(screen.getByText('50 tok/s')).toBeTruthy() // 100 tokens / 2s
+    // Header TTFT is a bare em-dash, throughput is "— tok/s"; both still
+    // degrade without a live projection even though the child row has data.
+    expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getByText('— tok/s')).toBeTruthy()
+  })
+
+  it('does not refetch when the session mirror is delivered after mount', async () => {
+    const fetch = stubFetch()
+    const rootOnly = { ...SESSION_STATE, byId: { root: BY_ID.root! } } as SessionListState
+    const { setMirror, rerender } = renderView({ state: rootOnly })
+    await waitFor(() => expectText('12.34￥'))
+    const calls = fetch.mock.calls.length
+    // The mirror arrives late, changing the freshness key inside the debounce
+    // window. That effect run must reuse the mount result, not issue a second
+    // identical GET (the two-request bug on first opening the tab).
+    setMirror(SESSION_STATE as SessionListState)
+    rerender()
+    await new Promise(resolve => setTimeout(resolve, 700))
+    expect(fetch.mock.calls.length).toBe(calls)
   })
 
   it('shows the per-code failure breakdown on the failure-pill hover', async () => {
@@ -542,8 +591,9 @@ describe('UsageView', () => {
     let resolveSecond: (value: unknown) => void = () => {}
     const fetch = vi.fn(async (input: unknown): Promise<unknown> => {
       const url = new URL(String(input), 'http://localhost')
-      const ids = url.searchParams.getAll('sessionId').join('+')
-      if (ids === 'root+child') {
+      const tree = url.searchParams.get('scope') === 'subtree'
+      const root = url.searchParams.get('root') ?? ''
+      if (tree) {
         treeCalls += 1
         // The first tree-scope fetch stays pending; the component must keep
         // showing the previously loaded figures while it is in flight.
@@ -552,7 +602,7 @@ describe('UsageView', () => {
         }
         return { ok: true, status: 200, json: async () => ({ ...TREE_SUMMARY, totalCost: 99.99 }) }
       }
-      return { ok: true, status: 200, json: async () => (ids === 'root' ? ROOT_SUMMARY : CHILD_SUMMARY) }
+      return { ok: true, status: 200, json: async () => (root === 'root' ? ROOT_SUMMARY : CHILD_SUMMARY) }
     })
     vi.stubGlobal('fetch', fetch)
     const { setMirror } = renderView({ liveStats: LIVE_STATS })
@@ -996,8 +1046,8 @@ describe('UsageView request pool', () => {
   it('lands a new scope’s first failure in error instead of showing the previous scope’s snapshot', async () => {
     let failTree = false
     const mock = vi.fn(async (input: unknown): Promise<unknown> => {
-      const ids = new URL(String(input), 'http://localhost').searchParams.getAll('sessionId')
-      if (ids.length > 1) {
+      const tree = new URL(String(input), 'http://localhost').searchParams.get('scope') === 'subtree'
+      if (tree) {
         if (failTree) throw new Error('tree fetch failed')
         return { ok: true, status: 200, json: async () => TREE_SUMMARY }
       }
@@ -1017,9 +1067,12 @@ describe('UsageView request pool', () => {
   it('never fetches the previous range under a new scope when visibility refreshes during the debounce window', async () => {
     const requested: string[] = []
     const mock = vi.fn(async (input: unknown): Promise<unknown> => {
-      const ids = new URL(String(input), 'http://localhost').searchParams.getAll('sessionId').join('+')
-      requested.push(ids)
-      if (ids === 'root+child') throw new Error('new scope unavailable')
+      const params = new URL(String(input), 'http://localhost').searchParams
+      // Keep the recorded range in the old "ids joined with '+'" shape so
+      // the assertion below still reads naturally.
+      const range = `${params.get('root') ?? ''}${params.get('scope') === 'subtree' ? '+child' : ''}`
+      requested.push(range)
+      if (range === 'root+child') throw new Error('new scope unavailable')
       return { ok: true, status: 200, json: async () => ROOT_SUMMARY }
     })
     vi.stubGlobal('fetch', mock)
@@ -1047,8 +1100,8 @@ describe('UsageView request pool', () => {
   it('drops a previous scope’s late response after the scope has switched', async () => {
     let resolveRoot: (value: unknown) => void = () => {}
     const mock = vi.fn(async (input: unknown): Promise<unknown> => {
-      const ids = new URL(String(input), 'http://localhost').searchParams.getAll('sessionId')
-      if (ids.length > 1) return { ok: true, status: 200, json: async () => TREE_SUMMARY }
+      const tree = new URL(String(input), 'http://localhost').searchParams.get('scope') === 'subtree'
+      if (tree) return { ok: true, status: 200, json: async () => TREE_SUMMARY }
       return await new Promise((resolve) => { resolveRoot = resolve })
     })
     vi.stubGlobal('fetch', mock)

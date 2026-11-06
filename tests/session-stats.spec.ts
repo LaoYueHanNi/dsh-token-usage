@@ -10,7 +10,7 @@ import {
   aggregateProjections, buildChildIndex, buildStatsFreshnessKey, directSubagentIds, sessionStatsFingerprint, subagentParentOf, subtreeIds,
 } from '../src/client/session-stats.ts'
 import type { SessionRows } from '../src/client/session-stats.ts'
-import { decodeChildGroups, encodeSessionScope, encodeStatsQuery } from '../src/wire.ts'
+import { decodeChildGroups, decodeStatsScope, encodeSessionScope, encodeStatsQuery } from '../src/wire.ts'
 
 /** A session mirror with a root, one subagent child, one nested grandchild,
  * an ordinary fork (not a subagent), a cycle pair, and one self-parent. */
@@ -140,5 +140,29 @@ describe('encodeStatsQuery', () => {
       { id: 'child', sessionIds: ['child', 'gc'] },
       { id: 'other', sessionIds: ['other'] },
     ])
+  })
+
+  it('encodes a root + scope range rule in constant size', () => {
+    expect(encodeStatsQuery({ root: 'alpha', fields: 'session' })).toBe('?root=alpha&fields=session')
+    expect(encodeStatsQuery({ root: 'alpha', scope: 'subtree', fields: 'session' }))
+      .toBe('?root=alpha&scope=subtree&fields=session')
+    expect(encodeStatsQuery({ root: 'alpha', scope: 'self', fields: 'chip' }))
+      .toBe('?root=alpha&fields=chip')
+    // A root request wins over the legacy explicit-id form, and no id list
+    // ever lands on the wire: 200 children are still one short rule.
+    expect(encodeStatsQuery({ root: 'alpha', scope: 'subtree', sessionIds: ['ignored'], fields: 'chip' }))
+      .toBe('?root=alpha&scope=subtree&fields=chip')
+    expect(encodeStatsQuery({ root: 'alpha', scope: 'subtree', fields: 'session' }).length).toBeLessThan(80)
+  })
+
+  it('parses a scope rule, defaulting to self and ignoring legacy reads', () => {
+    expect(decodeStatsScope(new URL('http://localhost/stats?root=alpha&scope=subtree')))
+      .toEqual({ root: 'alpha', scope: 'subtree' })
+    expect(decodeStatsScope(new URL('http://localhost/stats?root=alpha')))
+      .toEqual({ root: 'alpha', scope: 'self' })
+    expect(decodeStatsScope(new URL('http://localhost/stats?root=alpha&scope=nonsense')))
+      .toEqual({ root: 'alpha', scope: 'self' })
+    expect(decodeStatsScope(new URL('http://localhost/stats?sessionId=alpha&childId=child')))
+      .toBeUndefined()
   })
 })

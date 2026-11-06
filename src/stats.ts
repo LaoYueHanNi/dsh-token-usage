@@ -24,11 +24,14 @@ import { readRollup, writeRollup, ROLLUP_FILE_NAME, ROLLUP_TMP_FILE_NAME, ROLLUP
 import type { RollupFile } from './rollup.ts'
 import type {
   AuxSummary,
+  ChildGroup,
+  ChildTiming,
   CostedModelRow,
   CostedProviderRow,
   CostedSessionCell,
   CostedSummary,
   CostState,
+  StatsScope,
   ModelPerf,
   ModelRates,
   PricingTable,
@@ -424,6 +427,46 @@ export function filterRecordsBySessions(
 ): UsageRecord[] {
   const wanted = new Set(sessionIds)
   return records.filter(record => wanted.has(record.sessionId))
+}
+
+/**
+ * Fold first-token latency and decode throughput over a set of records into
+ * the same buckets the framework's `sessionStats` projection uses. Unlike
+ * the projection this sees only requests the plugin recorded — no
+ * pre-install history — which is what a per-child breakdown can honestly
+ * report for sessions the runtime mirror no longer retains.
+ *
+ * A record contributes only when it carries a first-token figure, a positive
+ * output token count and a positive decode window; a whole-body (non-streaming)
+ * response with no first token must not fabricate an enormous tok/s. The
+ * exact `attemptTiming.firstTokenAt → settledAt` clock wins over the legacy
+ * `latencyMs - firstTokenLatencyMs` estimate when both exist.
+ * @param records - the scoped records (already filtered to one child group).
+ * @returns the summed buckets, or undefined when no record qualified.
+ */
+export function aggregateRequestTiming(
+  records: readonly UsageRecord[],
+): ChildTiming | undefined {
+  let ttftMs = 0
+  let ttftSteps = 0
+  let decodeMs = 0
+  let decodeTokens = 0
+  for (const record of records) {
+    const firstToken = record.firstTokenLatencyMs
+    const output = record.usage?.outputTokens ?? 0
+    if (firstToken === undefined || !Number.isFinite(firstToken) || firstToken < 0) continue
+    if (!Number.isFinite(output) || output <= 0) continue
+    const clock = record.attemptTiming
+    const genMs = clock?.firstTokenAt !== undefined
+      ? clock.settledAt - clock.firstTokenAt
+      : record.latencyMs !== undefined ? record.latencyMs - firstToken : undefined
+    if (genMs === undefined || !Number.isFinite(genMs) || genMs <= 0) continue
+    ttftMs += firstToken
+    ttftSteps += 1
+    decodeMs += genMs
+    decodeTokens += output
+  }
+  return ttftSteps > 0 ? { ttftMs, ttftSteps, decodeMs, decodeTokens } : undefined
 }
 
 /** Inclusive day-range bounds derived from optional day keys; the window
@@ -922,6 +965,80 @@ export interface SessionMetaEntry {
 }
 
 /**
+ * Build the child → parent lineage index from the session-metadata index.
+ * Shared by the session-table fold and the scope-rule expansion so both see
+ * exactly the same ancestry (a parent the index never saw is a root).
+ */
+export function buildLineageIndex(
+  meta: ReadonlyMap<string, SessionMetaEntry>,
+): Map<string, string> {
+  const parentOf = new Map<string, string>()
+  for (const [id, entry] of meta) {
+    if (entry.parentSession !== undefined && entry.parentSession !== '') parentOf.set(id, entry.parentSession)
+  }
+  return parentOf
+}
+
+/** Invert a child → parent index into parent → direct-children buckets,
+ * preserving the metadata file's insertion order. */
+function childBucketsOf(parentOf: ReadonlyMap<string, string>): Map<string, string[]> {
+  const buckets = new Map<string, string[]>()
+  for (const [id, parent] of parentOf) {
+    const bucket = buckets.get(parent)
+    if (bucket === undefined) buckets.set(parent, [id])
+    else bucket.push(id)
+  }
+  return buckets
+}
+
+/** Depth-first walk of one subtree, root first, with a `seen` guard so a
+ * cyclic or self-referential lineage can never loop. */
+function subtreeOf(root: string, childrenOf: ReadonlyMap<string, readonly string[]>): string[] {
+  const out = [root]
+  const seen = new Set<string>([root])
+  const stack: string[] = [...(childrenOf.get(root) ?? [])].reverse()
+  while (stack.length > 0) {
+    const current = stack.pop()!
+    if (seen.has(current)) continue
+    seen.add(current)
+    out.push(current)
+    const children = childrenOf.get(current) ?? []
+    for (let i = children.length - 1; i >= 0; i -= 1) stack.push(children[i]!)
+  }
+  return out
+}
+
+/**
+ * Expand a `root` + `scope` read into the concrete session id set and the
+ * direct-child groups the subagent table reads, entirely server-side. Nothing
+ * derived here goes back on the request URL, so the request stays O(1) even
+ * for a subtree of hundreds of sessions.
+ *
+ * `self` keeps the root alone; `subtree` folds the root and every subagent
+ * descendant. `includeChildren` controls whether child groups are derived —
+ * only `fields=session` (the usage tab) needs them. A root absent from the
+ * metadata, or a metadata file with no lineage at all, degrades to the root
+ * alone rather than erroring: the range is still meaningful, just narrower.
+ */
+export function resolveSessionScope(
+  meta: ReadonlyMap<string, SessionMetaEntry>,
+  root: string,
+  scope: StatsScope,
+  includeChildren: boolean,
+): { sessionIds: string[]; childGroups: ChildGroup[] } {
+  const childrenOf = childBucketsOf(buildLineageIndex(meta))
+  const sessionIds = scope === 'subtree' ? subtreeOf(root, childrenOf) : [root]
+  const direct = childrenOf.get(root) ?? []
+  const childGroups: ChildGroup[] = includeChildren
+    ? direct.map(id => ({
+      id,
+      sessionIds: scope === 'subtree' ? subtreeOf(id, childrenOf) : [id],
+    }))
+    : []
+  return { sessionIds, childGroups }
+}
+
+/**
  * Fold the costed per-session cells into the final rows the settings page's
  * session table renders: one row per top-level session with its whole
  * subtree merged in, priced, sorted by cost descending, and truncated to
@@ -970,10 +1087,9 @@ export function buildSessionRows(
     cells.set(cell.sessionId, bucket)
   }
   // Lineage index: a parent the index never saw is the same as no parent.
-  const parentOf = new Map<string, string>()
-  for (const [id, entry] of meta) {
-    if (entry.parentSession !== undefined && entry.parentSession !== '') parentOf.set(id, entry.parentSession)
-  }
+  // Shared with resolveSessionScope so the table's fold and a scope-rule
+  // read cannot disagree about ancestry.
+  const parentOf = buildLineageIndex(meta)
   // Walk up the lineage to the topmost ancestor that holds cells; a parent
   // outside the cells (no usage in the window, or an orphan) ends the walk,
   // and a `seen` guard turns a pathological cycle into a top-level row.

@@ -13,7 +13,7 @@ import type { MigrationProgress } from './migrate.ts'
 import { consoleLogger, type LoggerLike } from './log.ts'
 import { readPricingContext, resolveRate } from './pricing.ts'
 import type { PricingContext } from './pricing.ts'
-import { attachCosts, buildSessionRows, buildSummary, filterRecordsBySessions, filterSummary, requestSeriesOf, SESSION_ROW_LIMIT, summarizeRecords, summaryForSessions } from './stats.ts'
+import { aggregateRequestTiming, attachCosts, buildSessionRows, buildSummary, filterRecordsBySessions, filterSummary, requestSeriesOf, resolveSessionScope, SESSION_ROW_LIMIT, summarizeRecords, summaryForSessions } from './stats.ts'
 import type { RateResolver, SessionMetaEntry } from './stats.ts'
 import { buildSessionRequestDetails } from './session-request-details.ts'
 import type { LiveSnapshot } from './request-observe.ts'
@@ -21,8 +21,8 @@ import { readCachedRecords } from './record-cache.ts'
 import { SessionMetaStore } from './session-meta.ts'
 import { projectRowsOf } from './project-rows.ts'
 import { bucketSeries, pointsOfBuckets } from './trend-bucket.ts'
-import { decodeChildGroups, decodeSessionScope, DIR_GUARD_PATH, FULL_SYNC_PATH, MIGRATION_PATH, PRICING_PATH, STATS_PATH, UNPRICED_KEY } from './wire.ts'
-import type { ChildGroup, ChildUsageSummary, CostedSummary, DirectoryGuardView, DisplayCurrency, FullSyncView, PricingOverviewPayload, PricingTable, RequestPoint, SessionRequestDetails, SessionUsageRow, StatsFields, StatsPayload, TokenSummary } from './wire.ts'
+import { decodeChildGroups, decodeSessionScope, decodeStatsScope, DIR_GUARD_PATH, FULL_SYNC_PATH, MIGRATION_PATH, PRICING_PATH, STATS_PATH, UNPRICED_KEY } from './wire.ts'
+import type { ChildGroup, ChildUsageSummary, CostedSummary, DirectoryGuardView, DisplayCurrency, FullSyncView, PricingOverviewPayload, PricingTable, RequestPoint, SessionRequestDetails, SessionUsageRow, StatsFields, StatsPayload, StatsScope, TokenSummary } from './wire.ts'
 import { effectiveModelOf, type UsageRecord } from './usage-record.ts'
 import { AssociationError } from './pricing-associations.ts'
 import { PRICING_SYNC_PATH, type PricingSyncResult } from './wire.ts'
@@ -47,16 +47,21 @@ const DAY_KEY = /^\d{4}-\d{2}-\d{2}$/u
 
 /**
  * One filter dimension of the stats request: undefined when absent or blank,
- * the raw string otherwise. `sessionIds` collects every occurrence of the
- * `sessionId` query key — one fetch may scope to a session AND its subagent
- * subtree (the page aggregates parent + children in one request). The
- * session table's fold is NOT a query dimension: rows always fold over
- * subagent subtrees (see buildSessionRows), so no switch refetches.
+ * the raw string otherwise. A scope-rule read carries `root` + `scope` and
+ * is expanded server-side; the legacy `sessionIds` / `childGroups` lists are
+ * read straight off the query for older clients and tests. The session
+ * table's fold is NOT a query dimension: rows always fold over subagent
+ * subtrees (see buildSessionRows), so no switch refetches.
  */
 interface RawFilter {
   from: string | undefined
   to: string | undefined
   model: string | undefined
+  /** Set when the caller used the scope-rule form (`root` + `scope`). The
+   * host expands it into `sessionIds` / `childGroups` from its metadata
+   * lineage index; the explicit-id form above is the legacy path. */
+  root: string | undefined
+  scope: StatsScope
   sessionIds: readonly string[]
   childGroups: readonly ChildGroup[]
   fields: StatsFields
@@ -70,10 +75,13 @@ function readFilters(req: IncomingMessage): RawFilter {
     return value === null || value === '' ? undefined : value
   }
   const fields = pick('fields')
+  const scopeRule = decodeStatsScope(params)
   return {
     from: pick('from'),
     to: pick('to'),
     model: pick('model'),
+    root: scopeRule?.root,
+    scope: scopeRule?.scope ?? 'self',
     sessionIds: decodeSessionScope(params),
     childGroups: decodeChildGroups(params),
     fields: fields === 'chip' || fields === 'session' ? fields : 'full',
@@ -342,8 +350,37 @@ function childBreakdown(
   fallback: TokenSummary,
 ): Record<string, ChildUsageSummary> {
   const rows: Record<string, ChildUsageSummary> = {}
-  for (const group of filter.childGroups) {
-    const scoped = filterRecordsBySessions(records, group.sessionIds)
+  const groups = filter.childGroups
+  // One pass over the raw records instead of one filter() per group: a
+  // subtree with ~200 direct children would otherwise rescan the whole day
+  // log 200 times. Scope-rule reads can now legitimately reach that size
+  // (they used to die at HTTP 431 before any of this ran). Direct-child
+  // subtrees are disjoint, but the map keeps a list defensively so a
+  // duplicated id can never be dropped.
+  const groupsOf = new Map<string, string[]>()
+  for (const group of groups) {
+    for (const id of group.sessionIds) {
+      const bucket = groupsOf.get(id)
+      if (bucket === undefined) groupsOf.set(id, [group.id])
+      else if (!bucket.includes(group.id)) bucket.push(group.id)
+    }
+  }
+  const buckets = new Map<string, UsageRecord[]>()
+  for (const record of records) {
+    const targets = groupsOf.get(record.sessionId)
+    if (targets === undefined) continue
+    for (const id of targets) {
+      const bucket = buckets.get(id)
+      if (bucket === undefined) buckets.set(id, [record])
+      else bucket.push(record)
+    }
+  }
+  for (const group of groups) {
+    const scoped = buckets.get(group.id) ?? []
+    // Timing rides the same one-pass buckets: no extra scan, and the
+    // subagent table no longer depends on the runtime mirror retaining a
+    // sessionStats projection for long-finished subagents.
+    const timing = aggregateRequestTiming(scoped)
     const summary = attachCosts(
       { ...filterSummary({ dataDir, ...(costState === 'history-incomplete' ? summaryForSessions(fallback, group.sessionIds) : summarizeRecords(scoped, resolve)) }, filter.from, filter.to, filter.model, canonical), costState },
       pricing,
@@ -355,6 +392,7 @@ function childBreakdown(
       totalCost: summary.totalCost,
       unpricedModels: summary.unpricedModels,
       costState: summary.costState,
+      ...(timing !== undefined ? { timing } : {}),
     }
   }
   return rows
@@ -454,7 +492,7 @@ export function createStatsRoute(dir: () => string, options: StatsRouteOptions =
         res.end('forbidden')
         return
       }
-      const filter = readFilters(req)
+      let filter = readFilters(req)
       if (!isValidRange(filter)) {
         res.writeHead(400, { 'content-type': 'text/plain; charset=utf-8' })
         res.end('invalid filter')
@@ -463,6 +501,21 @@ export function createStatsRoute(dir: () => string, options: StatsRouteOptions =
       try {
         const dataDir = dir()
         const logger = options.logger ?? consoleLogger
+        // The metadata index backs BOTH the scope-rule expansion below and
+        // the session table's final rows; read it once per request (the
+        // store caches on mtime) so a subtree read costs no extra I/O.
+        const metaIndex = await metaStoreOf(dataDir).read()
+        const meta = new Map<string, SessionMetaEntry>(Object.entries(metaIndex))
+        // A `root` request is a RANGE RULE, not an enumerated id list: expand
+        // it here from the server-side lineage so the request URL stays O(1)
+        // regardless of subtree size. A root with no known lineage degrades
+        // to the root alone rather than erroring. Only `fields=session` (the
+        // usage tab) needs the per-child groups — chip/detail reads do not
+        // render the subagent table and must not pay for them.
+        if (filter.root !== undefined) {
+          const resolved = resolveSessionScope(meta, filter.root, filter.scope, filter.fields === 'session')
+          filter = { ...filter, sessionIds: resolved.sessionIds, childGroups: resolved.childGroups }
+        }
         // The pricing table is user-maintained and may change between
         // requests; reading it per request keeps the page honest without
         // mixing snapshots; unchanged source content reuses its index.
@@ -523,8 +576,6 @@ export function createStatsRoute(dir: () => string, options: StatsRouteOptions =
         // cost and truncated top-N server-side, with the metadata index's
         // titles and directories attached. The fold is unconditional —
         // subagents badge through childCount, never their own rows.
-        const metaIndex = await metaStoreOf(dataDir).read()
-        const meta = new Map<string, SessionMetaEntry>(Object.entries(metaIndex))
         // Project totals must see every root, not just the most expensive
         // sessions retained in the bounded session-list payload.
         const allSessionRows = buildSessionRows(summary, meta, Infinity)

@@ -104,6 +104,37 @@ async function sessionDataDir(): Promise<string> {
   return dir
 }
 
+/**
+ * A data dir with a root, a direct child, a grandchild and one unrelated
+ * session, plus the pricing mirror and the lineage metadata a scope-rule
+ * read is expanded from. Only the first three own usage records.
+ */
+async function scopeDataDir(): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), 'token-usage-scope-'))
+  const line = (sessionId: string, requestId: string, timing?: { ft: number; gen: number }): string =>
+    `${JSON.stringify({
+      ...dayRecord(1, 'deepseek-chat'), sessionId, requestId,
+      ...(timing !== undefined ? {
+        firstTokenLatencyMs: timing.ft,
+        latencyMs: timing.ft + timing.gen,
+        attemptTiming: { startedAt: 0, settledAt: timing.ft + timing.gen, firstTokenAt: timing.ft },
+      } : {}),
+    })}\n`
+  await writeFile(join(dir, 'usage-2026-01-11.jsonl'),
+    line('alpha', 'alpha-1') + line('child', 'child-1', { ft: 100, gen: 400 })
+    + line('grandchild', 'gc-1', { ft: 200, gen: 600 }) + line('outsider', 'out-1'))
+  await writeFile(join(dir, 'pricing.ccsa.json'), JSON.stringify({ currency: 'RMB', usdExchangeRate: 8, models: [
+    { modelId: 'deepseek-chat', inputCostPerMillion: 2, outputCostPerMillion: 3 },
+  ] }))
+  await writeFile(join(dir, 'sessions.json'), JSON.stringify({
+    alpha: { title: 'Parent' },
+    child: { parentSession: 'alpha', origin: 'subagent' },
+    grandchild: { parentSession: 'child', origin: 'subagent' },
+    outsider: { parentSession: 'elsewhere', origin: 'subagent' },
+  }))
+  return dir
+}
+
 describe('createStatsRoute', () => {
   it('shares identification across whole/session/chip/filter/children and overview, including genuine zero rates', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'resolution-route-'))
@@ -1220,5 +1251,70 @@ describe('createStatsRoute session table', () => {
       expect(row.title).toBeUndefined()
       expect(row.cwd).toBeUndefined()
     }
+  })
+
+  it('expands a root + scope range rule into ids and child groups server-side', async () => {
+    const dir = await scopeDataDir()
+    const route = createStatsRoute(() => dir)
+    const query = async (search: string) => {
+      const { res, captured } = fakeResponse()
+      await route.handler(fakeRequest({ url: STATS_PATH + search }), res)
+      expect(captured.status).toBe(200)
+      return JSON.parse(captured.body)
+    }
+    const tree = await query('?root=alpha&scope=subtree&fields=session')
+    expect(tree.total.requests).toBe(3)
+    expect(tree.sessionIds).toEqual(['alpha', 'child', 'grandchild'])
+    expect(Object.keys(tree.children)).toEqual(['child'])
+    // The direct child's row folds in its own grandchild.
+    expect(tree.children.child.total.requests).toBe(2)
+    // TTFT / throughput come from the two timed records in the group, not
+    // from a runtime session mirror projection.
+    expect(tree.children.child.timing).toEqual({
+      ttftMs: 300, ttftSteps: 2, decodeMs: 1_000, decodeTokens: 10,
+    })
+    // `self` keeps the header to the root, but the subagent table still
+    // lists direct children (each with its own records only).
+    const self = await query('?root=alpha&fields=session')
+    expect(self.total.requests).toBe(1)
+    expect(self.sessionIds).toEqual(['alpha'])
+    expect(self.children.child.total.requests).toBe(1)
+    expect(self.children.child.timing).toEqual({
+      ttftMs: 100, ttftSteps: 1, decodeMs: 400, decodeTokens: 5,
+    })
+  })
+
+  it('keeps the request size constant for a subtree of hundreds of sessions', async () => {
+    const dir = await scopeDataDir()
+    const meta = JSON.parse(await readFile(join(dir, 'sessions.json'), 'utf8')) as Record<string, unknown>
+    for (let i = 0; i < 200; i += 1) meta[`child-${i}`] = { parentSession: 'alpha', origin: 'subagent' }
+    await writeFile(join(dir, 'sessions.json'), JSON.stringify(meta))
+    const route = createStatsRoute(() => dir)
+    const { res, captured } = fakeResponse()
+    const url = `${STATS_PATH}?root=alpha&scope=subtree&fields=session`
+    // This is the whole point: 200+ subagents used to produce a ~17 KiB
+    // request line and HTTP 431; the rule stays under 80 characters.
+    expect(url.length).toBeLessThan(80)
+    await route.handler(fakeRequest({ url }), res)
+    expect(captured.status).toBe(200)
+    const body = JSON.parse(captured.body)
+    expect(body.sessionIds).toHaveLength(203)
+    expect(Object.keys(body.children)).toHaveLength(201)
+    // Only three sessions own records; the extra children contribute rows,
+    // not phantom usage.
+    expect(body.total.requests).toBe(3)
+  })
+
+  it('degrades a root with no known lineage to the root alone instead of erroring', async () => {
+    const dir = await scopeDataDir()
+    await unlink(join(dir, 'sessions.json'))
+    const route = createStatsRoute(() => dir)
+    const { res, captured } = fakeResponse()
+    await route.handler(fakeRequest({ url: `${STATS_PATH}?root=alpha&scope=subtree&fields=session` }), res)
+    expect(captured.status).toBe(200)
+    const body = JSON.parse(captured.body)
+    expect(body.sessionIds).toEqual(['alpha'])
+    expect(body.total.requests).toBe(1)
+    expect(body.children).toBeUndefined()
   })
 })
