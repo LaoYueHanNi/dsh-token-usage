@@ -164,6 +164,25 @@ describe('UsageRows', () => {
     expect(within(list).getAllByText(formatCost(2.0, VIEW)).length).toBeGreaterThan(0)
   })
 
+  it('labels a worktree-checkout session with its repository tail, not the branch directory', () => {
+    // A dsh-worktree project-layout checkout: the sub line's directory tail
+    // must belong to the repository (dsh-session-tools), matching the
+    // project dimension's fold.
+    render(
+      <UsageRows
+        kind="session"
+        sessionRows={[session({
+          sessionId: 'wt', title: '开源发布 0.1.0 与市场收录',
+          cwd: 'D:\\Code\\dsh-session-tools\\.dsh\\gitworktree\\feature-dsh-market-publish',
+        })]}
+        costState="ready" view={VIEW} t={t}
+      />,
+    )
+    const list = screen.getByRole('list', { name: zh['bySession.title'] })
+    expect(within(list).getByText(/dsh-session-tools · /u)).toBeTruthy()
+    expect(within(list).queryByText(/feature-dsh-market-publish/u)).toBeNull()
+  })
+
   it('re-sorts sessions by last activity under the recent pick', () => {
     const { rerender } = render(
       <UsageRows kind="session" sessionRows={SESSIONS} sort="cost" costState="ready" view={VIEW} t={t} />,

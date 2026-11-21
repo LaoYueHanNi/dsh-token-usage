@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { dirTailOf, projectRowsOf } from '../src/client/project-rows.ts'
+import { belongedCwdOf, dirTailOf, projectRowsOf } from '../src/client/project-rows.ts'
 import type { SessionUsageRow, UsageTotals } from '../src/wire.ts'
 
 /** One served session row with only the fields the fold reads. */
@@ -31,6 +31,26 @@ describe('dirTailOf', () => {
   })
 })
 
+describe('belongedCwdOf', () => {
+  it('folds a dsh-worktree project-layout checkout onto its repository root', () => {
+    expect(belongedCwdOf('D:\\Code\\dsh-session-tools\\.dsh\\gitworktree\\feature-dsh-market-publish')).toBe('D:\\Code\\dsh-session-tools')
+    expect(belongedCwdOf('/home/user/repo/.dsh/gitworktree/main')).toBe('/home/user/repo')
+  })
+
+  it('folds deeper subdirectories of a worktree checkout too', () => {
+    expect(belongedCwdOf('D:\\repo\\.dsh\\gitworktree\\feat\\src')).toBe('D:\\repo')
+  })
+
+  it('leaves every other path unchanged', () => {
+    expect(belongedCwdOf('D:\\Code\\dsh-token-usage')).toBe('D:\\Code\\dsh-token-usage')
+    // A bare gitworktree directory whose parent is not .dsh is no layout.
+    expect(belongedCwdOf('D:\\gitworktree\\feature-x')).toBe('D:\\gitworktree\\feature-x')
+    // The layout root without a branch segment has nothing to fold onto.
+    expect(belongedCwdOf('D:\\repo\\.dsh\\gitworktree')).toBe('D:\\repo\\.dsh\\gitworktree')
+    expect(belongedCwdOf('')).toBe('')
+  })
+})
+
 describe('projectRowsOf', () => {
   it('folds one row per directory tail with summed totals and cost', () => {
     const projects = projectRowsOf([
@@ -57,6 +77,31 @@ describe('projectRowsOf', () => {
     expect(projects[0]!.name).toBe('proj')
     expect(projects[0]!.sessionCount).toBe(2)
     expect(projects[0]!.cwd).toBe('D:\\a\\proj')
+  })
+
+  it('folds worktree-checkout sessions into the repository bucket under the repo root path', () => {
+    const projects = projectRowsOf([
+      row({ sessionId: 'repo-session', cwd: 'D:\\Code\\dsh-session-tools', cost: 3, totals: TOTALS(700) }),
+      row({ sessionId: 'worktree-session', cwd: 'D:\\Code\\dsh-session-tools\\.dsh\\gitworktree\\feature-dsh-market-publish', cost: 1, totals: TOTALS(200) }),
+    ])
+    expect(projects).toHaveLength(1)
+    const repo = projects[0]!
+    expect(repo.name).toBe('dsh-session-tools')
+    // The representative full path is the repository root, not the first-seen
+    // worktree checkout — the row's tooltip must point at the repository.
+    expect(repo.cwd).toBe('D:\\Code\\dsh-session-tools')
+    expect(repo.sessionCount).toBe(2)
+    expect(repo.totals.inputTokens).toBe(900)
+    expect(repo.cost).toBeCloseTo(4)
+    // Arrival order is irrelevant: a worktree-first input still names the
+    // repository root as the representative path (the fold belongs the
+    // cwd before it takes the tail and the first-seen path).
+    const reversed = projectRowsOf([
+      row({ sessionId: 'worktree-session', cwd: 'D:\\Code\\dsh-session-tools\\.dsh\\gitworktree\\feature-dsh-market-publish' }),
+      row({ sessionId: 'repo-session', cwd: 'D:\\Code\\dsh-session-tools' }),
+    ])
+    expect(reversed).toHaveLength(1)
+    expect(reversed[0]!.cwd).toBe('D:\\Code\\dsh-session-tools')
   })
 
   it('keeps cwd-less sessions in their own unnamed bucket', () => {

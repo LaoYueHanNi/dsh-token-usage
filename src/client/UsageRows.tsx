@@ -34,7 +34,7 @@ import type { CurrencyView } from './format.ts'
 import { formatCost, formatSpeed, formatTokens, formatTtft, hitRateDisplay, providerLabel } from './format.ts'
 import { ModelAssociationBadge, UnpricedModelTag } from './PricingAssociations.tsx'
 import type { ProjectUsageRow } from './project-rows.ts'
-import { dirTailOf } from './project-rows.ts'
+import { belongedCwdOf, dirTailOf } from './project-rows.ts'
 import styles from './UsageRows.module.css'
 
 /** Which row shape the list renders. */
@@ -577,7 +577,7 @@ export function UsageRows({
                   <span className={styles['rowCost']}>{costText(session.cost)}</span>
                 </div>
                 <div className={styles['rowSub']}>
-                  {session.cwd === undefined ? t('session.untitledDir') : dirTailOf(session.cwd)}
+                  {session.cwd === undefined ? t('session.untitledDir') : dirTailOf(belongedCwdOf(session.cwd))}
                   {' · '}
                   {relativeTimeOf(session.lastTime, t)}
                 </div>
