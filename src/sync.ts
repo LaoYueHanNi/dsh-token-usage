@@ -26,7 +26,7 @@ import type {} from '@deepseek-ai/dsh-compaction/types'
 import type {} from '@deepseek-ai/dsh-llm-retry/types'
 import { markInitialized, markMetaSynced, readSyncState } from './sync-state.ts'
 import { CompactionAttributionWindow } from './compaction-attribution.ts'
-import { extractFirstTokenTimeFromStream, isImportedHistoryEvent, modelOfEvent, providerOfEvent, recordOfEvent, type RequestTiming } from './usage-record.ts'
+import { extractFirstTokenTimeFromStream, extractUsageFromStream, isImportedHistoryEvent, modelOfEvent, providerOfEvent, recordOfEvent, type RequestTiming, type UsageFields } from './usage-record.ts'
 import type { UsageLog } from './usage-log.ts'
 
 /** Outcome of one sync run. */
@@ -447,6 +447,7 @@ export async function syncHistory(
       if (revealedTitle !== undefined) title = revealedTitle
     }
     let openStep: { turn: number; step: number; startTime: number } | null = null
+    let pendingAttemptUsage: { turn: number; step: number; usage: UsageFields } | undefined
     // The compaction attribution window of this session — the SAME
     // implementation the live recorder drives, so a rescan attributes rows
     // exactly like a live observation would.
@@ -459,6 +460,12 @@ export async function syncHistory(
           step: event.data.step,
           startTime: event.time,
         }
+        pendingAttemptUsage = undefined
+      } else if (event.type === 'assistant/attempt') {
+        const usage = extractUsageFromStream(event.data.stream)
+        pendingAttemptUsage = usage !== undefined
+          ? { turn: event.data.turn, step: event.data.step, usage }
+          : undefined
       }
       const revealed = modelOfEvent(event)
       if (revealed !== undefined) model = revealed
@@ -467,25 +474,43 @@ export async function syncHistory(
       const revealedTitle = titleOfEvent(event)
       if (revealedTitle !== undefined) title = revealedTitle
       let timing: RequestTiming | undefined
-      if (event.type === 'assistant/message'
-        && openStep !== null
-        && openStep.turn === event.data.turn
-        && openStep.step === event.data.step) {
-        const latencyMs = Math.max(0, event.time - openStep.startTime)
-        // The timed model stream embedded in assistant/message carries the
-        // first token delta's timestamp.
-        const firstTokenTime = extractFirstTokenTimeFromStream(event.data.stream)
-        const firstTokenLatencyMs = firstTokenTime !== undefined
-          ? Math.max(0, firstTokenTime - openStep.startTime)
-          : undefined
-        timing = {
-          startedAt: openStep.startTime,
-          latencyMs,
-          ...(firstTokenLatencyMs !== undefined ? { firstTokenLatencyMs } : {}),
+      let failureUsage: UsageFields | undefined
+      if (event.type === 'assistant/message') {
+        pendingAttemptUsage = undefined
+        if (openStep !== null
+          && openStep.turn === event.data.turn
+          && openStep.step === event.data.step) {
+          const latencyMs = Math.max(0, event.time - openStep.startTime)
+          // The timed model stream embedded in assistant/message carries the
+          // first token delta's timestamp.
+          const firstTokenTime = extractFirstTokenTimeFromStream(event.data.stream)
+          const firstTokenLatencyMs = firstTokenTime !== undefined
+            ? Math.max(0, firstTokenTime - openStep.startTime)
+            : undefined
+          timing = {
+            startedAt: openStep.startTime,
+            latencyMs,
+            ...(firstTokenLatencyMs !== undefined ? { firstTokenLatencyMs } : {}),
+          }
+          openStep = null
         }
+      } else if (event.type === 'llm/retry') {
+        if (pendingAttemptUsage !== undefined
+          && pendingAttemptUsage.turn === event.data.turn
+          && pendingAttemptUsage.step === event.data.step) {
+          failureUsage = pendingAttemptUsage.usage
+        }
+        pendingAttemptUsage = undefined
+      } else if (event.type === 'step/end') {
         openStep = null
-      } else if (event.type === 'step/end' || event.type === 'turn/end') {
+      } else if (event.type === 'turn/end') {
         openStep = null
+        if (event.data.reason.kind === 'error'
+          && pendingAttemptUsage !== undefined
+          && pendingAttemptUsage.turn === event.data.turn) {
+          failureUsage = pendingAttemptUsage.usage
+        }
+        pendingAttemptUsage = undefined
       }
       attributionWindow.observe(event)
       // Importer-synthesized history is no provider call: count it for the
@@ -495,7 +520,7 @@ export async function syncHistory(
         ignoredImported += 1
         continue
       }
-      const record = recordOfEvent(event, id, model, deps.recordCompaction !== false, timing, provider)
+      const record = recordOfEvent(event, id, model, deps.recordCompaction !== false, timing, provider, failureUsage)
       if (record === null) continue
       // Attribution attaches to plain-request rows only (same rule as the
       // live recorder): the compaction row is the rewrite's own billing row,

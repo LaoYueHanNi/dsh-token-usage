@@ -58,7 +58,6 @@
       "inject": [
         "@deepseek-ai/dsh-client-ui-session",
         "@deepseek-ai/dsh-client-ui-settings",
-        "@deepseek-ai/dsh-client-ui-settings-plugins",
         "@deepseek-ai/dsh-client-ui-plugin-manager",
         "@deepseek-ai/dsh-client-ui-sidebar",
         "@deepseek-ai/dsh-client-ui-layout"
@@ -97,7 +96,6 @@
     "@deepseek-ai/dsh-client-ui-renderer": "0.2.1-rc.3",
     "@deepseek-ai/dsh-client-ui-session": "0.2.1-rc.3",
     "@deepseek-ai/dsh-client-ui-settings": "0.2.1-rc.3",
-    "@deepseek-ai/dsh-client-ui-settings-plugins": "0.2.1-rc.3",
     "@deepseek-ai/dsh-client-ui-sidebar": "0.2.1-rc.3",
     "@deepseek-ai/dsh-client-ui-slots": "0.2.1-rc.3",
     "@deepseek-ai/dsh-client-ui-workspace": "0.2.1-rc.3",

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import {
   extractFirstTokenTimeFromStream,
+  extractUsageFromStream,
   isImportedHistoryEvent,
   isTokenDelta,
   modelOfEvent,
@@ -667,5 +668,37 @@ describe('DeepSeek chat imported history', () => {
     expect(providerOfEvent(importedReply())).toBeUndefined()
     expect(modelOfEvent(messageEvent())).toBe('deepseek-chat')
     expect(providerOfEvent(messageEvent())).toBe('deepseek')
+  })
+})
+
+describe('refusal failure billing (extractUsageFromStream & failure usage)', () => {
+  it('extracts the last valid usage chunk from a compact assistant stream', () => {
+    const stream = [
+      { type: 'text-chunks', time0: 1000, index: 0, dt: [], texts: ['partial'] },
+      { type: 'chunk', time: 1100, chunk: { type: 'usage', usage: { inputTokens: 120, outputTokens: 15, cacheReadTokens: 64 } } },
+    ]
+    expect(extractUsageFromStream(stream)).toEqual({ inputTokens: 120, outputTokens: 15, cacheReadTokens: 64 })
+    expect(extractUsageFromStream([{ type: 'chunk', time: 1100, chunk: { type: 'usage', usage: { inputTokens: -1, outputTokens: 5 } } }])).toBeUndefined()
+    expect(extractUsageFromStream(undefined)).toBeUndefined()
+  })
+
+  it('attaches optional billed usage to failure rows and survives JSONL round-trip', () => {
+    const row = recordOfEvent(
+      turnEndEvent({ reason: { kind: 'error', error: { code: 'CONTENT_REFUSED', message: 'blocked' } } }),
+      's1',
+      'deepseek-chat',
+      true,
+      undefined,
+      'deepseek-official',
+      { inputTokens: 200, outputTokens: 18, cacheReadTokens: 128 },
+    )
+    expect(row).toMatchObject({
+      kind: 'failure',
+      failureCode: 'CONTENT_REFUSED',
+      model: 'deepseek-chat',
+      provider: 'deepseek-official',
+      usage: { inputTokens: 200, outputTokens: 18, cacheReadTokens: 128 },
+    })
+    expect(parseRecord(serializeRecord(row!))).toEqual(row)
   })
 })

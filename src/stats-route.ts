@@ -22,7 +22,7 @@ import { SessionMetaStore } from './session-meta.ts'
 import { projectRowsOf } from './project-rows.ts'
 import { bucketSeries, pointsOfBuckets } from './trend-bucket.ts'
 import { decodeChildGroups, decodeSessionScope, decodeStatsScope, DIR_GUARD_PATH, FULL_SYNC_PATH, MIGRATION_PATH, PRICING_PATH, STATS_PATH, UNPRICED_KEY } from './wire.ts'
-import type { ChildGroup, ChildUsageSummary, CostedSummary, DirectoryGuardView, DisplayCurrency, FullSyncView, PricingOverviewPayload, PricingTable, RequestPoint, SessionRequestDetails, SessionUsageRow, StatsFields, StatsPayload, StatsScope, TokenSummary } from './wire.ts'
+import type { ChildGroup, ChildTiming, ChildUsageSummary, CostedSummary, DirectoryGuardView, DisplayCurrency, FullSyncView, PricingOverviewPayload, PricingTable, RequestPoint, SessionRequestDetails, SessionUsageRow, StatsFields, StatsPayload, StatsScope, TokenSummary } from './wire.ts'
 import { effectiveModelOf, type UsageRecord } from './usage-record.ts'
 import { AssociationError } from './pricing-associations.ts'
 import { PRICING_SYNC_PATH, type PricingSyncResult } from './wire.ts'
@@ -411,10 +411,11 @@ function slimSessionPayload(input: {
   usdExchangeRate: number
   fields: StatsFields
   children: Record<string, ChildUsageSummary> | undefined
+  timing: ChildTiming | undefined
   requestDetails: SessionRequestDetails | undefined
   providerNames: Readonly<Record<string, string>> | undefined
 }): unknown {
-  const { summary, sessionIds, series, currency, usdExchangeRate, fields, children, requestDetails, providerNames } = input
+  const { summary, sessionIds, series, currency, usdExchangeRate, fields, children, timing, requestDetails, providerNames } = input
   // The granular per-session cells stay behind the route: session-scoped
   // consumers read totals / byModel / requestSeries, never the cells.
   const { bySession: _cells, ...summaryRest } = summary
@@ -428,6 +429,7 @@ function slimSessionPayload(input: {
     usdExchangeRate,
     ...(providerNames !== undefined ? { providerNames } : {}),
     ...children !== undefined ? { children } : {},
+    ...timing !== undefined ? { timing } : {},
   }
   if (fields === 'full') return full
   const chip = {
@@ -453,6 +455,7 @@ function slimSessionPayload(input: {
     byProvider: summary.byProvider,
     ...(providerNames !== undefined ? { providerNames } : {}),
     requestSeries,
+    ...(timing !== undefined ? { timing } : {}),
     // The request pool rides ONLY the `session` read: chip stays slim, and
     // the whole-log `full` read never grows runtime-state payloads.
     ...(requestDetails !== undefined ? { requestDetails } : {}),
@@ -607,6 +610,9 @@ export function createStatsRoute(dir: () => string, options: StatsRouteOptions =
             liveCapability: liveObserver?.capability ?? 'settled-only',
           })
           : undefined
+        const timing = scoped !== undefined && filter.fields !== 'chip'
+          ? aggregateRequestTiming(scoped)
+          : undefined
         const payload = scoped !== undefined
           ? slimSessionPayload({
             summary,
@@ -616,6 +622,7 @@ export function createStatsRoute(dir: () => string, options: StatsRouteOptions =
             usdExchangeRate,
             fields: filter.fields,
             children,
+            timing,
             requestDetails,
             providerNames,
           })

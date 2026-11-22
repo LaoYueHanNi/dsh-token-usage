@@ -44,9 +44,6 @@ importers:
       '@deepseek-ai/dsh-client-ui-settings':
         specifier: 0.2.1-rc.3
         version: 0.2.1-rc.3(@deepseek-ai/cordis@4.0.5)
-      '@deepseek-ai/dsh-client-ui-settings-plugins':
-        specifier: 0.2.1-rc.3
-        version: 0.2.1-rc.3(@deepseek-ai/cordis@4.0.5)
       '@deepseek-ai/dsh-client-ui-sidebar':
         specifier: 0.2.1-rc.3
         version: 0.2.1-rc.3(@deepseek-ai/cordis@4.0.5)
@@ -363,11 +360,6 @@ packages:
 
   '@deepseek-ai/dsh-client-ui-session@0.2.1-rc.3':
     resolution: {integrity: sha512-077WBukIHzJpTlRC9PrJtYA0RBwi2KB4z9IiPb8H5xMRYtonf1w97FX9toPZdcci/ONkVqDH9HHF/sK9AMsGAw==}
-    peerDependencies:
-      '@deepseek-ai/cordis': ~4.0.5
-
-  '@deepseek-ai/dsh-client-ui-settings-plugins@0.2.1-rc.3':
-    resolution: {integrity: sha512-Hj8nFa1/pBkxtcADARkz6FZ8HirfwZjRzmxr0MIC+pxfTn/McDk/OvbyOaU7cIimEMC6cG3hPmCBsWP7aAmRag==}
     peerDependencies:
       '@deepseek-ai/cordis': ~4.0.5
 
@@ -2514,10 +2506,6 @@ snapshots:
       '@deepseek-ai/cordis': 4.0.5(@deepseek-ai/cordis-plugin-include@1.0.10)(@deepseek-ai/cordis-plugin-loader@1.0.6)
 
   '@deepseek-ai/dsh-client-ui-session@0.2.1-rc.3(@deepseek-ai/cordis@4.0.5)':
-    dependencies:
-      '@deepseek-ai/cordis': 4.0.5(@deepseek-ai/cordis-plugin-include@1.0.10)(@deepseek-ai/cordis-plugin-loader@1.0.6)
-
-  '@deepseek-ai/dsh-client-ui-settings-plugins@0.2.1-rc.3(@deepseek-ai/cordis@4.0.5)':
     dependencies:
       '@deepseek-ai/cordis': 4.0.5(@deepseek-ai/cordis-plugin-include@1.0.10)(@deepseek-ai/cordis-plugin-loader@1.0.6)
 

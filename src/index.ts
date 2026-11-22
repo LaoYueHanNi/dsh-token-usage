@@ -49,7 +49,7 @@ import { resolvePricingUrl, syncCloudPricing, type CloudSyncResult, type Pricing
 import { PricingAssociationService } from './pricing-association-service.ts'
 import { createPricingAssociationsRoute } from './pricing-associations-route.ts'
 import { withPricingDirectoryMigration } from './pricing-associations.ts'
-import { extractFirstTokenTimeFromStream, modelOfEvent, providerOfEvent, recordOfEvent, responseModelOfReplay, type RequestTiming } from './usage-record.ts'
+import { extractFirstTokenTimeFromStream, extractUsageFromStream, modelOfEvent, projectUsage, providerOfEvent, recordOfEvent, responseModelOfReplay, type RequestTiming, type UsageFields } from './usage-record.ts'
 import { RequestObserver } from './request-observe.ts'
 import { CompactionAttributionWindow } from './compaction-attribution.ts'
 import { classifyAuxRequest, recordFromAuxRequest } from './aux-request.ts'
@@ -856,10 +856,24 @@ export function apply(ctx: Context, config: Config = {}) {
             }
             yield chunk
           }
+        } catch (error: unknown) {
+          if (failure === undefined && typeof error === 'object' && error !== null && 'code' in error && typeof (error as { code?: unknown }).code === 'string') {
+            failure = {
+              code: (error as { code: string }).code,
+              message: error instanceof Error ? error.message : String(error),
+            }
+          }
+          throw error
         } finally {
-          if (failure !== undefined) {
+          const refusedBilled = failure !== undefined
+            && failure.code === 'CONTENT_REFUSED'
+            && projectUsage(usage) !== undefined
+          if (failure !== undefined && !refusedBilled) {
             logger.warn(`[token-usage] auxiliary ${auxKind} request failed (${failure.code}); usage not recorded: ${failure.message}`)
-          } else if (settled) {
+          } else if (settled || refusedBilled) {
+            if (refusedBilled) {
+              logger.warn(`[token-usage] auxiliary ${auxKind} request refused (CONTENT_REFUSED); retaining billed usage`)
+            }
             const target = current
             if (target !== undefined) {
               auxSeq += 1
@@ -975,6 +989,7 @@ export function apply(ctx: Context, config: Config = {}) {
       startTime: number
     }
     const activeSteps = new Map<string, ActiveStepTiming>()
+    const pendingAttemptUsage = new Map<string, { turn: number; step: number; usage: UsageFields }>()
     // Header facts are immutable, so one upsert per session is enough even
     // though events keep arriving; the index store dedupes the write anyway.
     const headerSeen = new Set<string>()
@@ -1038,9 +1053,19 @@ export function apply(ctx: Context, config: Config = {}) {
           step: event.data.step,
           startTime: event.time,
         })
+        pendingAttemptUsage.delete(session.id)
+      } else if (event.type === 'assistant/attempt') {
+        const usage = extractUsageFromStream(event.data.stream)
+        if (usage !== undefined) {
+          pendingAttemptUsage.set(session.id, { turn: event.data.turn, step: event.data.step, usage })
+        } else {
+          pendingAttemptUsage.delete(session.id)
+        }
       }
       let timing: RequestTiming | undefined
+      let failureUsage: UsageFields | undefined
       if (event.type === 'assistant/message') {
+        pendingAttemptUsage.delete(session.id)
         const currentStep = activeSteps.get(session.id)
         if (currentStep !== undefined
             && currentStep.turn === event.data.turn
@@ -1059,8 +1084,21 @@ export function apply(ctx: Context, config: Config = {}) {
           }
           activeSteps.delete(session.id)
         }
-      } else if (event.type === 'step/end' || event.type === 'turn/end') {
+      } else if (event.type === 'llm/retry') {
+        const pending = pendingAttemptUsage.get(session.id)
+        if (pending !== undefined && pending.turn === event.data.turn && pending.step === event.data.step) {
+          failureUsage = pending.usage
+        }
+        pendingAttemptUsage.delete(session.id)
+      } else if (event.type === 'step/end') {
         activeSteps.delete(session.id)
+      } else if (event.type === 'turn/end') {
+        activeSteps.delete(session.id)
+        const pending = pendingAttemptUsage.get(session.id)
+        if (event.data.reason.kind === 'error' && pending !== undefined && pending.turn === event.data.turn) {
+          failureUsage = pending.usage
+        }
+        pendingAttemptUsage.delete(session.id)
       }
       const attributionWindow = attributionWindowOf(session.id)
       attributionWindow.observe(event)
@@ -1080,7 +1118,7 @@ export function apply(ctx: Context, config: Config = {}) {
       }
       const record = recordOfEvent(
         event, session.id, resolvedModel ?? '', recordCompaction, timing,
-        resolvedProvider ?? '',
+        resolvedProvider ?? '', failureUsage,
       )
       if (record === null) return
       // The attribution lands only on plain-request rows: the compaction

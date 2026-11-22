@@ -24,10 +24,6 @@ import type {} from '@deepseek-ai/dsh-client-ui-workspace/client'
 // Type-only: pulls the ui-settings SlotMap merge ('settings.section') and the
 // owner-share type into this program.
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
-// Type-only: pulls the ui-settings-plugins keyed-slot declaration
-// ('settings.plugin.item') into this program. The value face stays
-// uncompromised: cross-plugin collaboration goes through the slot system.
-import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 // Type-only: pulls the ui-sidebar SlotMap merge ('sidebar.panellist.actions',
 // dsh 0.2.1-rc.3+) into this program.
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'

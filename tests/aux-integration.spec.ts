@@ -241,6 +241,46 @@ describe('auxiliary request recording', () => {
     expect(await readAllRows(dir)).toHaveLength(0)
   })
 
+  it('retains billed aux usage when CONTENT_REFUSED follows a usage chunk (finish error or throw)', async () => {
+    const dir = await mount()
+    await streamWaterfall(ctx!, {
+      ...AUTO_REVIEW_REQUEST,
+      sessionId: 'session-refused',
+      purpose: 'session-title',
+    }, [
+      { type: 'usage', usage: { inputTokens: 88, outputTokens: 12, cacheReadTokens: 32 } },
+      { type: 'finish', reason: { kind: 'error', failure: { message: 'refused', code: 'CONTENT_REFUSED' } } },
+    ])
+
+    const llm = ctx!.get('llm')
+    const waterfall = ctx!.waterfall.bind(ctx!) as (
+      thisArg: unknown,
+      name: string,
+      options: unknown,
+      provider: () => AsyncIterable<unknown>,
+    ) => AsyncIterable<unknown>
+    const refusedErr = Object.assign(new Error('refused'), { code: 'CONTENT_REFUSED' })
+    await expect((async () => {
+      for await (const _chunk of waterfall(llm, 'llm/stream', AUTO_REVIEW_REQUEST, () => (async function* () {
+        yield { type: 'usage', usage: { inputTokens: 55, outputTokens: 9 } }
+        throw refusedErr
+      })())) { /* consume */ }
+    })()).rejects.toThrow('refused')
+
+    const rows = await pollRows(dir, 2)
+    expect(rows[0]).toMatchObject({
+      kind: 'aux',
+      auxKind: 'session-title',
+      sessionId: 'session-refused',
+      usage: { inputTokens: 88, outputTokens: 12, cacheReadTokens: 32 },
+    })
+    expect(rows[1]).toMatchObject({
+      kind: 'aux',
+      auxKind: 'auto-review',
+      usage: { inputTokens: 55, outputTokens: 9 },
+    })
+  })
+
   it('skips every bypass request when recordAux is false', async () => {
     const dir = await mount({ recordAux: false })
     await streamWaterfall(ctx!, AUTO_REVIEW_REQUEST, SUCCESS_CHUNKS)

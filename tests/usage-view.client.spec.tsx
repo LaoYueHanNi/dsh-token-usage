@@ -1117,4 +1117,64 @@ describe('UsageView request pool', () => {
     expectText('15.55￥')
     expect(screen.getByText('deepseek-reasoner')).toBeTruthy()
   }, 15_000)
+
+  it('renders tree and drilled subagent TTFT/throughput from host timing when summary sessionStats is absent', async () => {
+    const treeWithTiming: UsageSummary = {
+      ...TREE_SUMMARY,
+      timing: { ttftMs: 2_000, ttftSteps: 4, decodeMs: 4_000, decodeTokens: 800 },
+    }
+    const childWithTiming: UsageSummary = {
+      ...CHILD_SUMMARY,
+      timing: { ttftMs: 1_500, ttftSteps: 3, decodeMs: 2_000, decodeTokens: 160 },
+    }
+    stubFetch({
+      root: ROOT_SUMMARY,
+      'root+child': treeWithTiming,
+      child: childWithTiming,
+      'child+child': childWithTiming,
+    })
+    // In DSH 0.2.2+, `byId.child.projectionValues` has no `sessionStats`.
+    renderView({ liveStats: LIVE_STATS })
+    // Solo active session still keeps liveStats (0.1s / 300 tok/s).
+    expect(await screen.findByText('0.1s')).toBeTruthy()
+    expectText('300 tok/s')
+    // Tree scope reads server timing (2000/4 = 500ms -> 0.5s, 800/4s = 200 tok/s).
+    fireEvent.click(screen.getByRole('button', { name: '含子会话' }))
+    expect(await screen.findByText('0.5s')).toBeTruthy()
+    expectText('200 tok/s')
+    // Drilling into the subagent reads child's server timing (1500/3 = 0.5s, 160/2s = 80 tok/s).
+    fireEvent.click(screen.getByRole('button', { name: 'Child Agent' }))
+    await waitFor(() => expectText('80 tok/s'))
+    expectText('0.5s')
+  })
+
+  it('refreshes when subagent summary tokenUsage advances even without sessionStats', async () => {
+    const mock = vi.fn(async () => ({ ok: true, status: 200, json: async () => TREE_SUMMARY }))
+    vi.stubGlobal('fetch', mock)
+    const initial = {
+      ...SESSION_STATE,
+      byId: {
+        ...BY_ID,
+        child: {
+          ...BY_ID.child!,
+          projectionValues: { tokenUsage: { uncachedInputTokens: 100, outputTokens: 10, cacheReadTokens: 0, cacheWriteTokens: 0 } },
+        },
+      },
+    } as unknown as SessionListState
+    const { setMirror, rerender } = renderView({ state: initial, liveStats: LIVE_STATS })
+    await waitFor(() => expectText('15.55￥'))
+    const callsBefore = mock.mock.calls.length
+    setMirror({
+      ...initial,
+      byId: {
+        ...initial.byId,
+        child: {
+          ...initial.byId.child!,
+          projectionValues: { tokenUsage: { uncachedInputTokens: 100, outputTokens: 80, cacheReadTokens: 20, cacheWriteTokens: 0 } },
+        },
+      },
+    } as unknown as SessionListState)
+    rerender()
+    await waitFor(() => expect(mock.mock.calls.length).toBeGreaterThan(callsBefore), { timeout: 2_000 })
+  })
 })

@@ -12,7 +12,10 @@ Status: implemented
 
 ## Decision
 
-失败按 **provider 尝试** 粒度记为正交的 `failures` 维度，不并入 `requests`、不计任何 token/费用。用量 tab 与设置页共用一张成功请求卡，失败收成卡内可 hover 的胶囊。
+> [!NOTE]
+> 本决策中「失败行一律不带 usage、不计任何 token/费用」以及「失败码映射仅含 17 对」的部分，已于 2026-11-22 由 [DR: 补齐 CONTENT_REFUSED 等新错误码本地化与拒绝前用量计费](../implemented/2026-11-22-content-refused-billing-and-failure-codes.md) 部分取代：无 usage 的常规失败仍不计费；`assistant/attempt` 在失败前上报过 provider usage 时，该 `usage` 随 `failure` 行计入 token 与费用（仍不计入成功 `requests`），且本地化码扩充至 33 对。
+
+失败按 **provider 尝试** 粒度记为正交的 `failures` 维度，不并入 `requests`。用量 tab 与设置页共用一张成功请求卡，失败收成卡内可 hover 的胶囊。
 
 ### 1. 记录模型（`src/usage-record.ts`）
 

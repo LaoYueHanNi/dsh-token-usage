@@ -30,7 +30,6 @@ import type { ReactNode } from 'react'
 import type { SnapshotSelectorHook, TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SessionListState, UseProjection } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { SessionId } from '@deepseek-ai/dsh-client-connection/client'
-import type { SessionStatsProjection } from '@deepseek-ai/dsh-session-stats/client'
 // Type-only: merges the sessionStats key into SessionProjectionMap so
 // useProjection('sessionStats') reads its real type.
 import type {} from '@deepseek-ai/dsh-session-stats/client'
@@ -44,7 +43,7 @@ import { ModelAssociationBadge, PricingAssociationProvider, UnpricedModelTag } f
 import { usePricingAssociationRefresh } from './pricing-associations.ts'
 import { HitRateText } from './HitRateText.tsx'
 import { RequestPoolSections } from './RequestPool.tsx'
-import { aggregateProjections, buildChildIndex, directSubagentIds, subagentParentOf, subtreeIds, buildStatsFreshnessKey } from './session-stats.ts'
+import { aggregateScopedProjections, buildChildIndex, directSubagentIds, resolveHeaderTiming, subagentParentOf, subtreeIds, buildStatsFreshnessKey } from './session-stats.ts'
 import { RequestsCell, RequestsStatCard, StatCard } from './StatCard.tsx'
 import { TrendChart } from './TrendChart.tsx'
 import type { TrendChartMode } from './TrendChart.tsx'
@@ -285,19 +284,10 @@ export function UsageView({ useSessions, useProjection, sessionId, t }: UsageVie
     return () => { document.removeEventListener('visibilitychange', onVisibility) }
   }, [])
 
-  const stats = useMemo(() => {
-    const values: Array<SessionStatsProjection | undefined> = scopeIds.map((id) => {
-      if (id === sessionId) return liveStats
-      return byId[id as SessionId]?.projectionValues?.sessionStats
-    })
-    return aggregateProjections(values)
-  }, [scopeIds, sessionId, liveStats, byId])
-  const ttftText = stats !== undefined && stats.ttftSteps > 0
-    ? formatTtft(stats.ttftMs / stats.ttftSteps)
-    : '—'
-  const speedText = stats !== undefined && stats.decodeMs > 0
-    ? formatSpeed(stats.decodeTokens / (stats.decodeMs / 1_000))
-    : '—'
+  const mirrorStats = useMemo(
+    () => aggregateScopedProjections(scopeIds, byId, sessionId, liveStats),
+    [scopeIds, byId, sessionId, liveStats],
+  )
 
   const header = (
     <header className={styles['head']}>
@@ -347,6 +337,15 @@ export function UsageView({ useSessions, useProjection, sessionId, t }: UsageVie
   }
 
   const summary = summaryState.value
+  const headerTiming = resolveHeaderTiming({
+    isSoloActive: scope === 'session' && focusId === sessionId,
+    liveStats,
+    mirrorAggregate: mirrorStats,
+    serverTiming: summary.timing,
+    totalPerf: summary.total,
+  })
+  const ttftText = headerTiming.ttftMs !== undefined ? formatTtft(headerTiming.ttftMs) : '—'
+  const speedText = headerTiming.tokensPerSec !== undefined ? formatSpeed(headerTiming.tokensPerSec) : '—'
   const view = currencyViewOf(summary)
   const { total } = summary
   return (

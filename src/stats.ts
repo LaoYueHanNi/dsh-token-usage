@@ -238,6 +238,14 @@ function addUsage(totals: UsageTotals, record: UsageRecord): void {
     const byCode = totals.failuresByCode ?? {}
     byCode[code] = (byCode[code] ?? 0) + 1
     totals.failuresByCode = byCode
+    // Failures never increment `requests` or timing stats, but billed tokens
+    // emitted before a refusal (e.g. CONTENT_REFUSED) still enter token/cost totals.
+    const usage = record.usage
+    if (usage === undefined) return
+    totals.inputTokens += usage.inputTokens
+    totals.outputTokens += usage.outputTokens
+    if (usage.cacheReadTokens !== undefined) totals.cacheReadTokens += usage.cacheReadTokens
+    if (usage.cacheWriteTokens !== undefined) totals.cacheWriteTokens += usage.cacheWriteTokens
     return
   }
   totals.requests += 1
@@ -566,7 +574,7 @@ export function requestSeriesOf(
   canonical?: ReadonlyMap<string, string>,
 ): RequestPoint[] {
   return filterRecordsByRange(records, undefined, dayRangeFilter(from, to, model, canonical))
-    .filter(record => record.kind !== 'failure')
+    .filter(record => record.kind !== 'failure' || record.usage !== undefined)
     .map(record => ({
       time: record.time,
       tokens: record.usage === undefined ? 0

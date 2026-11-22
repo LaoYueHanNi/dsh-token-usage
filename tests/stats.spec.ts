@@ -141,6 +141,44 @@ describe('summarizeRecords', () => {
     expect(summary.byModel[0]!.totals.failuresByCode).toEqual({ RATE_LIMIT: 2, TRANSPORT: 1, UNKNOWN: 1 })
   })
 
+  it('bills failure rows that carry pre-failure usage without counting them as successful requests', () => {
+    const at = new Date(2026, 0, 15, 12).getTime()
+    const refusedRow: UsageRecord = {
+      requestId: 'failure:s1:2',
+      time: at + 1,
+      sessionId: 's1',
+      model: 'deepseek-chat',
+      provider: 'deepseek-official',
+      kind: 'failure',
+      failureCode: 'CONTENT_REFUSED',
+      usage: { inputTokens: 500_000, outputTokens: 100_000, cacheReadTokens: 200_000 },
+    }
+    const plainFailure = { ...record(at + 2, 'deepseek-chat', undefined, 'failure'), failureCode: 'RATE_LIMIT' }
+    const okRow = record(at, 'deepseek-chat', { input: 500_000, output: 100_000 })
+    const summary = summarizeRecords([okRow, refusedRow, plainFailure])
+    expect(summary.total.requests).toBe(1)
+    expect(summary.total.failures).toBe(2)
+    expect(summary.total.failuresByCode).toEqual({ CONTENT_REFUSED: 1, RATE_LIMIT: 1 })
+    expect(summary.total.inputTokens).toBe(1_000_000)
+    expect(summary.total.outputTokens).toBe(200_000)
+    expect(summary.total.cacheReadTokens).toBe(200_000)
+    const series = requestSeriesOf([okRow, refusedRow, plainFailure])
+    expect(series).toHaveLength(2)
+    expect(series[1]!.tokens).toBe(800_000)
+
+    const pricing = {
+      'deepseek-chat': {
+        base: { inputPerMillion: 2, outputPerMillion: 3, cacheReadPerMillion: 0.5 },
+        contextTiers: [],
+        dailySlots: [],
+        timeRules: [],
+      },
+    }
+    const costed = attachCosts({ dataDir: '/x', ...summary }, pricing, new Map())
+    // okRow: 0.5*2 + 0.1*3 = 1.3; refusedRow: 0.5*2 + 0.1*3 + 0.2*0.5 = 1.4; total = 2.7
+    expect(costed.totalCost).toBeCloseTo(2.7, 6)
+  })
+
   it('merges per-code failure maps key-wise across summaries', () => {
     const at = new Date(2026, 0, 15, 12).getTime()
     const left = summarizeRecords([

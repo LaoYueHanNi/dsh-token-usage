@@ -1273,6 +1273,10 @@ describe('createStatsRoute session table', () => {
     expect(tree.children.child.timing).toEqual({
       ttftMs: 300, ttftSteps: 2, decodeMs: 1_000, decodeTokens: 10,
     })
+    // Scope-wide weighted timing rides `fields=session` as well (covering the root + subtree).
+    expect(tree.timing).toEqual({
+      ttftMs: 300, ttftSteps: 2, decodeMs: 1_000, decodeTokens: 10,
+    })
     // `self` keeps the header to the root, but the subagent table still
     // lists direct children (each with its own records only).
     const self = await query('?root=alpha&fields=session')
@@ -1282,6 +1286,9 @@ describe('createStatsRoute session table', () => {
     expect(self.children.child.timing).toEqual({
       ttftMs: 100, ttftSteps: 1, decodeMs: 400, decodeTokens: 5,
     })
+    // `fields=chip` omits top-level `timing` so chip polling stays slim.
+    const chip = await query('?root=alpha&scope=subtree&fields=chip')
+    expect(chip.timing).toBeUndefined()
   })
 
   it('keeps the request size constant for a subtree of hundreds of sessions', async () => {

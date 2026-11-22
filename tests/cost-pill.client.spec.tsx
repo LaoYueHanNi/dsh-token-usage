@@ -433,4 +433,34 @@ describe('CostPill', () => {
     )
     expect(await screen.findByRole('button')).not.toBeNull()
   }, 10_000)
+
+  it('refreshes when a subagent summary tokenUsage updates without sessionStats or updatedAt bump', async () => {
+    const fetchMock = stubTreeSequence([TREE_SUMMARY, UPDATED_SUMMARY])
+    const initialById = {
+      'session-a': { id: 'session-a', displayTitle: 'Parent', parentId: undefined, blank: false, running: false, updatedAt: 1 },
+      child: {
+        id: 'child',
+        displayTitle: 'Child',
+        parentId: 'session-a',
+        origin: 'subagent' as const,
+        blank: false,
+        running: false,
+        updatedAt: 2,
+        projectionValues: { tokenUsage: { uncachedInputTokens: 10, outputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 0 } },
+      },
+    } as unknown as SessionListState['byId']
+    const nextById = {
+      ...initialById,
+      child: {
+        ...initialById.child!,
+        projectionValues: { tokenUsage: { uncachedInputTokens: 10, outputTokens: 50, cacheReadTokens: 20, cacheWriteTokens: 0 } },
+      },
+    } as unknown as SessionListState['byId']
+    const { rerender } = render(<CostPill {...propsOf('session-a', initialById)} />)
+    await screen.findByRole('button')
+    const callsBefore = fetchMock.mock.calls.length
+    rerender(<CostPill {...propsOf('session-a', nextById)} />)
+    await waitFor(() => { expect(fetchMock.mock.calls.length).toBeGreaterThan(callsBefore) })
+    await waitFor(() => { expect(screen.getByRole('button').textContent).toContain('20.00￥') })
+  })
 })

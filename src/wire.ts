@@ -840,6 +840,9 @@ export type StatsPayload = (CostedSummaryWire & {
   /** Direct-child breakdown keyed by child id, derived server-side from the
    * scope root's lineage on `fields=session` reads (absent on chip / whole). */
   children?: Readonly<Record<string, ChildUsageSummary>>
+  /** Scope-wide timing buckets aggregated over `scoped` records on
+   * `fields=session` reads, matching DSH's `SessionStatsProjection` formula. */
+  timing?: ChildTiming
 })
 
 /**
@@ -1018,6 +1021,10 @@ export interface UsageSummary extends Omit<CostedSummary, 'bySession'> {
   projectRows?: readonly ProjectUsageRow[]
   requestSeries?: readonly RequestPoint[]
   children?: Readonly<Record<string, ChildUsageSummary>>
+  /** Session-scoped `fields=session` reads only: scope-wide timing buckets
+   * matching DSH's `SessionStatsProjection` (`ttftMs / ttftSteps`,
+   * `decodeTokens / (decodeMs / 1_000)`). */
+  timing?: ChildTiming
   sessionIds?: readonly string[]
   /** Session-scoped `fields=session` reads only: the live request pool
    * (最新请求 / 实时请求). Absent on `chip` and whole-log `full` reads —

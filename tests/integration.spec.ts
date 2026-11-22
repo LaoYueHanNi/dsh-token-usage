@@ -254,6 +254,56 @@ describe('plugin integration', () => {
     })
   })
 
+  it('retains pre-refusal usage from assistant/attempt on live CONTENT_REFUSED turn/end', async () => {
+    const mounted = await mount()
+    await waitForState(mounted.dir)
+    const now = 1_700_000_000_000
+    ctx!.emit('session/event', { id: 's1' }, {
+      type: 'request/context',
+      seq: SessionSeq(1),
+      time: now,
+      data: { provider: 'deepseek-official', model: 'deepseek-chat' },
+    })
+    ctx!.emit('session/event', { id: 's1' }, {
+      type: 'step/start',
+      seq: SessionSeq(2),
+      time: now + 10,
+      data: { turn: 1, step: 1 },
+    })
+    ctx!.emit('session/event', { id: 's1' }, {
+      type: 'assistant/attempt',
+      seq: SessionSeq(3),
+      time: now + 20,
+      data: {
+        turn: 1,
+        step: 1,
+        stream: [{ type: 'chunk', time: now + 20, chunk: { type: 'usage', usage: { inputTokens: 120, outputTokens: 14, cacheReadTokens: 64 } } }],
+      },
+    })
+    ctx!.emit('session/event', { id: 's1' }, {
+      type: 'step/end',
+      seq: SessionSeq(4),
+      time: now + 30,
+      data: { turn: 1, step: 1 },
+    })
+    ctx!.emit('session/event', { id: 's1' }, {
+      type: 'turn/end',
+      seq: SessionSeq(5),
+      time: now + 40,
+      data: { turn: 1, reason: { kind: 'error', error: { code: 'CONTENT_REFUSED', message: 'blocked' } } },
+    })
+    const rows = await pollRows(mounted.dir, 1)
+    expect(rows[0]).toMatchObject({
+      requestId: 'failure:s1:5',
+      sessionId: 's1',
+      model: 'deepseek-chat',
+      provider: 'deepseek-official',
+      kind: 'failure',
+      failureCode: 'CONTENT_REFUSED',
+      usage: { inputTokens: 120, outputTokens: 14, cacheReadTokens: 64 },
+    })
+  })
+
   it('backfills llm/retry events on the first-run sync', async () => {
     sessions.push({
       id: 's1',

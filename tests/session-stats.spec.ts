@@ -7,7 +7,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
-  aggregateProjections, buildChildIndex, buildStatsFreshnessKey, directSubagentIds, sessionStatsFingerprint, subagentParentOf, subtreeIds,
+  aggregateProjections, buildChildIndex, buildStatsFreshnessKey, directSubagentIds, resolveHeaderTiming, sessionStatsFingerprint, subagentParentOf, subtreeIds, tokenUsageFingerprint,
 } from '../src/client/session-stats.ts'
 import type { SessionRows } from '../src/client/session-stats.ts'
 import { decodeChildGroups, decodeStatsScope, encodeSessionScope, encodeStatsQuery } from '../src/wire.ts'
@@ -41,6 +41,72 @@ describe('buildStatsFreshnessKey', () => {
     })
     expect(after).not.toBe(before)
     expect(sessionStatsFingerprint(undefined)).toBe('-')
+  })
+
+  it('changes when subagent summary tokenUsage advances without sessionStats or updatedAt', () => {
+    const beforeRows: SessionRows = {
+      root: { updatedAt: 10 },
+      child: {
+        parentId: 'root',
+        origin: 'subagent',
+        updatedAt: 20,
+        projectionValues: {
+          tokenUsage: { uncachedInputTokens: 100, outputTokens: 20, cacheReadTokens: 0, cacheWriteTokens: 0 },
+        },
+      },
+    }
+    const afterRows: SessionRows = {
+      ...beforeRows,
+      child: {
+        ...beforeRows.child!,
+        projectionValues: {
+          tokenUsage: { uncachedInputTokens: 100, outputTokens: 55, cacheReadTokens: 40, cacheWriteTokens: 0 },
+        },
+      },
+    }
+    const before = buildStatsFreshnessKey(['root', 'child'], { activeSessionId: 'root', rows: beforeRows })
+    const after = buildStatsFreshnessKey(['root', 'child'], { activeSessionId: 'root', rows: afterRows })
+    expect(after).not.toBe(before)
+    expect(tokenUsageFingerprint(undefined)).toBe('-')
+  })
+})
+
+describe('resolveHeaderTiming', () => {
+  const live = { turns: 1, steps: 1, llmMs: 500, toolMs: 0, ttftMs: 100, ttftSteps: 1, decodeMs: 2_000, decodeTokens: 400 }
+  const server = { ttftMs: 600, ttftSteps: 2, decodeMs: 4_000, decodeTokens: 1_000 }
+
+  it('prefers live sessionStats for the solo active session and falls back to serverTiming', () => {
+    expect(resolveHeaderTiming({
+      isSoloActive: true,
+      liveStats: live,
+      mirrorAggregate: undefined,
+      serverTiming: server,
+    })).toEqual({ ttftMs: 100, tokensPerSec: 200 })
+
+    expect(resolveHeaderTiming({
+      isSoloActive: true,
+      liveStats: undefined,
+      mirrorAggregate: undefined,
+      serverTiming: server,
+    })).toEqual({ ttftMs: 300, tokensPerSec: 250 })
+  })
+
+  it('prefers host serverTiming over mirror projections for subtree or drilled subagent views', () => {
+    expect(resolveHeaderTiming({
+      isSoloActive: false,
+      liveStats: live,
+      mirrorAggregate: { ...live, contributing: 1 },
+      serverTiming: server,
+    })).toEqual({ ttftMs: 300, tokensPerSec: 250 })
+
+    // Legacy host without serverTiming falls back to mirrorAggregate, then perfStream*.
+    expect(resolveHeaderTiming({
+      isSoloActive: false,
+      liveStats: live,
+      mirrorAggregate: undefined,
+      serverTiming: undefined,
+      totalPerf: { perfStreamCount: 2, perfStreamFirstMsSum: 900, perfStreamTpsSum: 160 },
+    })).toEqual({ ttftMs: 450, tokensPerSec: 80 })
   })
 })
 

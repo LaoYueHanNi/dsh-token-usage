@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import { currencyViewOf, failuresTooltip, formatCost, formatRate, formatRateWithSymbol, providerLabel } from '../src/client/format.ts'
-import { zh } from '../src/client/locales.ts'
+import { en, zh } from '../src/client/locales.ts'
 
 const t = ((key: string): string => (zh as Record<string, string>)[key] ?? key) as TranslateNS<'token-usage'>
+const tEn = ((key: string): string => (en as Record<string, string>)[key] ?? key) as TranslateNS<'token-usage'>
 
 describe('formatCost', () => {
   it('formats with two decimals and the suffixed ¥ symbol (number-first idiom)', () => {
@@ -82,6 +83,21 @@ describe('failuresTooltip', () => {
 
   it('maps every tracked provider code to a Chinese label', () => {
     expect(failuresTooltip({ INVALID_REQUEST: 2, AUTH: 1 }, t)).toBe('请求无效 ×2\n鉴权失败 ×1')
+  })
+
+  it('localizes CONTENT_REFUSED and account/model failure codes in both zh and en', () => {
+    expect(failuresTooltip({
+      CONTENT_REFUSED: 3,
+      ACCOUNT_QUOTA: 2,
+      ACCOUNT_SIGN_IN_REQUIRED: 1,
+      ACCOUNT_TOKEN_INVALID: 1,
+    }, t)).toBe('内容安全拒绝 ×3\n账号余额不足 ×2\n需要登录账号 ×1\n账号凭证无效 ×1')
+    expect(failuresTooltip({
+      CONTENT_REFUSED: 3,
+      ACCOUNT_QUOTA: 2,
+      ACCOUNT_SIGN_IN_REQUIRED: 1,
+      ACCOUNT_TOKEN_INVALID: 1,
+    }, tEn)).toBe('Content refused ×3\nAccount quota exceeded ×2\nSign-in required ×1\nAccount token invalid ×1')
   })
 
   it('falls back to the raw code when the locale has no label', () => {

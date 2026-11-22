@@ -222,6 +222,26 @@ export function extractFirstTokenTimeFromStream(stream: unknown): number | undef
   return undefined
 }
 
+/**
+ * Extract the last valid provider usage chunk embedded in a compact assistant
+ * stream (`assistant/attempt` / `assistant/message` `stream`). Used to retain
+ * billed tokens emitted before a failure settlement (such as `CONTENT_REFUSED`).
+ */
+export function extractUsageFromStream(stream: unknown): UsageFields | undefined {
+  if (!Array.isArray(stream)) return undefined
+  for (let i = stream.length - 1; i >= 0; i -= 1) {
+    const record = stream[i]
+    if (typeof record !== 'object' || record === null) continue
+    const r = record as { type?: unknown; chunk?: unknown }
+    if (r.type !== 'chunk' || typeof r.chunk !== 'object' || r.chunk === null) continue
+    const chunk = r.chunk as { type?: unknown; usage?: unknown }
+    if (chunk.type !== 'usage') continue
+    const projected = projectUsage(chunk.usage as TokenUsage | undefined)
+    if (projected !== undefined) return projected
+  }
+  return undefined
+}
+
 function isCount(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0
 }
@@ -362,7 +382,9 @@ function failureRow(
   model: string,
   code: string | undefined,
   provider: string | undefined,
+  usage?: UsageFields,
 ): UsageRecord {
+  const projected = projectUsage(usage)
   return {
     requestId: `failure:${sessionId}:${String(event.seq)}`,
     time: event.time,
@@ -373,6 +395,7 @@ function failureRow(
     // 'UNKNOWN'); keep the row honest even if a future event omits it.
     ...(code !== undefined && code !== '' ? { failureCode: code } : {}),
     ...routeKey(provider),
+    ...(projected !== undefined ? { usage: projected } : {}),
   }
 }
 
@@ -404,9 +427,10 @@ export function recordFromTurnEnd(
   sessionId: string,
   model: string,
   provider = '',
+  usage?: UsageFields,
 ): UsageRecord | null {
   if (event.data.reason.kind !== 'error') return null
-  return failureRow(event, sessionId, model, event.data.reason.error.code, provider)
+  return failureRow(event, sessionId, model, event.data.reason.error.code, provider, usage)
 }
 
 /**
@@ -414,7 +438,8 @@ export function recordFromTurnEnd(
  * that failed and that `dsh-llm-retry` scheduled another try for. Every
  * such event is a real failed call (the plugin writes it before the wait,
  * so a later cancel during backoff still counts the original attempt).
- * The row carries no usage; `model` is the session's last-known route
+ * The row carries optional billed usage when the attempt emitted one before
+ * failing; `model` is the session's last-known route
  * (the event names the provider, not the model); the route key is this
  * attempt's own `data.provider`, not the session's last-known route.
  * `failureCode` is the `LlmFailure.code` on the payload.
@@ -425,8 +450,9 @@ export function recordFromRetry(
   event: SessionEvent<'llm/retry'>,
   sessionId: string,
   model: string,
+  usage?: UsageFields,
 ): UsageRecord {
-  return failureRow(event, sessionId, model, event.data.failure.code, event.data.provider)
+  return failureRow(event, sessionId, model, event.data.failure.code, event.data.provider, usage)
 }
 
 /**
@@ -484,6 +510,7 @@ export function recordOfEvent(
   recordCompaction = true,
   timing?: RequestTiming,
   lastProvider = '',
+  failureUsage?: UsageFields,
 ): UsageRecord | null {
   if (isImportedHistoryEvent(event)) return null
   switch (event.type) {
@@ -492,9 +519,9 @@ export function recordOfEvent(
     case 'compaction/summary':
       return recordCompaction ? recordFromCompaction(event, sessionId) : null
     case 'turn/end':
-      return recordFromTurnEnd(event, sessionId, lastModel, lastProvider)
+      return recordFromTurnEnd(event, sessionId, lastModel, lastProvider, failureUsage)
     case 'llm/retry':
-      return recordFromRetry(event, sessionId, lastModel)
+      return recordFromRetry(event, sessionId, lastModel, failureUsage)
     default:
       return null
   }

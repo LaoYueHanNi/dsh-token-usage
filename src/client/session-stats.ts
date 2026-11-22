@@ -10,6 +10,16 @@
  */
 
 import type { SessionStatsProjection } from '@deepseek-ai/dsh-session-stats/client'
+import type { ChildTiming, UsageTotals } from '../wire.ts'
+
+/** Structural mirror of DSH `TokenUsageProjection` (retained on `session.list`
+ * summary rows in DSH 0.2.2+, unlike the summary-excluded `sessionStats`). */
+export interface TokenUsageProjectionLike {
+  uncachedInputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheWriteTokens: number
+}
 
 /** The session-summary shape this module reads (a structural slice of the
  * runtime's `SessionSummary` — parent linkage, origin, and the retained
@@ -18,7 +28,10 @@ export interface SessionRowLike {
   parentId?: string | undefined
   origin?: 'subagent' | undefined
   updatedAt?: number | undefined
-  projectionValues?: Readonly<Partial<{ sessionStats?: SessionStatsProjection }>> | undefined
+  projectionValues?: Readonly<Partial<{
+    sessionStats?: SessionStatsProjection | undefined
+    tokenUsage?: TokenUsageProjectionLike | undefined
+  }>> | undefined
 }
 
 /** The session-summary map this module reads (keyed by session id). */
@@ -170,9 +183,24 @@ export function sessionStatsFingerprint(stats: SessionStatsProjection | undefine
 }
 
 /**
- * Build a debounce key from mirror `updatedAt` plus `sessionStats` churn.
- * The active session reads live projection values from `useProjection`; every
- * other scoped id reads the mirror copy.
+ * Compact fingerprint of one session's summary `tokenUsage` projection —
+ * retained on `session.list` rows in DSH 0.2.2+ after `sessionStats` was
+ * excluded from summaries, so subagent token progress still bumps freshness.
+ */
+export function tokenUsageFingerprint(usage: TokenUsageProjectionLike | undefined): string {
+  if (usage === undefined) return '-'
+  return [
+    usage.uncachedInputTokens,
+    usage.outputTokens,
+    usage.cacheReadTokens,
+    usage.cacheWriteTokens,
+  ].join('.')
+}
+
+/**
+ * Build a debounce key from mirror `updatedAt`, summary `tokenUsage` churn
+ * (for subagents in DSH 0.2.2+), and `sessionStats` churn (active session and
+ * legacy hosts).
  */
 export function buildStatsFreshnessKey(
   ids: readonly string[],
@@ -180,13 +208,90 @@ export function buildStatsFreshnessKey(
     activeSessionId: string
     rows: SessionRows
     liveSessionStats?: SessionStatsProjection | undefined
+    liveTokenUsage?: TokenUsageProjectionLike | undefined
   },
 ): string {
   return ids.map(id => {
     const row = options.rows[id]
+    const tokenUsage = id === options.activeSessionId
+      ? options.liveTokenUsage ?? row?.projectionValues?.tokenUsage
+      : row?.projectionValues?.tokenUsage
     const stats = id === options.activeSessionId
       ? options.liveSessionStats ?? row?.projectionValues?.sessionStats
       : row?.projectionValues?.sessionStats
-    return `${id}:${String(row?.updatedAt ?? 0)}:${sessionStatsFingerprint(stats)}`
+    return `${id}:${String(row?.updatedAt ?? 0)}:${tokenUsageFingerprint(tokenUsage)}:${sessionStatsFingerprint(stats)}`
   }).join(',')
+}
+
+/** Aggregate retained `sessionStats` projections across `ids`, preferring the
+ * live hook for `activeSessionId` and reading mirror rows for legacy hosts. */
+export function aggregateScopedProjections(
+  ids: readonly string[],
+  rows: SessionRows,
+  activeSessionId: string,
+  liveSessionStats: SessionStatsProjection | undefined,
+): StatsAggregate | undefined {
+  return aggregateProjections(ids.map((id) => {
+    if (id === activeSessionId) return liveSessionStats ?? rows[id]?.projectionValues?.sessionStats
+    return rows[id]?.projectionValues?.sessionStats
+  }))
+}
+
+/** Resolved header TTFT (ms) and decode throughput (tokens/s). */
+export interface HeaderTiming {
+  ttftMs?: number
+  tokensPerSec?: number
+}
+
+function timingFromBuckets(bucket: Pick<ChildTiming, 'ttftMs' | 'ttftSteps' | 'decodeMs' | 'decodeTokens'> | undefined): HeaderTiming {
+  if (bucket === undefined) return {}
+  return {
+    ...(bucket.ttftSteps > 0 ? { ttftMs: bucket.ttftMs / bucket.ttftSteps } : {}),
+    ...(bucket.decodeMs > 0 ? { tokensPerSec: bucket.decodeTokens / (bucket.decodeMs / 1_000) } : {}),
+  }
+}
+
+function timingFromPerfTotals(
+  totals: Pick<UsageTotals, 'perfStreamCount' | 'perfStreamFirstMsSum' | 'perfStreamTpsSum'> | undefined,
+): HeaderTiming {
+  const samples = totals?.perfStreamCount ?? 0
+  if (samples <= 0) return {}
+  return {
+    ...(totals?.perfStreamFirstMsSum !== undefined ? { ttftMs: totals.perfStreamFirstMsSum / samples } : {}),
+    ...(totals?.perfStreamTpsSum !== undefined ? { tokensPerSec: totals.perfStreamTpsSum / samples } : {}),
+  }
+}
+
+/**
+ * Resolve header TTFT and decode throughput while keeping DSH's weighted
+ * projection formula (`ttftMs / ttftSteps`, `decodeTokens / (decodeMs / 1_000)`):
+ * - Solo active session: prefer live `sessionStats` projection (covers
+ *   unlogged pre-install history and per-step retries), then host `summary.timing`.
+ * - Subtree or drilled subagent: prefer host-aggregated `summary.timing` (which
+ *   covers finished subagents even when `sessionStats` is excluded from
+ *   summaries in DSH 0.2.2+), then legacy mirror projections, then `perfStream*`
+ *   on `history-incomplete` rollup fallbacks.
+ */
+export function resolveHeaderTiming(input: {
+  isSoloActive: boolean
+  liveStats: SessionStatsProjection | undefined
+  mirrorAggregate: StatsAggregate | undefined
+  serverTiming: ChildTiming | undefined
+  totalPerf?: Pick<UsageTotals, 'perfStreamCount' | 'perfStreamFirstMsSum' | 'perfStreamTpsSum'> | undefined
+}): HeaderTiming {
+  const live = timingFromBuckets(input.liveStats)
+  const server = timingFromBuckets(input.serverTiming)
+  const mirror = timingFromBuckets(input.mirrorAggregate)
+  const perf = timingFromPerfTotals(input.totalPerf)
+  const order = input.isSoloActive ? [live, server, mirror, perf] : [server, mirror, perf]
+  let ttftMs: number | undefined
+  let tokensPerSec: number | undefined
+  for (const candidate of order) {
+    if (ttftMs === undefined && candidate.ttftMs !== undefined) ttftMs = candidate.ttftMs
+    if (tokensPerSec === undefined && candidate.tokensPerSec !== undefined) tokensPerSec = candidate.tokensPerSec
+  }
+  return {
+    ...(ttftMs !== undefined ? { ttftMs } : {}),
+    ...(tokensPerSec !== undefined ? { tokensPerSec } : {}),
+  }
 }

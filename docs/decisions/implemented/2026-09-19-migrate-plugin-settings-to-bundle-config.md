@@ -15,6 +15,9 @@ Status: implemented
 
 ## Decision
 
+> [!NOTE]
+> 本决策中「保留 `settings.plugin.item` 与 `@deepseek-ai/dsh-client-ui-settings-plugins` 兼容」的部分已于 2026-09-22 在 [DR: 硬切宿主 dsh 0.1.7 Settings 重构](../implemented/2026-09-22-compat-dsh-0-1-7-settings-and-config-forms.md) 移除槽注册，并于 2026-11-22 彻底移除 `@deepseek-ai/dsh-client-ui-settings-plugins` 的 `dsh.client.inject`、`devDependencies` 与类型导入残留（适配 DSH 0.2.2 下线该包）。
+
 立足**“生态最大化向后兼容”**原则——只要具备兼容技术路径，坚决保持双向平滑兼容，绝不因宿主升级而强行提升最低版本要求，仅在底层完全不可逆或无法兼容的极端情况下才考虑破坏性升级。具体落地为：
 
 1. **双插槽注册（平滑兼容两代宿主）**：

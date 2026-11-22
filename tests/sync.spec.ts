@@ -1184,4 +1184,78 @@ describe('syncHistory fork handling', () => {
     const repeat = await syncHistory({ persistence, log })
     expect(repeat).toEqual({ added: 0, skipped: 4, removed: 0, failedSessions: 0 })
   })
+
+  it('extracts billed usage from assistant/attempt for CONTENT_REFUSED turn/end and llm/retry without leaking across forks', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'token-usage-refusal-sync-'))
+    tempDirs.push(dir)
+    const dayTime = new Date(2026, 0, 15, 12).getTime()
+    const attempt = (seq: number, turn: number, step: number, inputTokens: number, outputTokens: number): SessionEvent => ({
+      type: 'assistant/attempt',
+      seq: SessionSeq(seq),
+      time: dayTime + seq,
+      data: {
+        turn,
+        step,
+        stream: [{ type: 'chunk', time: dayTime + seq, chunk: { type: 'usage', usage: { inputTokens, outputTokens } } }],
+      },
+    })
+
+    const parentEvents: SessionEvent[] = [
+      { type: 'request/context', seq: SessionSeq(0), time: dayTime, data: { provider: 'deepseek-official', model: 'deepseek-chat' } } as SessionEvent,
+      { type: 'step/start', seq: SessionSeq(1), time: dayTime + 1, data: { turn: 1, step: 1 } },
+      // Inherited attempt + error in parent: billed once to parent.
+      attempt(2, 1, 1, 300, 30),
+      { type: 'step/end', seq: SessionSeq(3), time: dayTime + 3, data: { turn: 1, step: 1 } },
+      turnEndEvent({ seq: 4, time: dayTime + 4, turn: 1, reason: { kind: 'error', error: { code: 'CONTENT_REFUSED', message: 'blocked' } } }),
+    ]
+    const childEvents: SessionEvent[] = [
+      ...parentEvents,
+      endSeedEvent(5, true),
+      // Own turn with retry then terminal refusal.
+      { type: 'step/start', seq: SessionSeq(6), time: dayTime + 6, data: { turn: 2, step: 1 } },
+      attempt(7, 2, 1, 400, 10),
+      retryEvent({ seq: 8, time: dayTime + 8, turn: 2, step: 1, failure: { code: 'CONTENT_REFUSED', message: 'retry blocked' } }),
+      attempt(9, 2, 1, 500, 25),
+      { type: 'step/end', seq: SessionSeq(10), time: dayTime + 10, data: { turn: 2, step: 1 } },
+      turnEndEvent({ seq: 11, time: dayTime + 11, turn: 2, reason: { kind: 'error', error: { code: 'CONTENT_REFUSED', message: 'terminal blocked' } } }),
+      // Next turn succeeds: must not reuse prior attempt usage.
+      { type: 'step/start', seq: SessionSeq(12), time: dayTime + 12, data: { turn: 3, step: 1 } },
+      attempt(13, 3, 1, 100, 5),
+      messageEvent({ messageId: 'ok-3', seq: 14, time: dayTime + 14, turn: 3, step: 1, inputTokens: 100, outputTokens: 20 }),
+      { type: 'step/end', seq: SessionSeq(15), time: dayTime + 15, data: { turn: 3, step: 1 } },
+      // Terminal error with no attempt in turn 4: no stale usage attaches.
+      turnEndEvent({ seq: 16, time: dayTime + 16, turn: 4, reason: { kind: 'error', error: { code: 'SERVER', message: 'boom' } } }),
+    ]
+
+    const persistence: SyncPersistence = {
+      async list() {
+        return [{ header: { id: 'parent' as SessionId } }, { header: { id: 'child' as SessionId } }]
+      },
+      async open(id) {
+        const all = id === 'child' ? childEvents : parentEvents
+        return {
+          inheritedEventCount: id === 'child' ? parentEvents.length : 0,
+          read: (offset = 0, length = all.length) => Promise.resolve({ events: all.slice(offset, offset + length) }),
+          close: () => Promise.resolve(),
+        }
+      },
+    }
+    const log = new UsageLog(dir)
+    await syncHistory({ persistence, log })
+    const rows = (await readFile(join(dir, 'usage-2026-01-15.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map(line => JSON.parse(line) as UsageRecord)
+
+    expect(rows.find(r => r.requestId === 'failure:parent:4')).toMatchObject({
+      kind: 'failure', failureCode: 'CONTENT_REFUSED', usage: { inputTokens: 300, outputTokens: 30 },
+    })
+    expect(rows.find(r => r.requestId === 'failure:child:8')).toMatchObject({
+      kind: 'failure', failureCode: 'CONTENT_REFUSED', usage: { inputTokens: 400, outputTokens: 10 },
+    })
+    expect(rows.find(r => r.requestId === 'failure:child:11')).toMatchObject({
+      kind: 'failure', failureCode: 'CONTENT_REFUSED', usage: { inputTokens: 500, outputTokens: 25 },
+    })
+    expect(rows.find(r => r.requestId === 'failure:child:16')?.usage).toBeUndefined()
+  })
 })
