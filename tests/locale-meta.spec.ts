@@ -2,13 +2,15 @@
  * 包级本地化元数据契约：宿主 `dsh-app-boot` 经 `package.json` 的 exports 解析
  * `<包名>/locale/en.json` 作扫描锚点，再 `readdirSync` 同目录的整份词典集，把各
  * JSON 的 `meta.title` / `meta.description` 合成为 `{ en: <package.json 原值>, zh: … }`，
- * 前端再用 `dsh-client-locale` 的 `resolveText()` 按界面语言取值。
+ * 前端再用 `dsh-client-locale` 的 `resolveText()` 按界面语言取值。插件页的正文
+ * （`meta.detail`）另由 `readBundleDetail` 按同一份语言链取 locale JSON，未声明时
+ * 才回退渲染整份 README；声明了却缺失/超 1 MiB 是错误，不是回退。
  *
  * 四个环节缺任何一个都是静默失效——宿主不报错，文案只是无声退回 `package.json`
  * 的英文原值：exports 白名单挡住子路径、files 漏掉目录、en.json 缺失让同目录的
  * zh.json 一并被忽略、zh.json 字段为空让宿主 `textOf()` 抛错。这里逐条钉住。
  */
-import { readFileSync, readdirSync } from 'node:fs'
+import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { basename, join } from 'node:path'
 import { beforeAll, describe, expect, it } from 'vitest'
@@ -30,14 +32,15 @@ const LOCALE_ID_PATTERN = /^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$/u
 interface Meta {
   title?: string
   description?: string
+  detail?: string
 }
 
 const readMeta = (id: string): Meta =>
   JSON.parse(readFileSync(join(localeDir, `${id}.json`), 'utf8')).meta ?? {}
 
 /**
- * 复刻宿主 localizedText()：以 en.json 为锚点扫描同目录词典集，en 沿用
- * package.json 原值，其余语言由各自的 meta 覆盖。
+ * 复刻宿主 localizedText()：以 en.json 为锚点扫描同目录词典集，en 以 package.json
+ * 原值为基线，再由各词典（含 en.json 自身的条目）覆盖。
  */
 const localizedText = (): Record<string, Meta> => {
   const text: Record<string, Meta> = {
@@ -91,9 +94,12 @@ describe('package locale metadata contract', () => {
     expect(pkg.files).toContain('locale')
   })
 
-  it('en.json 存在且 meta 留空——它是目录扫描的锚点，缺失会让 zh.json 一并被忽略', () => {
+  it('en.json 存在且承载完整英文 meta——它同时是目录扫描的锚点，缺失会让 zh.json 一并被忽略', () => {
     expect(readdirSync(localeDir)).toContain('en.json')
-    expect(readMeta('en')).toEqual({})
+    const { title, description, detail } = readMeta('en')
+    expect(title).toBe('Token Usage')
+    expect(description).not.toBe('')
+    expect(detail).toBe('docs/DETAIL.md')
   })
 
   it('zh.json 的两个字段都是非空字符串（空串会让宿主 textOf 抛错）', () => {
@@ -129,12 +135,48 @@ describe('localized display text', () => {
     expect(text.description).toBe(readMeta('zh').description)
   })
 
-  it('英文界面回落到 package.json 原值（行为与接入前逐字相同）', () => {
+  it('英文界面取 en.json 的英文文案（不再是 package.json 原值）', () => {
     const runtime = new LocaleRuntime({ emit() {} }, undefined, undefined)
     runtime.setLocale('en')
     const text = runtime.resolveText(localizedText())
-    expect(text.title).toBe(pkg.name)
-    expect(text.description).toBe(pkg.description)
+    expect(text.title).toBe(readMeta('en').title)
+    expect(text.description).toBe(readMeta('en').description)
     expect(`${text.title} ${text.description}`).not.toMatch(/[\u4e00-\u9fa5]/u)
+  })
+})
+
+describe('plugin detail document contract', () => {
+  /** 宿主按语言链逐个 locale 取 `meta.detail`，声明了就按包内相对路径读文档。 */
+  const declared = (id: string): string => {
+    const detail = readMeta(id).detail
+    expect(typeof detail).toBe('string')
+    return detail as string
+  }
+
+  it('两份 locale 各自声明本语言的正文（英文 DETAIL.md，中文 DETAIL.zh.md）', () => {
+    expect(declared('en')).toBe('docs/DETAIL.md')
+    expect(declared('zh')).toBe('docs/DETAIL.zh.md')
+  })
+
+  it('detail 路径相对包根、以 / 分隔、以 .md 结尾且不越出包目录', () => {
+    for (const id of ['en', 'zh']) {
+      const detail = declared(id)
+      expect(detail.endsWith('.md')).toBe(true)
+      expect(detail.startsWith('/')).toBe(false)
+      expect(detail.includes('\\')).toBe(false)
+      expect(detail.split('/')).not.toContain('..')
+    }
+  })
+
+  it('声明的文档真实存在、非空且未超过宿主 detailMaxBytes（1 MiB）', () => {
+    for (const id of ['en', 'zh']) {
+      const bytes = statSync(join(repoRoot, declared(id))).size
+      expect(bytes).toBeGreaterThan(0)
+      expect(bytes).toBeLessThan(1024 * 1024)
+    }
+  })
+
+  it('files 逐文件收录两份文档（漏收则 npm pack 不带，宿主取不到正文）', () => {
+    expect(pkg.files).toEqual(expect.arrayContaining(['docs/DETAIL.md', 'docs/DETAIL.zh.md']))
   })
 })

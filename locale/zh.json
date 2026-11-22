@@ -1,6 +1,7 @@
 {
   "meta": {
     "title": "Token 用量",
-    "description": "记录每次请求的 token 用量、费用，按模型、会话统计"
+    "description": "记录每次请求的 token 用量、费用，按项目、模型、会话与供应商统计：侧栏「Token 用量」大屏、设置 → Token 用量，以及对话面板的「用量」页签展示同一份指标。",
+    "detail": "docs/DETAIL.zh.md"
   }
 }

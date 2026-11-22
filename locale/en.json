@@ -1,3 +1,7 @@
 {
-  "meta": {}
+  "meta": {
+    "title": "Token Usage",
+    "description": "Records every provider-billed call's tokens and cost and breaks them down by project, model, session and provider: the sidebar's Token Usage dashboard, Settings → Token Usage, and the Usage tab in a conversation all show the same metrics.",
+    "detail": "docs/DETAIL.md"
+  }
 }
