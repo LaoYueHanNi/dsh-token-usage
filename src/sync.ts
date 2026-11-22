@@ -26,7 +26,7 @@ import type {} from '@deepseek-ai/dsh-compaction/types'
 import type {} from '@deepseek-ai/dsh-llm-retry/types'
 import { markInitialized, markMetaSynced, readSyncState } from './sync-state.ts'
 import { CompactionAttributionWindow } from './compaction-attribution.ts'
-import { extractFirstTokenTimeFromStream, modelOfEvent, providerOfEvent, recordOfEvent, type RequestTiming } from './usage-record.ts'
+import { extractFirstTokenTimeFromStream, isImportedHistoryEvent, modelOfEvent, providerOfEvent, recordOfEvent, type RequestTiming } from './usage-record.ts'
 import type { UsageLog } from './usage-log.ts'
 
 /** Outcome of one sync run. */
@@ -47,6 +47,10 @@ export interface SyncResult {
    * example, a parent `assistant/message` previously misattributed to a fork
    * child). Omitted when zero. */
   reassigned?: number
+  /** Session events skipped because the DeepSeek chat importer synthesized
+   * them (imported replies and their excluded-reply turn errors, see
+   * `isImportedHistoryEvent`). Omitted when zero. */
+  ignoredImported?: number
 }
 
 /**
@@ -72,6 +76,8 @@ export interface SyncProgressTick {
   /** Sessions skipped so far because their stored log failed to load or
    * validate; they count as processed for the progress bar. */
   failedSessions: number
+  /** Importer-synthesized events skipped so far; omitted while zero. */
+  ignoredImported?: number
 }
 
 /**
@@ -372,8 +378,13 @@ export async function syncHistory(
   let removed = 0
   let reassigned = 0
   let failedSessions = 0
+  let ignoredImported = 0
   const total = sessions.length
   let processed = 0
+  const progress = (): SyncProgressTick => ({
+    processed, total, added, skipped, removed, failedSessions,
+    ...(ignoredImported > 0 ? { ignoredImported } : {}),
+  })
   /** Every id this walk reproduces; the reconcile pass keeps exactly these. */
   const reproduced = new Set<string>()
   /** Reproducing sessions observed per request id; unique owners feed
@@ -383,7 +394,7 @@ export async function syncHistory(
    * row whose session is missing from the list (deleted, or hidden behind a
    * header this build cannot read) is never dropped for its absence. */
   const readable = new Set<SessionId>()
-  onTick?.({ processed, total, added, skipped, removed, failedSessions })
+  onTick?.(progress())
   for (const id of sessions) {
     signal?.throwIfAborted()
     // One unreadable session log (a format the current dsh build rejects,
@@ -406,7 +417,7 @@ export async function syncHistory(
       failedSessions += 1
       processed += 1
       deps.onSessionFailure?.(id, error)
-      onTick?.({ processed, total, added, skipped, removed, failedSessions })
+      onTick?.(progress())
       continue
     }
     // The session was read in full: this walk is now the authority for what
@@ -477,6 +488,13 @@ export async function syncHistory(
         openStep = null
       }
       attributionWindow.observe(event)
+      // Importer-synthesized history is no provider call: count it for the
+      // scan summary and leave it out of `reproduced`, so the closing
+      // reconcile drops rows an older build recorded for it.
+      if (isImportedHistoryEvent(event)) {
+        ignoredImported += 1
+        continue
+      }
       const record = recordOfEvent(event, id, model, deps.recordCompaction !== false, timing, provider)
       if (record === null) continue
       // Attribution attaches to plain-request rows only (same rule as the
@@ -514,7 +532,7 @@ export async function syncHistory(
       if (Object.keys(patch).length > 0) await deps.meta.upsert(id, patch)
     }
     processed += 1
-    onTick?.({ processed, total, added, skipped, removed, failedSessions })
+    onTick?.(progress())
   }
   // Reconcile last, once every readable session has spoken for its rows: a
   // saved row no readable session reproduces is a relic of an older stored
@@ -541,6 +559,7 @@ export async function syncHistory(
     removed,
     failedSessions,
     ...(reassigned > 0 ? { reassigned } : {}),
+    ...(ignoredImported > 0 ? { ignoredImported } : {}),
   }
 }
 

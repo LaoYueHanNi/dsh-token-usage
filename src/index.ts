@@ -620,6 +620,7 @@ export function apply(ctx: Context, config: Config = {}) {
           skipped: result.skipped,
           removed: result.removed,
           failedSessions: result.failedSessions,
+          ...(result.ignoredImported !== undefined ? { ignoredImported: result.ignoredImported } : {}),
         }
         // A manual scan usually backfills compactions this version just
         // learned to record (or rows a crash dropped): drop the derived
@@ -631,7 +632,8 @@ export function apply(ctx: Context, config: Config = {}) {
           logger.info(`[token-usage] refiled ${String(moved)} rows onto event-day files`)
         }
         const reassignedNote = reassigned > 0 ? `, ${String(reassigned)} reassigned` : ''
-        logger.info(`[token-usage] full sync done: ${String(result.added)} added, ${String(result.skipped)} skipped, ${String(result.removed)} removed${reassignedNote}, ${String(result.failedSessions)} failed sessions`)
+        const importedNote = result.ignoredImported !== undefined ? `, ${String(result.ignoredImported)} DeepSeek chat imported events ignored` : ''
+        logger.info(`[token-usage] full sync done: ${String(result.added)} added, ${String(result.skipped)} skipped, ${String(result.removed)} removed${reassignedNote}${importedNote}, ${String(result.failedSessions)} failed sessions`)
       })
       .catch((error: unknown) => {
         const message = error instanceof Error ? error.message : String(error)

@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import {
   extractFirstTokenTimeFromStream,
+  isImportedHistoryEvent,
   isTokenDelta,
   modelOfEvent,
   parseRecord,
   projectUsage,
+  providerOfEvent,
   recordFromCompaction,
   recordFromEvent,
   recordFromRetry,
@@ -628,5 +630,42 @@ describe('extractFirstTokenTimeFromStream', () => {
       },
     ]
     expect(extractFirstTokenTimeFromStream(stream)).toBe(4000)
+  })
+})
+
+describe('DeepSeek chat imported history', () => {
+  const importedReply = (): SessionEvent<'assistant/message'> => messageEvent({
+    provider: 'deepseek-chat-export', model: 'deepseek-chat-export', usage: undefined,
+  })
+  const exportFailure = (code: string): SessionEvent<'turn/end'> => turnEndEvent({
+    reason: { kind: 'error', error: { code, message: 'excluded reply' } },
+  })
+
+  it('classifies importer replies and importer turn errors as imported history', () => {
+    expect(isImportedHistoryEvent(importedReply())).toBe(true)
+    expect(isImportedHistoryEvent(exportFailure('DEEPSEEK_EXPORT_NO_REPLY'))).toBe(true)
+    expect(isImportedHistoryEvent(exportFailure('DEEPSEEK_EXPORT_TEMPLATE_RESPONSE'))).toBe(true)
+  })
+
+  it('keeps real calls, real failures, and other events out of imported history', () => {
+    expect(isImportedHistoryEvent(messageEvent())).toBe(false)
+    // A reply under the importer key that carries real usage is billed.
+    expect(isImportedHistoryEvent(messageEvent({ provider: 'deepseek-chat-export' }))).toBe(false)
+    expect(isImportedHistoryEvent(turnEndEvent())).toBe(false)
+    expect(isImportedHistoryEvent(turnEndEvent({ reason: { kind: 'completed' } }))).toBe(false)
+    expect(isImportedHistoryEvent(retryEvent())).toBe(false)
+  })
+
+  it('records no row for imported history', () => {
+    expect(recordOfEvent(importedReply(), 's', '')).toBeNull()
+    expect(recordOfEvent(exportFailure('DEEPSEEK_EXPORT_FAILED'), 's', 'deepseek-chat')).toBeNull()
+    expect(recordOfEvent(turnEndEvent(), 's', 'deepseek-chat')?.kind).toBe('failure')
+  })
+
+  it('reveals no route from an imported reply', () => {
+    expect(modelOfEvent(importedReply())).toBeUndefined()
+    expect(providerOfEvent(importedReply())).toBeUndefined()
+    expect(modelOfEvent(messageEvent())).toBe('deepseek-chat')
+    expect(providerOfEvent(messageEvent())).toBe('deepseek')
   })
 })

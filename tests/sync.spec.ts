@@ -812,6 +812,31 @@ describe('syncHistory reconcile', () => {
     expect(second).toEqual({ added: 0, skipped: 1, removed: 0, failedSessions: 0 })
     expect(log.rows.map(row => row.requestId)).toEqual(['m1'])
   })
+
+  it('skips DeepSeek chat imported history, counts it, and drops rows an older build recorded for it', async () => {
+    const log = new FakeLog()
+    // Rows an older build wrote for the imported reply and its excluded-reply turn error.
+    await log.record({ requestId: 'imported-reply', sessionId: 's1' })
+    await log.record({ requestId: 'failure:s1:2', sessionId: 's1' })
+    const persistence = fakePersistence([{
+      id: 's1',
+      events: [
+        messageEvent({ messageId: 'imported-reply', seq: 1, provider: 'deepseek-chat-export', model: 'deepseek-chat-export', usage: undefined }),
+        turnEndEvent({ seq: 2, reason: { kind: 'error', error: { code: 'DEEPSEEK_EXPORT_NO_REPLY', message: 'no reply' } } }),
+        // The user continues the imported conversation on a real route.
+        { type: 'request/context', seq: 3, time: 3, data: { model: 'deepseek-v4', provider: 'deepseek' } } as SessionEvent,
+        messageEvent({ messageId: 'real-reply', seq: 4, model: 'deepseek-v4' }),
+        turnEndEvent({ seq: 5 }),
+      ],
+    }])
+    const ticks: Array<number | undefined> = []
+    const result = await syncHistory({ persistence, log }, tick => { ticks.push(tick.ignoredImported) })
+    expect(result).toEqual({ added: 2, skipped: 0, removed: 2, failedSessions: 0, ignoredImported: 2 })
+    expect(ticks).toEqual([undefined, 2])
+    expect(log.rows.map(row => row.requestId).sort()).toEqual(['failure:s1:5', 'real-reply'])
+    const failure = log.rows.find(row => row.requestId === 'failure:s1:5') as UsageRecord | undefined
+    expect(failure?.model).toBe('deepseek-v4')
+  })
 })
 
 function endSeedEvent(seq: number, inherited?: true): SessionEvent<'session/end-seed'> {

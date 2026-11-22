@@ -222,11 +222,13 @@ export interface DirectoryGuardView {
  * last one settled and the card cleared it); `running` carries the live
  * counts the card renders as a progress bar; `done` and `failed` are the
  * terminal states the card holds on screen until the next run.
+ * `ignoredImported` counts DeepSeek chat imported events the scan skipped;
+ * it is omitted while zero (and by hosts that predate it).
  */
 export type FullSyncView =
   | { status: 'idle' }
-  | { status: 'running'; processed: number; total: number; added: number; skipped: number; removed: number; failedSessions: number }
-  | { status: 'done'; processed: number; total: number; added: number; skipped: number; removed: number; failedSessions: number }
+  | { status: 'running'; processed: number; total: number; added: number; skipped: number; removed: number; failedSessions: number; ignoredImported?: number }
+  | { status: 'done'; processed: number; total: number; added: number; skipped: number; removed: number; failedSessions: number; ignoredImported?: number }
   | { status: 'failed'; error: string }
 
 /** Aggregated token counts over one group of records. */

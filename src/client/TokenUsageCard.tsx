@@ -122,6 +122,8 @@ export function TokenUsageCard(props: TokenUsageCardProps) {
             skipped: body.skipped,
             removed: typeof body.removed === 'number' ? body.removed : 0,
             failedSessions: typeof body.failedSessions === 'number' ? body.failedSessions : 0,
+            ...(typeof body.ignoredImported === 'number' && body.ignoredImported > 0
+              ? { ignoredImported: body.ignoredImported } : {}),
           }
         }
         return null
@@ -298,6 +300,9 @@ export function TokenUsageCard(props: TokenUsageCardProps) {
                       {fullSync.failedSessions > 0
                         ? t('card.fullSync.failuresNote', { count: String(fullSync.failedSessions) })
                         : ''}
+                      {fullSync.ignoredImported !== undefined
+                        ? t('card.fullSync.importedNote', { count: String(fullSync.ignoredImported) })
+                        : ''}
                     </span>
                     <span className={css.fullSyncBar}>
                       <span
@@ -318,6 +323,9 @@ export function TokenUsageCard(props: TokenUsageCardProps) {
                     })}
                     {fullSync.failedSessions > 0
                       ? t('card.fullSync.failuresNote', { count: String(fullSync.failedSessions) })
+                      : ''}
+                    {fullSync.ignoredImported !== undefined
+                      ? t('card.fullSync.importedNote', { count: String(fullSync.ignoredImported) })
                       : ''}
                   </p>
                 )

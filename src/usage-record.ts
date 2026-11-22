@@ -430,9 +430,48 @@ export function recordFromRetry(
 }
 
 /**
+ * Route key the experimental `@deepseek-ai/dsh-deepseek-chat-import` plugin
+ * writes as both `provider` and `model` on every imported assistant message
+ * (upstream `IMPORTED_MODEL_SOURCE`). Mirrored here because the plugin is not
+ * a dependency of this package.
+ */
+export const IMPORTED_CHAT_EXPORT_PROVIDER = 'deepseek-chat-export'
+
+/**
+ * Failure-code prefix of the `turn/end` errors the same importer writes for
+ * exported replies it excludes from model history (no reply, unfinished
+ * status, server template, empty reply). These turns never reached a provider.
+ */
+export const IMPORTED_CHAT_EXPORT_FAILURE_PREFIX = 'DEEPSEEK_EXPORT_'
+
+/**
+ * Whether one session event is conversation history the DeepSeek chat
+ * importer synthesized rather than a provider call: an imported
+ * `assistant/message` (the importer's route key with no usage) or a
+ * `turn/end` error carrying an importer failure code. Such events never
+ * become log rows and never reveal the session's route. A later turn the
+ * user runs on an imported session names a real route and records normally.
+ * @param event - one session event.
+ * @returns true for importer-synthesized history.
+ */
+export function isImportedHistoryEvent(event: SessionEvent): boolean {
+  if (event.type === 'assistant/message') {
+    return event.data.message.source.provider === IMPORTED_CHAT_EXPORT_PROVIDER
+      && projectUsage(event.data.usage) === undefined
+  }
+  if (event.type === 'turn/end') {
+    return event.data.reason.kind === 'error'
+      && event.data.reason.error.code.startsWith(IMPORTED_CHAT_EXPORT_FAILURE_PREFIX)
+  }
+  return false
+}
+
+/**
  * Project one session event into a log row, or null when the event is not
- * a recorded origin. Live listening and history sync share this so a new
- * origin cannot land on only one path. `lastModel` is the session's last
+ * a recorded origin (including history the DeepSeek chat importer
+ * synthesized, see {@link isImportedHistoryEvent}). Live listening and
+ * history sync share this so a new origin cannot land on only one path.
+ * `lastModel` is the session's last
  * known model and `lastProvider` its last known route key (a `turn/end`
  * error names neither; compaction and `llm/retry` carry their own route
  * on the event). Compaction recording follows the same `recordCompaction`
@@ -446,6 +485,7 @@ export function recordOfEvent(
   timing?: RequestTiming,
   lastProvider = '',
 ): UsageRecord | null {
+  if (isImportedHistoryEvent(event)) return null
   switch (event.type) {
     case 'assistant/message':
       return recordFromEvent(event, sessionId, timing)
@@ -473,10 +513,13 @@ function headerConfigOf(event: SessionEvent): { model?: unknown; provider?: unkn
  * (it logs only on change), and `assistant/message` confirms the model that
  * actually produced a message. All three fold into the same last-known value,
  * so a turn that ends in an error can still attribute its failure row to a model.
+ * An imported DeepSeek chat message reveals nothing: its route key is not a model.
  */
 export function modelOfEvent(event: SessionEvent): string | undefined {
   if (event.type === 'request/context') return event.data.model
-  if (event.type === 'assistant/message') return event.data.message.source.model
+  if (event.type === 'assistant/message') {
+    return isImportedHistoryEvent(event) ? undefined : event.data.message.source.model
+  }
   return nonEmpty(headerConfigOf(event)?.model)
 }
 
@@ -487,10 +530,13 @@ export function modelOfEvent(event: SessionEvent): string | undefined {
  * nothing — it must not wipe a route already known. Compaction and
  * `llm/retry` name their own route on the row, but they do not move this
  * last-known value; a later `turn/end` keeps following the request route.
+ * An imported DeepSeek chat message reveals nothing, same as in {@link modelOfEvent}.
  */
 export function providerOfEvent(event: SessionEvent): string | undefined {
   if (event.type === 'request/context') return nonEmpty(event.data.provider)
-  if (event.type === 'assistant/message') return nonEmpty(event.data.message.source.provider)
+  if (event.type === 'assistant/message') {
+    return isImportedHistoryEvent(event) ? undefined : nonEmpty(event.data.message.source.provider)
+  }
   return nonEmpty(headerConfigOf(event)?.provider)
 }
 
