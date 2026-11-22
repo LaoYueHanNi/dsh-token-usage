@@ -15,7 +15,7 @@ import { OverheadRows } from '../src/client/OverheadRows.tsx'
 import { formatCost, formatTokens } from '../src/client/format.ts'
 import type { CurrencyView } from '../src/client/format.ts'
 import { zh } from '../src/client/locales.ts'
-import type { AuxSummary, UsageTotals } from '../src/wire.ts'
+import type { AuxSummary, UsageTotals, WebSearchSummary } from '../src/wire.ts'
 
 const VIEW: CurrencyView = { symbol: '￥', rate: 1 }
 
@@ -143,6 +143,49 @@ describe('OverheadRows', () => {
     const list = screen.getByRole('list', { name: zh['aux.tab'] })
     expect(within(list).getByRole('button', { name: zh['aux.kind.timeline-report'] })).toBeTruthy()
     expect(within(list).getByText('deepseek-chat')).toBeTruthy()
+  })
+
+  it('renders the web-tools row expanded by default with per-tool lines and toggles closed', () => {
+    const web: WebSearchSummary = {
+      calls: 5,
+      failures: 1,
+      byTool: [
+        { tool: 'web_search', calls: 2, failures: 1 },
+        { tool: 'web_fetch', calls: 3, failures: 0 },
+      ],
+    }
+    render(<OverheadRows aux={AUX} web={web} costState="ready" view={VIEW} t={t} />)
+    const list = screen.getByRole('list', { name: zh['aux.tab'] })
+    expect(within(list).getAllByRole('listitem')).toHaveLength(3)
+    const webRow = within(list).getAllByRole('listitem')[2]!
+    const toggle = within(webRow).getByRole('button', { name: zh['web.title'] })
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    expect(webRow.textContent).toContain(zh['web.calls'].replace('{count}', '5'))
+    expect(webRow.textContent).toContain(zh['web.tool.web_search'])
+    expect(webRow.textContent).toContain(zh['web.calls'].replace('{count}', '2'))
+    expect(webRow.textContent).toContain(zh['web.tool.web_fetch'])
+    expect(webRow.textContent).toContain(zh['web.calls'].replace('{count}', '3'))
+    expect(screen.getByText(zh['aux.totalCount'].replace('{count}', '3'))).toBeTruthy()
+
+    fireEvent.click(toggle)
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(webRow.textContent).not.toContain(zh['web.tool.web_search'])
+    expect(webRow.textContent).not.toContain(zh['web.tool.web_fetch'])
+  })
+
+  it('shows the web-tools row even when there are no auxiliary requests', () => {
+    const web: WebSearchSummary = {
+      calls: 1,
+      failures: 0,
+      byTool: [{ tool: 'web_search', calls: 1, failures: 0 }],
+    }
+    render(<OverheadRows aux={undefined} web={web} costState="ready" view={VIEW} t={t} />)
+    expect(screen.queryByText(zh['aux.empty'])).toBeNull()
+    const row = screen.getByRole('list', { name: zh['aux.tab'] }).querySelector('[role="listitem"]')!
+    expect(row.textContent).toContain(zh['web.title'])
+    expect(row.textContent).toContain(zh['web.tool.web_search'])
+    expect(row.textContent).toContain(zh['web.calls'].replace('{count}', '1'))
+    expect(row.textContent).not.toContain(formatCost(0, VIEW))
   })
 
   it('renders refused billed auxiliary calls even when successful aux requests is zero', () => {

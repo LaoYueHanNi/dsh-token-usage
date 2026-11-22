@@ -163,6 +163,7 @@ export function toolCallEvent(overrides: {
   step?: number
   callId?: string
   name?: string
+  arguments?: string
 } = {}): SessionEvent<'tool/call'> {
   const callId = overrides.callId ?? 'call-1'
   return {
@@ -174,7 +175,7 @@ export function toolCallEvent(overrides: {
       step: overrides.step ?? 1,
       callId: callId as SessionEvent<'tool/call'>['data']['callId'],
       name: overrides.name ?? 'read_file',
-      arguments: '{}',
+      arguments: overrides.arguments ?? '{}',
     },
   } as SessionEvent<'tool/call'>
 }
@@ -187,6 +188,11 @@ export function toolResultEvent(overrides: {
   turn?: number
   step?: number
   callId?: string
+  isError?: boolean
+  meta?: unknown
+  error?: { name: string; code: string; reason?: string }
+  /** Drop the current `toolCallId` to model an older host's result shape. */
+  legacyCallIdOnly?: boolean
 } = {}): SessionEvent<'tool/result'> {
   const callId = overrides.callId ?? 'call-1'
   return {
@@ -201,10 +207,46 @@ export function toolResultEvent(overrides: {
         role: 'tool',
         content: [],
         source: { kind: 'tool', callId: callId as SessionEvent<'tool/result'>['data']['message']['source']['callId'] },
-        toolCallId: callId as SessionEvent<'tool/result'>['data']['message']['toolCallId'],
+        ...(overrides.legacyCallIdOnly === true
+          ? {}
+          : { toolCallId: callId as SessionEvent<'tool/result'>['data']['message']['toolCallId'] }),
+        ...(overrides.isError === true ? { isError: true } : {}),
       },
+      ...(overrides.meta !== undefined ? { meta: overrides.meta as SessionEvent<'tool/result'>['data']['meta'] } : {}),
+      ...(overrides.error !== undefined ? { error: overrides.error } : {}),
     },
   } as SessionEvent<'tool/result'>
+}
+
+/** Minimal recorded `web/deepseek-search-llm-request` event. The host-owned
+ * event is not in `SessionEventMap`, so the helper widens it for the tracker. */
+export function searchLlmRequestEvent(overrides: {
+  seq?: number
+  time?: number
+  query?: string
+  model?: string
+  /** When present, models a future host that kept the response usage. */
+  usage?: unknown
+} = {}): SessionEvent {
+  return {
+    type: 'web/deepseek-search-llm-request',
+    seq: SessionSeq(overrides.seq ?? 7),
+    time: overrides.time ?? 1_700_000_000_000,
+    data: {
+      endpoint: 'https://api.deepseek.com/anthropic/v1/messages',
+      apiVersion: '2023-06-01',
+      body: {
+        model: overrides.model ?? 'deepseek-v4-flash',
+        max_tokens: 4096,
+        messages: [{
+          role: 'user',
+          content: [{ type: 'text', text: `Perform a web search for the query: ${overrides.query ?? 'alpha'}` }],
+        }],
+        tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 5 }],
+      },
+      ...(overrides.usage !== undefined ? { usage: overrides.usage } : {}),
+    },
+  } as unknown as SessionEvent
 }
 
 /** Minimal but shape-true llm/retry event for unit tests. The default

@@ -18,8 +18,8 @@ import { unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fileDay, listDayFiles, readDayFile, readDayFileChecked } from './record-cache.ts'
 import { consoleLogger, type LoggerLike } from './log.ts'
-import type { AuxKind, UsageRecord } from './usage-record.ts'
-import { AUX_KINDS, effectiveModelOf } from './usage-record.ts'
+import type { AuxKind, UsageRecord, WebTool } from './usage-record.ts'
+import { AUX_KINDS, effectiveModelOf, isWebTool, WEB_SEARCH_TOOL, WEB_TOOLS } from './usage-record.ts'
 import { readRollup, writeRollup, ROLLUP_FILE_NAME, ROLLUP_TMP_FILE_NAME, ROLLUP_AGGREGATE_FORMAT } from './rollup.ts'
 import type { RollupFile } from './rollup.ts'
 import type {
@@ -47,6 +47,8 @@ import type {
   UsageRateRow,
   UsageSessionRow,
   UsageTotals,
+  UsageWebRow,
+  WebSearchSummary,
 } from './wire.ts'
 import { UNPRICED_KEY } from './wire.ts'
 
@@ -62,7 +64,7 @@ export type RateResolver = (record: UsageRecord) => RateKey
 
 /** Empty rollup used as the merge base when no rollup exists on disk yet. */
 function emptyRollup(): RollupFile {
-  return { upto: '', total: emptyTotals(), byDay: [], byHour: [], byModel: [], byProvider: [], rateRows: [], auxRows: [], bySession: [], recent: [] }
+  return { upto: '', total: emptyTotals(), byDay: [], byHour: [], byModel: [], byProvider: [], rateRows: [], auxRows: [], bySession: [], webRows: [], recent: [] }
 }
 
 /** Zeroed totals; requests counts rows, the token buckets sum reported usage. */
@@ -202,6 +204,24 @@ function auxRowKey(auxKind: AuxKind, day: string, model: string, rate: RateKey):
   return `${auxKind}\n${day}\n${model}\n${rateKeyText(rate)}`
 }
 
+/** Map key of one (day, model, tool) web-tool cell. */
+function webRowKey(day: string, model: string, tool: WebTool): string {
+  return `${day}\n${model}\n${tool}`
+}
+
+/** Deterministic web-cell order: day, tool, then model. */
+function webRowsSorted(rows: Iterable<UsageWebRow>): UsageWebRow[] {
+  return [...rows].sort((left, right) =>
+    left.day < right.day ? -1 : left.day > right.day ? 1
+      : left.tool < right.tool ? -1 : left.tool > right.tool ? 1
+        : left.model < right.model ? -1 : left.model > right.model ? 1 : 0)
+}
+
+/** The recorded web tool of one record; a legacy or hand-built row defaults to search. */
+function webToolOfRecord(record: UsageRecord): WebTool {
+  return isWebTool(record.web?.tool) ? record.web.tool : WEB_SEARCH_TOOL
+}
+
 /** The auxiliary kind of one record; a hand-built aux row may omit it. */
 function auxKindOfRecord(record: UsageRecord): AuxKind {
   return record.auxKind ?? 'other'
@@ -232,6 +252,19 @@ export const PERF_STREAM_MIN_GEN_MS = 500
  * optional figures keep a malformed row out of the means.
  */
 function addUsage(totals: UsageTotals, record: UsageRecord): void {
+  if (record.kind === 'web') {
+    // Only a metered search reaches the totals (summarizeRecords skips the
+    // rest): its reported tokens fold in, and it counts the model rounds it
+    // spent — at least one, since a usage figure implies a billed turn.
+    const usage = record.usage
+    if (usage === undefined) return
+    totals.requests += Math.max(record.web?.rounds ?? 0, 1)
+    totals.inputTokens += usage.inputTokens
+    totals.outputTokens += usage.outputTokens
+    if (usage.cacheReadTokens !== undefined) totals.cacheReadTokens += usage.cacheReadTokens
+    if (usage.cacheWriteTokens !== undefined) totals.cacheWriteTokens += usage.cacheWriteTokens
+    return
+  }
   if (record.kind === 'failure' || record.failureCode !== undefined) {
     totals.failures = (totals.failures ?? 0) + 1
     const code = record.failureCode ?? 'UNKNOWN'
@@ -330,15 +363,29 @@ export function summarizeRecords(records: readonly UsageRecord[], resolve: RateR
   const rated = new Map<string, UsageRateRow>()
   const aux = new Map<string, UsageAuxRow>()
   const sessions = new Map<string, UsageSessionRow>()
+  const web = new Map<string, UsageWebRow>()
   const recent: UsageRecord[] = []
   for (const record of records) {
     const model = effectiveModelOf(record)
+    const day = dayKey(record.time)
+    // The web dimension keeps every recorded call as an invocation fact. Only
+    // a search whose host reported tokens joins the request dimensions; an
+    // unmetered one adds no request, token, day, model or session row, so an
+    // unknown cost never reads as a free request.
+    if (record.kind === 'web') {
+      const tool = webToolOfRecord(record)
+      const key = webRowKey(day, model, tool)
+      const cell = web.get(key) ?? { day, model, tool, calls: 0, failures: 0 }
+      cell.calls += 1
+      if (record.web?.failed === true) cell.failures += 1
+      web.set(key, cell)
+      if (record.usage === undefined) continue
+    }
     // Route key of the row; absent means pre-field history or an auxiliary
     // call whose route never landed in a session log — its own group (''),
     // never folded into a named provider.
     const provider = record.provider ?? ''
     addUsage(total, record)
-    const day = dayKey(record.time)
     const dayTotals = days.get(day) ?? emptyTotals()
     addUsage(dayTotals, record)
     days.set(day, dayTotals)
@@ -397,8 +444,12 @@ export function summarizeRecords(records: readonly UsageRecord[], resolve: RateR
       sessions.set(sessionKey, folded)
       if (record.time > folded.lastTime) folded.lastTime = record.time
     }
-    if (recent.length === RECENT_LIMIT) recent.shift()
-    recent.push(record)
+    // Search calls are tool invocations, not model requests: they never enter
+    // the request pool / latest-request window.
+    if (record.kind !== 'web') {
+      if (recent.length === RECENT_LIMIT) recent.shift()
+      recent.push(record)
+    }
   }
   const byDay: UsageDayRow[] = dayRows(days)
   const byHour: UsageHourRow[] = hourRows(hours)
@@ -413,6 +464,7 @@ export function summarizeRecords(records: readonly UsageRecord[], resolve: RateR
     byProvider,
     rateRows: rateRowsSorted(rated.values()),
     auxRows: auxRowsSorted(aux.values()),
+    webRows: webRowsSorted(web.values()),
     bySession: sessionRowsSorted(sessions.values()),
     recent,
   }
@@ -574,7 +626,10 @@ export function requestSeriesOf(
   canonical?: ReadonlyMap<string, string>,
 ): RequestPoint[] {
   return filterRecordsByRange(records, undefined, dayRangeFilter(from, to, model, canonical))
-    .filter(record => (record.kind !== 'failure' && record.failureCode === undefined) || record.usage !== undefined)
+    // Web searches are tool invocations, not conversation requests: their
+    // model rounds belong to the totals, never to the request series.
+    .filter(record => record.kind !== 'web'
+      && ((record.kind !== 'failure' && record.failureCode === undefined) || record.usage !== undefined))
     .map(record => ({
       time: record.time,
       tokens: record.usage === undefined ? 0
@@ -607,6 +662,7 @@ export function mergeSummaries(
   const providers = new Map<string, UsageTotals>()
   const rated = new Map<string, UsageRateRow>()
   const aux = new Map<string, UsageAuxRow>()
+  const web = new Map<string, UsageWebRow>()
   const sessions = new Map<string, UsageSessionRow>()
   for (const row of [...left.byDay, ...right.byDay]) {
     const day = days.get(row.day) ?? emptyTotals()
@@ -656,6 +712,17 @@ export function mergeSummaries(
     addTotals(cell.totals, row.totals)
     aux.set(key, cell)
   }
+  // `?? []`: a hand-built or legacy-shaped summary without the web-search
+  // dimension folds as if it had none (on-disk rollups written before the
+  // dimension existed carry no search rows, so nothing is lost).
+  for (const row of [...(left.webRows ?? []), ...(right.webRows ?? [])]) {
+    const tool = isWebTool(row.tool) ? row.tool : WEB_SEARCH_TOOL
+    const key = webRowKey(row.day, row.model, tool)
+    const cell = web.get(key) ?? { day: row.day, model: row.model, tool, calls: 0, failures: 0 }
+    cell.calls += row.calls
+    cell.failures += row.failures
+    web.set(key, cell)
+  }
   // `?? []`: a hand-built or legacy-shaped summary without the session
   // dimension folds as if it had none — on-disk rollups fail validation
   // instead (isRollupFile), so this leniency only serves in-memory shapes.
@@ -678,6 +745,7 @@ export function mergeSummaries(
     byProvider: providerRows(providers),
     rateRows: rateRowsSorted(rated.values()),
     auxRows: auxRowsSorted(aux.values()),
+    webRows: webRowsSorted(web.values()),
     bySession: sessionRowsSorted(sessions.values()),
     recent,
   }
@@ -737,6 +805,12 @@ export function filterSummary(
     (from === undefined || row.day >= from)
     && (to === undefined || row.day <= to)
     && matchesModel(row.model, model, canonical))
+  // Web-search cells follow the same date/model filter, so the runtime-overhead
+  // row reconciles with the filtered totals.
+  const webRows = (summary.webRows ?? []).filter(row =>
+    (from === undefined || row.day >= from)
+    && (to === undefined || row.day <= to)
+    && matchesModel(row.model, model, canonical))
   const total = emptyTotals()
   const days = new Map<string, UsageTotals>()
   const models = new Map<string, UsageTotals>()
@@ -757,7 +831,7 @@ export function filterSummary(
     providers.set(provider, perProvider)
   }
   const recent = filterRecordsByRange(summary.recent, undefined, dayRangeFilter(from, to, model, canonical))
-  return { dataDir: summary.dataDir, total, byDay: dayRows(days), byHour, byModel: modelRows(models), byProvider: providerRows(providers), rateRows: rateRowsSorted(rows), auxRows: auxRowsSorted(auxRows), bySession, recent }
+  return { dataDir: summary.dataDir, total, byDay: dayRows(days), byHour, byModel: modelRows(models), byProvider: providerRows(providers), rateRows: rateRowsSorted(rows), auxRows: auxRowsSorted(auxRows), webRows: webRowsSorted(webRows), bySession, recent }
 }
 
 /** Available cached session cells retain usage even if raw history is lost.
@@ -785,7 +859,7 @@ export function summaryForSessions(summary: TokenSummary, sessionIds: readonly s
     const cell = rated.get(key) ?? { day: row.day, model: row.model, rate: row.rate, ...(provider !== '' ? { provider } : {}), totals: emptyTotals() }
     addTotals(cell.totals, row.totals); rated.set(key, cell)
   }
-  return { total, byDay: dayRows(days), byHour: [], byModel: modelRows(models), byProvider: providerRows(providers), rateRows: rateRowsSorted(rated.values()), auxRows: [], bySession,
+  return { total, byDay: dayRows(days), byHour: [], byModel: modelRows(models), byProvider: providerRows(providers), rateRows: rateRowsSorted(rated.values()), auxRows: [], webRows: [], bySession,
     recent: summary.recent.filter(row => wanted.has(row.sessionId)) }
 }
 
@@ -907,6 +981,31 @@ export function attachCosts(
         return { auxKind: kind, totals: cell.totals, cost: cell.cost, byModel }
       }),
   }
+  // The web-tools layer: invocation counters total + per-tool breakdown.
+  // Reported search tokens are already inside `rateRows` and priced with
+  // every other request.
+  const webByTool = new Map<WebTool, { calls: number, failures: number }>()
+  let webCalls = 0
+  let webFailures = 0
+  for (const row of summary.webRows ?? []) {
+    const tool = isWebTool(row.tool) ? row.tool : WEB_SEARCH_TOOL
+    webCalls += row.calls
+    webFailures += row.failures
+    const cell = webByTool.get(tool) ?? { calls: 0, failures: 0 }
+    cell.calls += row.calls
+    cell.failures += row.failures
+    webByTool.set(tool, cell)
+  }
+  const web: WebSearchSummary = {
+    calls: webCalls,
+    failures: webFailures,
+    byTool: WEB_TOOLS
+      .filter(tool => (webByTool.get(tool)?.calls ?? 0) > 0)
+      .map(tool => {
+        const cell = webByTool.get(tool)!
+        return { tool, calls: cell.calls, failures: cell.failures }
+      }),
+  }
   const folded = new Map<string, { model: string, totals: UsageTotals, cost: number }>()
   for (const row of summary.byModel) {
     const name = canonicalName(row.model, canonical)
@@ -956,7 +1055,9 @@ export function attachCosts(
     bySession,
     rateRows: summary.rateRows,
     auxRows: summary.auxRows,
+    ...(summary.webRows !== undefined ? { webRows: summary.webRows } : {}),
     aux,
+    web,
     recent: summary.recent,
   }
 }

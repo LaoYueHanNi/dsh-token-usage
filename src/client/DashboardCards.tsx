@@ -12,7 +12,7 @@
 import type { RefObject } from 'react'
 import type { ReactNode } from 'react'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
-import type { AuxSummary, CostState, CostedModelRow, CostedProviderRow, PricingTable, SessionUsageRow } from '../wire.ts'
+import type { AuxSummary, CostState, CostedModelRow, CostedProviderRow, PricingTable, SessionUsageRow, WebSearchSummary } from '../wire.ts'
 import { OverheadRows } from './OverheadRows.tsx'
 import { UsageRows, RowSortControl, PerfToggle } from './UsageRows.tsx'
 import type { RowSort } from './UsageRows.tsx'
@@ -60,6 +60,8 @@ export interface DashboardCardsProps {
   onSessionSortChange: (next: RowSort) => void
   /** The auxiliary layer (overhead card; absent renders the empty hint). */
   aux: AuxSummary | undefined
+  /** The web-search layer (overhead card; absent on legacy payloads). */
+  web?: WebSearchSummary | undefined
   pricing: PricingTable
   costState: CostState
   view: CurrencyView
@@ -97,6 +99,7 @@ export function DashboardCards({
   sessionSort,
   onSessionSortChange,
   aux,
+  web,
   pricing,
   costState,
   view,
@@ -246,7 +249,7 @@ export function DashboardCards({
             <span className={styles['panelCount']}>{t('aux.subtitle')}</span>
           </span>
         </div>
-        <OverheadRows aux={aux} costState={costState} view={view} t={t} />
+        <OverheadRows aux={aux} web={web} costState={costState} view={view} t={t} />
       </div>
     </div>
   )

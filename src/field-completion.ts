@@ -48,7 +48,10 @@ export interface FieldCompleter {
 export const PROVIDER_FIELD: FieldCompleter = {
   id: 'provider',
   needs(record) {
-    if (record.kind === 'aux') return false
+    // Auxiliary and web rows have no single-session route proof: an
+    // auxiliary call may run outside the session and a search deliberately
+    // does not record the billing backend.
+    if (record.kind === 'aux' || record.kind === 'web') return false
     if (record.sessionId === '') return false
     return record.provider === undefined || record.provider === ''
   },

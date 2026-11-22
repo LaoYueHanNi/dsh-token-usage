@@ -38,12 +38,13 @@ export interface UsageFields {
  * compaction summarize request (a provider-billed call of its own), a
  * failed model request (a turn that ended in an LLM error, or a provider
  * attempt that `dsh-llm-retry` scheduled a retry for — counted in its own
- * `failures` dimension, never in `requests`), or an auxiliary request (a
+ * `failures` dimension, never in `requests`), an auxiliary request (a
  * bypass model call that is not part of the conversation turn: the Auto
  * review authorization gate, session-title generation, timeline report
- * generation, or reasoning translation).
+ * generation, or reasoning translation), or a web search (one `web_search`
+ * tool call whose model-turn tokens are recorded when the host reports them).
  */
-export type UsageRecordKind = 'request' | 'compaction' | 'failure' | 'aux'
+export type UsageRecordKind = 'request' | 'compaction' | 'failure' | 'aux' | 'web'
 
 /**
  * The origin of one auxiliary (bypass) model request. These calls are
@@ -69,13 +70,55 @@ export type AuxKind = 'auto-review' | 'session-title' | 'timeline-report' | 'tra
 /** Every auxiliary kind, in the fixed display order the tables use. */
 export const AUX_KINDS: readonly AuxKind[] = ['auto-review', 'session-title', 'timeline-report', 'translation', 'other']
 
+/** The model-visible tools whose calls the web dimension records. */
+export const WEB_SEARCH_TOOL = 'web_search'
+export const WEB_FETCH_TOOL = 'web_fetch'
+
+/** Every recorded web tool, in the fixed display order the overhead card uses. */
+export const WEB_TOOLS = [WEB_SEARCH_TOOL, WEB_FETCH_TOOL] as const
+
+/** One recorded web-tool name. */
+export type WebTool = (typeof WEB_TOOLS)[number]
+
+/** Whether a `tool/call` name belongs to the recorded web-tools dimension. */
+export function isWebTool(name: unknown): name is WebTool {
+  return name === WEB_SEARCH_TOOL || name === WEB_FETCH_TOOL
+}
+
+/**
+ * Invocation facts of one recorded web search. They are deliberately kept
+ * apart from the billing fields: `rounds` says how many model turns the call
+ * actually spent (0 when the selected backend bills per search instead of
+ * per turn), while `usage` on the record carries the token figures only when
+ * the host reported them.
+ */
+export interface WebCallInfo {
+  /** The tool that made the call (`web_search` or `web_fetch`). */
+  tool: string
+  /** The model's tool-call id, pairing this row with the call event. */
+  callId: string
+  /** Number of queries the call submitted; absent when the arguments carried
+   * none. The query text stays in the session log and is not copied into the
+   * ledger. */
+  queryCount?: number
+  /** Model rounds the call triggered; absent when none (per-search backend). */
+  rounds?: number
+  /** Present when the tool result reported a failure. */
+  failed?: true
+  /** Provider-neutral failure code from the tool result, when it named one. */
+  errorCode?: string
+  /** Wall time from the tool call to its result, in milliseconds. */
+  durationMs?: number
+}
+
 /**
  * Whether a raw JSONL row's `kind` field belongs to session-log-derived
  * origins that `reconcile` may drop or reassign. Auxiliary rows (`'aux'`)
  * and any unknown future kind are unconditionally exempt.
  */
 export function isReconcilableKind(rawKind: unknown): boolean {
-  return rawKind === undefined || rawKind === 'request' || rawKind === 'compaction' || rawKind === 'failure'
+  return rawKind === undefined || rawKind === 'request' || rawKind === 'compaction'
+    || rawKind === 'failure' || rawKind === 'web'
 }
 
 /** One JSONL row: one provider model call (successful or failed). */
@@ -145,6 +188,10 @@ export interface UsageRecord {
    * philosophy as `kind`); never written on compaction / failure / aux
    * rows. */
   compactionAttribution?: CompactionAttributionItem[]
+  /** Web-search rows only: the invocation facts of one recorded `web_search`
+   * call. Absent on every other kind; the optional `usage` on the row carries
+   * the model-turn tokens when the host reported them. */
+  web?: WebCallInfo
 }
 
 /** Optional timing figures for one model request. */
@@ -362,6 +409,88 @@ export function recordFromCompaction(
     // The summarize call names its own route. An empty key is omitted, same
     // as a plain request that never reported one.
     ...routeKey(event.data.provider),
+  }
+}
+
+/**
+ * Read the token figure a host may attach to a search event. Two shapes are
+ * accepted because the host owns the web-search event contract: the plugin's
+ * own `UsageFields` spelling and the Anthropic Messages `usage` spelling the
+ * provider receives from DeepSeek. A value without both input and output
+ * counts is not usable and reads as absent — a search whose host reported no
+ * usage must stay unmetered instead of becoming a zero-cost row.
+ * @param value - an opaque `usage` payload from an event or result meta.
+ * @returns the normalised token buckets, or undefined when none is usable.
+ */
+export function extractWebUsage(value: unknown): UsageFields | undefined {
+  if (typeof value !== 'object' || value === null) return undefined
+  const fields = value as Record<string, unknown>
+  const count = (key: string): number | undefined =>
+    isCount(fields[key]) ? fields[key] as number : undefined
+  const input = count('inputTokens') ?? count('input_tokens')
+  const output = count('outputTokens') ?? count('output_tokens')
+  if (input === undefined || output === undefined) return undefined
+  const cacheRead = count('cacheReadTokens') ?? count('cache_read_input_tokens')
+  const cacheWrite = count('cacheWriteTokens') ?? count('cache_creation_input_tokens')
+  return {
+    inputTokens: input,
+    outputTokens: output,
+    ...(cacheRead !== undefined ? { cacheReadTokens: cacheRead } : {}),
+    ...(cacheWrite !== undefined ? { cacheWriteTokens: cacheWrite } : {}),
+  }
+}
+
+/** Input of one web-search row emitted when a `web_search` tool call settles. */
+export interface WebCallRecordInput {
+  sessionId: string
+  /** Settlement wall time (the `tool/result` event time). */
+  time: number
+  /** Settlement event seq: unique within the session, so repeated syncs dedupe. */
+  seq: number
+  tool: string
+  callId: string
+  queryCount?: number
+  rounds?: number
+  failed?: boolean
+  errorCode?: string
+  durationMs?: number
+  /** Model that served the searched rounds, when the host named one. */
+  model?: string
+  /** Reported token figures of all rounds the call triggered, when any. */
+  usage?: UsageFields
+}
+
+/**
+ * Build the log row for one settled `web_search` tool call. The request id is
+ * `web:<sessionId>:<seq>` — the settlement event's persistent seq, so a
+ * repeated sync dedupes and history backfill is reproducible. Invocation
+ * facts live under `web`; token figures stay in the ordinary `usage` field
+ * only when the host reported them, so a backend that bills per search keeps
+ * a truthful unmetered row instead of a fabricated one.
+ * @param input - the settled call's facts.
+ * @returns the row to append.
+ */
+export function recordFromWebCall(input: WebCallRecordInput): UsageRecord {
+  const queryCount = isCount(input.queryCount) && input.queryCount > 0 ? Math.floor(input.queryCount) : undefined
+  const rounds = isCount(input.rounds) && input.rounds > 0 ? Math.floor(input.rounds) : undefined
+  const duration = isCount(input.durationMs) && input.durationMs >= 0
+    ? { durationMs: Math.floor(input.durationMs) } : {}
+  return {
+    requestId: `web:${input.sessionId}:${String(input.seq)}`,
+    time: input.time,
+    sessionId: input.sessionId,
+    model: input.model ?? '',
+    kind: 'web',
+    ...(input.usage !== undefined ? { usage: input.usage } : {}),
+    web: {
+      tool: input.tool,
+      callId: input.callId,
+      ...(queryCount !== undefined ? { queryCount } : {}),
+      ...(rounds !== undefined ? { rounds } : {}),
+      ...(input.failed === true ? { failed: true as const } : {}),
+      ...(input.errorCode !== undefined && input.errorCode !== '' ? { errorCode: input.errorCode } : {}),
+      ...duration,
+    },
   }
 }
 
@@ -587,6 +716,33 @@ function normalizeAuxKind(value: unknown): AuxKind {
   return isAuxKind(value) ? value : 'other'
 }
 
+/**
+ * Read one stored web-call descriptor. A malformed descriptor drops only the
+ * optional facts — the row itself still reads as a web row, so format drift
+ * never turns a search into a billed request.
+ */
+function normalizeWebCall(value: unknown): { web: WebCallInfo } | Record<string, never> {
+  if (typeof value !== 'object' || value === null) return {}
+  const fields = value as Record<string, unknown>
+  const tool = typeof fields.tool === 'string' && fields.tool !== '' ? fields.tool : undefined
+  const callId = typeof fields.callId === 'string' ? fields.callId : undefined
+  if (tool === undefined || callId === undefined) return {}
+  const queryCount = isNonNegativeCount(fields.queryCount) && fields.queryCount > 0 ? Math.floor(fields.queryCount) : undefined
+  const rounds = isNonNegativeCount(fields.rounds) && fields.rounds > 0 ? Math.floor(fields.rounds) : undefined
+  const duration = isNonNegativeCount(fields.durationMs) ? { durationMs: fields.durationMs } : {}
+  return {
+    web: {
+      tool,
+      callId,
+      ...(queryCount !== undefined ? { queryCount } : {}),
+      ...(rounds !== undefined ? { rounds } : {}),
+      ...(fields.failed === true ? { failed: true as const } : {}),
+      ...(typeof fields.errorCode === 'string' && fields.errorCode !== '' ? { errorCode: fields.errorCode } : {}),
+      ...duration,
+    },
+  }
+}
+
 /** Whether a raw value is a trustworthy non-negative finite count. */
 function isNonNegativeCount(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0
@@ -642,17 +798,20 @@ export function coerceRecord(value: unknown): UsageRecord | null {
   if (!isRecord(value)) return null
   // The guard already validated the structure; this cast only enables field access.
   const record = value as unknown as Record<string, unknown>
-  // Kind normalization: only a compaction, failure, or auxiliary row keeps
-  // the key — plain rows (and unknown future kinds) read as requests, so a
-  // newer row set never drops. A stored auxiliary row without a recognized
-  // `auxKind` normalizes to `other` instead of losing the row.
+  // Kind normalization: only a compaction, failure, auxiliary, or web row
+  // keeps the key — plain rows (and unknown future kinds) read as requests,
+  // so a newer row set never drops. A stored auxiliary row without a
+  // recognized `auxKind` normalizes to `other` instead of losing the row.
   const isFailure = record.kind === 'failure'
   const isAux = !isFailure && record.kind === 'aux'
+  const isWeb = record.kind === 'web'
   const kind = record.kind === 'compaction' ? { kind: 'compaction' as const }
     : isFailure ? { kind: 'failure' as const }
       : isAux ? { kind: 'aux' as const }
-        : {}
+        : isWeb ? { kind: 'web' as const }
+          : {}
   const auxKind = isAux ? { auxKind: normalizeAuxKind(record.auxKind) } : {}
+  const web = isWeb ? normalizeWebCall(record.web) : {}
   // Failure classification survives the round trip on failure rows and refused
   // auxiliary rows (a non-string or foreign-kind code normalizes to omission).
   const failureCode = (isFailure || isAux) && typeof record.failureCode === 'string' && record.failureCode !== ''
@@ -690,6 +849,7 @@ export function coerceRecord(value: unknown): UsageRecord | null {
       model: record.model as string,
       ...kind,
       ...auxKind,
+      ...web,
       ...failureCode,
       ...latency,
       ...firstToken,
@@ -711,6 +871,7 @@ export function coerceRecord(value: unknown): UsageRecord | null {
     model: record.model as string,
     ...kind,
     ...auxKind,
+    ...web,
     ...failureCode,
     ...latency,
     ...firstToken,

@@ -52,6 +52,7 @@ import { withPricingDirectoryMigration } from './pricing-associations.ts'
 import { extractFirstTokenTimeFromStream, extractUsageFromStream, modelOfEvent, projectUsage, providerOfEvent, recordOfEvent, responseModelOfReplay, type RequestTiming, type UsageFields } from './usage-record.ts'
 import { RequestObserver } from './request-observe.ts'
 import { CompactionAttributionWindow } from './compaction-attribution.ts'
+import { WebCallTracker } from './web-call.ts'
 import { classifyAuxRequest, recordFromAuxRequest } from './aux-request.ts'
 import { markFieldCompletionOutcome, markTimingSynced, pendingCompleterIds, readSyncState } from './sync-state.ts'
 import { autoSyncIfNeeded, isOwnSessionEvent, syncHistory, titleOfEvent } from './sync.ts'
@@ -997,6 +998,17 @@ export function apply(ctx: Context, config: Config = {}) {
     // Header facts are immutable, so one upsert per session is enough even
     // though events keep arriving; the index store dedupes the write anyway.
     const headerSeen = new Set<string>()
+    // Per-session web-search pairing state. The tracker class is shared with
+    // the history sync, so a live observation and a rescan emit identical rows.
+    const webCallTrackers = new Map<string, WebCallTracker>()
+    const webCallTrackerOf = (sessionId: string): WebCallTracker => {
+      let tracker = webCallTrackers.get(sessionId)
+      if (tracker === undefined) {
+        tracker = new WebCallTracker(sessionId)
+        webCallTrackers.set(sessionId, tracker)
+      }
+      return tracker
+    }
     const fallbackRouteOfSession = (session: unknown): { model?: string; provider?: string } => {
       if (typeof session !== 'object' || session === null) return {}
       const candidate = session as {
@@ -1051,6 +1063,12 @@ export function apply(ctx: Context, config: Config = {}) {
       // Inherited prefix events never persist rows, never move active step
       // timings, and never feed compaction attribution into the child.
       if (!ownEvent) return
+      // Web searches settle outside the model-call fold: the tracker pairs
+      // `tool/call` + the recorded search rounds + `tool/result` and emits at
+      // most one row per settled call. Record it directly — the request
+      // observer decorates model requests, not tool invocations.
+      const webRecord = webCallTrackerOf(session.id).observe(event)
+      if (webRecord !== null) void current?.log.record(webRecord)
       if (event.type === 'step/start') {
         activeSteps.set(session.id, {
           turn: event.data.turn,

@@ -356,6 +356,7 @@ export function TokenUsageSection({ t, close, sessionListed, openSession, varian
   // and the tab content renders its own empty hint when this stays 0 (or an
   // older host payload carries no auxiliary layer at all).
   const auxRequests = state.value.aux !== undefined ? auxCallCount(state.value.aux.total) : 0
+  const webCalls = state.value.web?.calls ?? 0
   return (
     <div ref={rootRef} className={rootClass}>
     <PricingAssociationProvider resolutions={state.value.modelResolutions} feedVersion={state.value.feedVersion} view={view} t={t}>
@@ -421,6 +422,7 @@ export function TokenUsageSection({ t, close, sessionListed, openSession, varian
                   sessionSort={sessionSort}
                   onSessionSortChange={setSessionSort}
                   aux={state.value.aux}
+                  web={state.value.web}
                   pricing={state.value.pricing}
                   costState={state.value.costState}
                   view={view}
@@ -434,7 +436,7 @@ export function TokenUsageSection({ t, close, sessionListed, openSession, varian
                   overheadFlash={overheadFlash}
                 />
               )
-              : state.value.byModel.length > 0 || (state.value.sessionRows?.length ?? 0) > 0 || auxRequests > 0
+              : state.value.byModel.length > 0 || (state.value.sessionRows?.length ?? 0) > 0 || auxRequests > 0 || webCalls > 0
               ? (
                 <section className={styles['detailPanel']}>
                   <div className={styles['detailToolbar']}>
@@ -469,7 +471,7 @@ export function TokenUsageSection({ t, close, sessionListed, openSession, varian
                   </div>
                   <div className={styles['detailBody']}>
                     {detailMode === 'aux'
-                      ? <OverheadRows aux={state.value.aux} costState={state.value.costState} view={view} t={t} />
+                      ? <OverheadRows aux={state.value.aux} web={state.value.web} costState={state.value.costState} view={view} t={t} />
                       : <UsageRows
                           key={detailMode}
                           kind={detailMode}

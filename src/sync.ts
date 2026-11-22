@@ -26,6 +26,7 @@ import type {} from '@deepseek-ai/dsh-compaction/types'
 import type {} from '@deepseek-ai/dsh-llm-retry/types'
 import { markInitialized, markMetaSynced, readSyncState } from './sync-state.ts'
 import { CompactionAttributionWindow } from './compaction-attribution.ts'
+import { WebCallTracker } from './web-call.ts'
 import { extractFirstTokenTimeFromStream, extractUsageFromStream, isImportedHistoryEvent, modelOfEvent, providerOfEvent, recordOfEvent, type RequestTiming, type UsageFields } from './usage-record.ts'
 import type { UsageLog } from './usage-log.ts'
 
@@ -452,8 +453,23 @@ export async function syncHistory(
     // implementation the live recorder drives, so a rescan attributes rows
     // exactly like a live observation would.
     const attributionWindow = new CompactionAttributionWindow()
+    // The same per-session web-search pairing the live recorder drives, so a
+    // backfill reproduces the rows (and their request ids) exactly.
+    const webCallTracker = new WebCallTracker(id)
     for (const event of inspection.ownEvents) {
       signal?.throwIfAborted()
+      const webRecord = webCallTracker.observe(event)
+      if (webRecord !== null) {
+        reproduced.add(webRecord.requestId)
+        let webOwners = reproducedOwners.get(webRecord.requestId)
+        if (webOwners === undefined) {
+          webOwners = new Set()
+          reproducedOwners.set(webRecord.requestId, webOwners)
+        }
+        webOwners.add(id)
+        if (await deps.log.record(webRecord)) added += 1
+        else skipped += 1
+      }
       if (event.type === 'step/start') {
         openStep = {
           turn: event.data.turn,
@@ -543,6 +559,9 @@ export async function syncHistory(
       if (await deps.log.record(record)) added += 1
       else skipped += 1
     }
+    // Drafts without a durable result (a torn log, or a call interrupted
+    // without the host's synthetic result) stay out of the ledger.
+    webCallTracker.clear()
     // One metadata upsert per session: the title fold above plus the
     // immutable header facts. The upsert is a no-op when nothing changed,
     // so repeat syncs never rewrite the index.

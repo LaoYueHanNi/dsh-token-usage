@@ -1238,3 +1238,116 @@ describe('readCachedRecords', () => {
     expect(left).toHaveLength(1)
   })
 })
+
+describe('web search rows', () => {
+  const at = new Date(2026, 0, 15, 12).getTime()
+  const webRow = (overrides: {
+    requestId?: string
+    time?: number
+    model?: string
+    tool?: 'web_search' | 'web_fetch'
+    usage?: { inputTokens: number; outputTokens: number }
+    rounds?: number
+    failed?: boolean
+  } = {}): UsageRecord => ({
+    requestId: overrides.requestId ?? 'web:s1:1',
+    time: overrides.time ?? at,
+    sessionId: 's1',
+    model: overrides.model ?? 'deepseek-v4-flash',
+    kind: 'web',
+    ...(overrides.usage !== undefined ? { usage: overrides.usage } : {}),
+    web: {
+      tool: overrides.tool ?? 'web_search',
+      callId: 'c1',
+      ...(overrides.rounds !== undefined ? { rounds: overrides.rounds } : {}),
+      ...(overrides.failed === true ? { failed: true as const } : {}),
+    },
+  })
+
+  it('folds a metered search into the request dimensions by round and keeps it out of recent', () => {
+    const summary = summarizeRecords([webRow({ usage: { inputTokens: 100, outputTokens: 20 }, rounds: 2 })])
+
+    expect(summary.total.requests).toBe(2)
+    expect(summary.total.inputTokens).toBe(100)
+    expect(summary.total.outputTokens).toBe(20)
+    expect(summary.byModel[0]!.totals.requests).toBe(2)
+    expect(summary.byDay[0]!.totals.requests).toBe(2)
+    expect(summary.bySession[0]!.totals.requests).toBe(2)
+    expect(summary.webRows).toEqual([{ day: '2026-01-15', model: 'deepseek-v4-flash', tool: 'web_search', calls: 1, failures: 0 }])
+    expect(summary.recent).toHaveLength(0)
+  })
+
+  it('counts a metered search without observed rounds as one request', () => {
+    const summary = summarizeRecords([webRow({ usage: { inputTokens: 10, outputTokens: 2 } })])
+    expect(summary.total.requests).toBe(1)
+  })
+
+  it('keeps an unmetered search out of every request dimension, even with observed rounds', () => {
+    const summary = summarizeRecords([
+      webRow({ requestId: 'web:s1:1', rounds: 2 }),
+      webRow({ requestId: 'web:s1:2', model: '', tool: 'web_fetch' }),
+    ])
+
+    expect(summary.total.requests).toBe(0)
+    expect(summary.byDay).toHaveLength(0)
+    expect(summary.byModel).toHaveLength(0)
+    expect(summary.bySession).toHaveLength(0)
+    expect(summary.rateRows).toHaveLength(0)
+    expect(summary.webRows.reduce((sum, row) => sum + row.calls, 0)).toBe(2)
+  })
+
+  it('folds same-cell calls and counts failures', () => {
+    const summary = summarizeRecords([
+      webRow({ requestId: 'web:s1:1', usage: { inputTokens: 10, outputTokens: 2 }, rounds: 1 }),
+      webRow({ requestId: 'web:s1:2', failed: true }),
+    ])
+
+    expect(summary.webRows).toEqual([{ day: '2026-01-15', model: 'deepseek-v4-flash', tool: 'web_search', calls: 2, failures: 1 }])
+    expect(summary.total.requests).toBe(1)
+  })
+
+  it('merges web cells across summaries', () => {
+    const left = summarizeRecords([webRow({ requestId: 'web:s1:1' })])
+    const right = summarizeRecords([
+      webRow({ requestId: 'web:s1:2', failed: true }),
+      webRow({ requestId: 'web:s1:3', tool: 'web_fetch', model: '' }),
+    ])
+    expect(mergeSummaries(left, right).webRows).toEqual([
+      { day: '2026-01-15', model: '', tool: 'web_fetch', calls: 1, failures: 0 },
+      { day: '2026-01-15', model: 'deepseek-v4-flash', tool: 'web_search', calls: 2, failures: 1 },
+    ])
+  })
+
+  it('exposes per-tool invocation counters in fixed order and prices metered tokens with the totals', () => {
+    const pricing: PricingTable = {
+      'deepseek-v4-flash': {
+        base: { inputPerMillion: 2, outputPerMillion: 8 },
+        contextTiers: [], dailySlots: [], timeRules: [],
+      },
+    }
+    const summary = summarizeRecords([
+      webRow({ requestId: 'web:s1:1', usage: { inputTokens: 100, outputTokens: 20 }, rounds: 1 }),
+      webRow({ requestId: 'web:s1:2', failed: true }),
+      webRow({ requestId: 'web:s1:3', tool: 'web_fetch', model: '' }),
+    ])
+    const costed = attachCosts({ dataDir: '/x', ...summary }, pricing)
+
+    expect(costed.web).toEqual({
+      calls: 3,
+      failures: 1,
+      byTool: [
+        { tool: 'web_search', calls: 2, failures: 1 },
+        { tool: 'web_fetch', calls: 1, failures: 0 },
+      ],
+    })
+    expect(costed.totalCost).toBeCloseTo(100 / 1_000_000 * 2 + 20 / 1_000_000 * 8, 12)
+  })
+
+  it('round-trips the web rows through a range filter', () => {
+    const summary = summarizeRecords([webRow()])
+    const filtered = filterSummary({ dataDir: '/x', ...summary }, '2026-01-15', '2026-01-15')
+    expect(filtered.webRows).toHaveLength(1)
+    const outside = filterSummary({ dataDir: '/x', ...summary }, '2026-01-16', '2026-01-16')
+    expect(outside.webRows).toHaveLength(0)
+  })
+})

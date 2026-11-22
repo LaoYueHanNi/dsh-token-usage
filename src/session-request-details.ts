@@ -261,6 +261,9 @@ export function buildSessionRequestDetails(input: {
   const byDurable = new Map<string, MergedAttempt>()
   const merged: MergedAttempt[] = []
   for (const record of records) {
+    // Search calls are tool invocations, not model requests: they stay out
+    // of the request pool and its per-request assessment.
+    if (record.kind === 'web') continue
     const row = attemptOfRecord(record)
     byDurable.set(record.requestId, row)
     merged.push(row)

@@ -3,7 +3,9 @@ import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import {
   extractFirstTokenTimeFromStream,
   extractUsageFromStream,
+  extractWebUsage,
   isImportedHistoryEvent,
+  isReconcilableKind,
   isTokenDelta,
   modelOfEvent,
   parseRecord,
@@ -13,6 +15,7 @@ import {
   recordFromEvent,
   recordFromRetry,
   recordFromTurnEnd,
+  recordFromWebCall,
   recordOfEvent,
   responseModelOfReplay,
   serializeRecord,
@@ -375,7 +378,7 @@ describe('serialize/parse round trip', () => {
 
   it('round-trips CJK and special characters', () => {
     const record = recordFromEvent(messageEvent({
-      messageId: '会话-1/\u0000',
+      messageId: '浼氳瘽-1/\u0000',
       model: 'model "x" \n',
     }), 'sess/1')
     expect(parseRecord(serializeRecord(record))).toEqual(record)
@@ -714,5 +717,88 @@ describe('refusal failure billing (extractUsageFromStream & failure usage)', () 
       usage: { inputTokens: 80, outputTokens: 10 },
     }
     expect(parseRecord(serializeRecord(auxRefused))).toEqual(auxRefused)
+  })
+})
+
+describe('web call rows', () => {
+  it('builds a metered row and round-trips it through JSONL', () => {
+    const row = recordFromWebCall({
+      sessionId: 's1',
+      time: 1000,
+      seq: 7,
+      tool: 'web_search',
+      callId: 'call-1',
+      queryCount: 2,
+      rounds: 2,
+      durationMs: 900,
+      model: 'deepseek-v4-flash',
+      usage: { inputTokens: 300, outputTokens: 50, cacheReadTokens: 7 },
+    })
+    expect(row).toEqual({
+      requestId: 'web:s1:7',
+      time: 1000,
+      sessionId: 's1',
+      model: 'deepseek-v4-flash',
+      kind: 'web',
+      usage: { inputTokens: 300, outputTokens: 50, cacheReadTokens: 7 },
+      web: {
+        tool: 'web_search',
+        callId: 'call-1',
+        queryCount: 2,
+        rounds: 2,
+        durationMs: 900,
+      },
+    })
+    expect(parseRecord(serializeRecord(row))).toEqual(row)
+  })
+
+  it('keeps an unmetered per-search call free of usage, rounds and model', () => {
+    const row = recordFromWebCall({
+      sessionId: 's1', time: 1000, seq: 3, tool: 'web_search', callId: 'call-1',
+    })
+    expect(row).toMatchObject({ requestId: 'web:s1:3', kind: 'web', model: '' })
+    expect(row.usage).toBeUndefined()
+    expect(row.web?.rounds).toBeUndefined()
+    expect(parseRecord(serializeRecord(row))).toEqual(row)
+  })
+
+  it('records a failed call with its error code', () => {
+    const row = recordFromWebCall({
+      sessionId: 's1', time: 1000, seq: 3, tool: 'web_search', callId: 'call-1',
+      failed: true, errorCode: 'WEB_PROVIDER_ERROR',
+    })
+    expect(parseRecord(serializeRecord(row))?.web).toMatchObject({
+      failed: true,
+      errorCode: 'WEB_PROVIDER_ERROR',
+    })
+  })
+
+  it('normalizes a stored descriptor and drops malformed optional facts', () => {
+    const parsed = parseRecord(JSON.stringify({
+      requestId: 'web:s1:3',
+      time: 1000,
+      sessionId: 's1',
+      model: '',
+      kind: 'web',
+      web: { tool: 'web_search', callId: 'call-1', queryCount: 'many', rounds: -1, durationMs: -5 },
+    }))
+    expect(parsed?.kind).toBe('web')
+    expect(parsed?.web).toEqual({ tool: 'web_search', callId: 'call-1' })
+  })
+
+  it('reads both usage spellings and rejects an incomplete one', () => {
+    expect(extractWebUsage({ input_tokens: 10, output_tokens: 4, cache_read_input_tokens: 2 })).toEqual({
+      inputTokens: 10,
+      outputTokens: 4,
+      cacheReadTokens: 2,
+    })
+    expect(extractWebUsage({ inputTokens: 10, outputTokens: 4 })).toEqual({ inputTokens: 10, outputTokens: 4 })
+    expect(extractWebUsage({ input_tokens: 10 })).toBeUndefined()
+    expect(extractWebUsage(undefined)).toBeUndefined()
+  })
+
+  it('is a reconcilable, session-log-derived kind', () => {
+    expect(isReconcilableKind('web')).toBe(true)
+    expect(isReconcilableKind('aux')).toBe(false)
   })
 })

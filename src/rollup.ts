@@ -14,9 +14,9 @@
 import { readFile, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { consoleLogger, type LoggerLike } from './log.ts'
-import { coerceRecord, AUX_KINDS } from './usage-record.ts'
+import { coerceRecord, AUX_KINDS, isWebTool, WEB_SEARCH_TOOL } from './usage-record.ts'
 import type { AuxKind, UsageRecord } from './usage-record.ts'
-import type { RateKey, UsageAuxRow, UsageDayRow, UsageHourRow, UsageModelRow, UsageProviderRow, UsageRateRow, UsageSessionRow, UsageTotals } from './wire.ts'
+import type { RateKey, UsageAuxRow, UsageDayRow, UsageHourRow, UsageModelRow, UsageProviderRow, UsageRateRow, UsageSessionRow, UsageTotals, UsageWebRow } from './wire.ts'
 
 const ROLLUP_FILE = 'rollup.json'
 const TMP_FILE = 'rollup.json.tmp'
@@ -86,6 +86,11 @@ export interface RollupFile {
    * A legacy rollup missing this dimension retains usable totals but
    * requires a rebuild; unavailable source history hides unreliable costs. */
   bySession: UsageSessionRow[]
+  /** Per-(day, model) invocation counters of the absorbed web searches —
+   * the settings page's runtime-overhead dimension. A legacy rollup predating
+   * the dimension reads as an empty list: the writing version recorded no
+   * web calls, so no absorbed usage is lost. */
+  webRows?: UsageWebRow[]
   /** The newest absorbed records, descending by time (bounded window). */
   recent: UsageRecord[]
 }
@@ -165,6 +170,21 @@ function isAuxRow(value: unknown): value is UsageAuxRow {
     && typeof row.model === 'string' && isRateKey(row.rate) && isTotals(row.totals)
 }
 
+function isNonNegative(value: unknown): boolean {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+}
+
+type StoredWebRow = Omit<UsageWebRow, 'tool'> & { tool?: UsageWebRow['tool'] }
+
+function isWebRow(value: unknown): value is StoredWebRow {
+  if (typeof value !== 'object' || value === null) return false
+  const row = value as Record<string, unknown>
+  return typeof row.day === 'string' && DAY_KEY.test(row.day)
+    && typeof row.model === 'string'
+    && (row.tool === undefined || isWebTool(row.tool))
+    && isNonNegative(row.calls) && isNonNegative(row.failures)
+}
+
 /** The stored shape: a rollup written before the auxiliary or provider
  * dimensions existed omits `auxRows` / `byProvider`. Both still read as
  * valid — the writing version could not have recorded those rows, so the
@@ -173,9 +193,10 @@ function isAuxRow(value: unknown): value is UsageAuxRow {
  * missing provider dimension asks for a rebuild (the vendor table would
  * otherwise be empty next to whole totals); `aggregateFormat` sends the
  * whole rollup through that rebuild anyway. */
-type StoredRollupFile = Omit<RollupFile, 'auxRows' | 'byProvider'> & {
+type StoredRollupFile = Omit<RollupFile, 'auxRows' | 'byProvider' | 'webRows'> & {
   auxRows?: UsageAuxRow[]
   byProvider?: UsageProviderRow[]
+  webRows?: StoredWebRow[]
 }
 
 function isRollupFile(value: unknown): value is StoredRollupFile {
@@ -193,6 +214,7 @@ function isRollupFile(value: unknown): value is StoredRollupFile {
     && (rollup.byProvider === undefined || (Array.isArray(rollup.byProvider) && rollup.byProvider.every(isProviderRow)))
     && Array.isArray(rollup.rateRows) && rollup.rateRows.every(isRateRow)
     && (rollup.auxRows === undefined || (Array.isArray(rollup.auxRows) && rollup.auxRows.every(isAuxRow)))
+    && (rollup.webRows === undefined || (Array.isArray(rollup.webRows) && rollup.webRows.every(isWebRow)))
     // A missing legacy dimension requires a rebuild, but usable totals
     // must survive when the raw history needed for that rebuild is lost.
     && (rollup.bySession === undefined || (Array.isArray(rollup.bySession) && rollup.bySession.every(isSessionRow)))
@@ -231,6 +253,7 @@ export async function readRollup(dir: string, logger: LoggerLike = consoleLogger
     ...value,
     recent,
     auxRows: value.auxRows ?? [],
+    webRows: (value.webRows ?? []).map(row => ({ ...row, tool: row.tool ?? WEB_SEARCH_TOOL })),
     byProvider: value.byProvider ?? [],
     // A missing provider dimension needs the rebuild, like the missing
     // session dimension: the aggregate rebuilds from the day files, so the

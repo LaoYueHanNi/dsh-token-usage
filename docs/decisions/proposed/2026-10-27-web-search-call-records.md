@@ -2,6 +2,9 @@
 
 Status: proposed
 
+> [!NOTE]
+> `web_search` 与 `web_fetch` 调用记录（含「宿主报告了 token 才计量」的口径，以及运行开销卡片「联网工具」可折叠子项）已于 2026-11-22 由 [DR: 采集联网搜索调用并按模型轮次计入 token](../implemented/2026-11-22-web-search-call-records.md) 落地。本提案剩余范围——按次后端的计费口径、以及上游保留 usage 后的独立费用展示方案——仍保持提案状态。
+
 ## Problem
 
 插件的用量账本只从模型调用侧投影：`assistant/message`、`compaction/summary`、`turn/end`、`llm/retry`，以及 `llm/stream` waterfall 上的旁路辅助调用（见 [DR: 记录并单独展示辅助模型请求](../implemented/2026-10-21-auxiliary-model-requests.md)）。联网搜索走的却是 `ctx.tools` 工具管线：`@deepseek-ai/dsh-tool-web` 把 `web_search` / `web_fetch` 注册为模型可见工具，工具内部调 `ctx.web`，**全程不经过 `ctx.llm`**。因此一次搜索在账本里完全不存在——没有次数，没有耗时，更没有它背后的成本。

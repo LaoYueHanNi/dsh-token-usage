@@ -1,10 +1,12 @@
 /**
  * The runtime-overhead card's row shape (browser half): one expanded-by-
  * default row per auxiliary kind — the row carries the kind's aggregate
- * (calls · cost · tokens) and discloses its per-model lines on toggle; the
- * total line sits beneath the list. The semantics are the retired table's
- * (same fold, same empty hints, same defensive read of a payload without
- * `aux`); only the shape moved from columns to rows.
+ * (calls · cost · tokens) and discloses its per-model lines on toggle — plus
+ * one expanded-by-default web-tools row that carries the total call count and
+ * discloses its per-tool lines (`web_search`, `web_fetch`) on toggle. The
+ * total line beneath the list covers the auxiliary kinds only: web tools
+ * never join it, and any tokens a search reported are billed with the
+ * ordinary request totals.
  *
  * @module token-usage/client/OverheadRows
  */
@@ -12,7 +14,7 @@
 import { useState } from 'react'
 import type { ReactNode } from 'react'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
-import type { AuxKind, AuxSummary, CostState } from '../wire.ts'
+import type { AuxKind, AuxSummary, CostState, WebSearchSummary } from '../wire.ts'
 import { costsAvailable } from './PricingStatus.tsx'
 import { totalTokens } from './day.ts'
 import type { CurrencyView } from './format.ts'
@@ -21,15 +23,18 @@ import list from './UsageRows.module.css'
 import styles from './OverheadRows.module.css'
 
 /**
- * Render the overhead rows: one disclosure row per kind, then the total
- * line. A summary without auxiliary requests — including an older host
- * payload with no `aux` field at all — renders the empty hint instead, so
- * the card keeps a stable body.
- * @param props - the aux layer of the summary (possibly absent), the cost
- * state, the display currency view, and the locale translator.
+ * Render the overhead rows: one disclosure row per auxiliary kind, the
+ * web-search row, then the auxiliary total line. A summary without auxiliary
+ * requests — including an older host payload with no `aux` field at all —
+ * renders the empty hint instead, unless the web-search layer has calls.
+ * A web row renders one line: its call count.
+ * @param props - the aux layer (possibly absent), the web-search layer
+ *   (absent on legacy payloads), the cost state, the display currency view,
+ *   and the locale translator.
  */
-export function OverheadRows({ aux, costState, view, t }: {
+export function OverheadRows({ aux, web, costState, view, t }: {
   aux: AuxSummary | undefined
+  web?: WebSearchSummary | undefined
   costState: CostState
   view: CurrencyView
   t: TranslateNS<'token-usage'>
@@ -40,6 +45,7 @@ export function OverheadRows({ aux, costState, view, t }: {
   // independently; switching tabs unmounts the section, which is the
   // natural reset. New kinds arriving on a refresh default to expanded.
   const [collapsedKinds, setCollapsedKinds] = useState<ReadonlySet<AuxKind>>(() => new Set())
+  const [webCollapsed, setWebCollapsed] = useState(false)
   const toggleKind = (auxKind: AuxKind): void => {
     setCollapsedKinds(previous => {
       const next = new Set(previous)
@@ -48,7 +54,9 @@ export function OverheadRows({ aux, costState, view, t }: {
       return next
     })
   }
-  if (aux === undefined || auxCallCount(aux.total) === 0) {
+  const hasAux = aux !== undefined && auxCallCount(aux.total) > 0
+  const hasWeb = web !== undefined && web.calls > 0
+  if (!hasAux && !hasWeb) {
     return <p className={styles['muted']}>{t('aux.empty')}</p>
   }
   const costText = (cost: number): string =>
@@ -66,10 +74,10 @@ export function OverheadRows({ aux, costState, view, t }: {
       </span>
     </span>
   )
-  const content = (
+  return (
     <>
       <div className={list['rows']} role="list" aria-label={t('aux.tab')}>
-        {(aux.byKind ?? []).map(kindRow => {
+        {(aux?.byKind ?? []).map(kindRow => {
           const expanded = !collapsedKinds.has(kindRow.auxKind)
           return (
             <div className={styles['orow']} role="listitem" key={kindRow.auxKind}>
@@ -108,16 +116,51 @@ export function OverheadRows({ aux, costState, view, t }: {
             </div>
           )
         })}
+        {hasWeb
+          ? (
+            <div className={styles['orow']} role="listitem" key="web-tools">
+              <div className={styles['orowTop']}>
+                <button
+                  type="button"
+                  className={styles['kindToggle']}
+                  aria-expanded={!webCollapsed}
+                  onClick={() => setWebCollapsed(previous => !previous)}
+                >
+                  <span className={styles['chevron']} aria-hidden="true">▸</span>
+                  {t('web.title')}
+                </button>
+                <span className={styles['onums']}>
+                  {t('web.calls', { count: web.calls.toLocaleString() })}
+                </span>
+              </div>
+              {!webCollapsed && (web.byTool?.length ?? 0) > 0
+                ? (
+                  <div className={styles['adetail']}>
+                    {(web.byTool ?? []).map(toolRow => (
+                      <span key={`web:${toolRow.tool}`} className={styles['dline']}>
+                        <span className={styles['dmodelName']}>{t(`web.tool.${toolRow.tool}`)}</span>
+                        <span>{t('web.calls', { count: toolRow.calls.toLocaleString() })}</span>
+                      </span>
+                    ))}
+                  </div>
+                )
+                : null}
+            </div>
+          )
+          : null}
       </div>
-      <div className={styles['asum']}>
-        <span>{t('aux.totalCount', { count: auxCallCount(aux.total).toLocaleString() })}</span>
-        <span>
-          <span className={styles['onumsCost']}>{costText(aux.cost)}</span>
-          {' · '}
-          {formatTokens(totalTokens(aux.total))}
-        </span>
-      </div>
+      {hasAux
+        ? (
+          <div className={styles['asum']}>
+            <span>{t('aux.totalCount', { count: auxCallCount(aux.total).toLocaleString() })}</span>
+            <span>
+              <span className={styles['onumsCost']}>{costText(aux.cost)}</span>
+              {' · '}
+              {formatTokens(totalTokens(aux.total))}
+            </span>
+          </div>
+        )
+        : null}
     </>
   )
-  return content
 }

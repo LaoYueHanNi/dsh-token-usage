@@ -8,7 +8,7 @@ import { autoSyncIfNeeded, syncHistory, type SyncLog, type SyncPersistence } fro
 import { isInitialized } from '../src/sync-state.ts'
 import { UsageLog } from '../src/usage-log.ts'
 import { serializeRecord, type UsageRecord } from '../src/usage-record.ts'
-import { compactionEvent, messageEvent, pruneEvent, retryEvent, turnEndEvent } from './helpers.ts'
+import { compactionEvent, messageEvent, pruneEvent, retryEvent, searchLlmRequestEvent, toolCallEvent, toolResultEvent, turnEndEvent } from './helpers.ts'
 
 function fakePersistence(sessions: Array<{ id: string; events: SessionEvent[]; header?: { cwd?: string; origin?: 'subagent'; parentSession?: string } }>): SyncPersistence {
   return {
@@ -512,7 +512,7 @@ describe('syncHistory unreadable sessions', () => {
 
 /**
  * In-memory UsageLog twin: records rows for assertions and reproduces the
- * reconcile contract — a row outside `keep` is dropped only when its owning
+ * reconcile contract 鈥?a row outside `keep` is dropped only when its owning
  * session was read in full, and only ids in the pre-walk `eligible` snapshot
  * are candidates.
  */
@@ -640,7 +640,7 @@ describe('syncHistory metadata capture', () => {
 })
 
 /** Minimal but shape-true `session/title` event (host-merged payload, read
- * duck-typed by the sync — hence the cast). */
+ * duck-typed by the sync 鈥?hence the cast). */
 function titleEvent(title: string, seq: number): SessionEvent<'session/title'> {
   return {
     type: 'session/title',
@@ -1257,5 +1257,91 @@ describe('syncHistory fork handling', () => {
       kind: 'failure', failureCode: 'CONTENT_REFUSED', usage: { inputTokens: 500, outputTokens: 25 },
     })
     expect(rows.find(r => r.requestId === 'failure:child:16')?.usage).toBeUndefined()
+  })
+})
+
+describe('syncHistory web searches', () => {
+  const webCall = (seq: number, query: string, callId: string): SessionEvent[] => [
+    toolCallEvent({
+      seq,
+      time: 1000 + seq * 10,
+      callId,
+      name: 'web_search',
+      arguments: JSON.stringify({ queries: [query] }),
+    }),
+    searchLlmRequestEvent({ seq: seq + 1, time: 1000 + seq * 10 + 5, query }),
+    toolResultEvent({ seq: seq + 2, time: 1000 + seq * 10 + 500, callId }),
+  ]
+
+  it('backfills one row per settled call and dedupes a repeated sync', async () => {
+    const log = new FakeLog()
+    const persistence = fakePersistence([{ id: 's1', events: webCall(1, 'alpha', 'c1') }])
+    const first = await syncHistory({ persistence, log })
+
+    expect(first.added).toBe(1)
+    expect(log.rows.map(row => row.requestId)).toEqual(['web:s1:3'])
+    expect(log.rows[0]).toMatchObject({
+      kind: 'web',
+      model: 'deepseek-v4-flash',
+      web: { queryCount: 1, rounds: 1, durationMs: 500 },
+    })
+
+    const second = await syncHistory({ persistence, log })
+    expect(second).toMatchObject({ added: 0, skipped: 1 })
+  })
+
+  it('keeps a per-search call without a model round unmetered', async () => {
+    const log = new FakeLog()
+    const persistence = fakePersistence([{
+      id: 's1',
+      events: [
+        toolCallEvent({
+          seq: 1, time: 1000, callId: 'c1', name: 'web_search', arguments: JSON.stringify({ query: 'alpha' }),
+        }),
+        toolResultEvent({ seq: 2, time: 1500, callId: 'c1' }),
+      ],
+    }])
+    await syncHistory({ persistence, log })
+
+    expect(log.rows[0]).toMatchObject({ requestId: 'web:s1:2', model: '', web: { tool: 'web_search' } })
+    expect((log.rows[0] as UsageRecord).web?.rounds).toBeUndefined()
+    expect((log.rows[0] as UsageRecord).usage).toBeUndefined()
+  })
+
+  it('ignores other tools', async () => {
+    const log = new FakeLog()
+    const persistence = fakePersistence([{
+      id: 's1',
+      events: [
+        toolCallEvent({ seq: 1, time: 1000, callId: 'c1', name: 'read', arguments: '{}' }),
+        toolResultEvent({ seq: 2, time: 1500, callId: 'c1' }),
+      ],
+    }])
+    await syncHistory({ persistence, log })
+    expect(log.rows).toHaveLength(0)
+  })
+
+  it('never replays a fork prefix into the child ledger', async () => {
+    const log = new FakeLog()
+    const parent = webCall(0, 'parent', 'p1')
+    const child = webCall(3, 'child', 'c1')
+    const persistence = {
+      async list() { return [{ header: { id: 'child' as SessionId } }] },
+      async open() {
+        return {
+          inheritedEventCount: 3,
+          header: { cwd: '/w' },
+          read(offset?: number, length?: number) {
+            if (offset === 3) return Promise.resolve({ events: child })
+            if (offset === 0 && (length === undefined || length === 3)) return Promise.resolve({ events: parent })
+            return Promise.resolve({ events: [...parent, ...child] })
+          },
+          close() { return Promise.resolve() },
+        }
+      },
+    } as unknown as SyncPersistence
+    await syncHistory({ persistence, log })
+
+    expect(log.rows.map(row => row.requestId)).toEqual(['web:child:5'])
   })
 })

@@ -7,10 +7,10 @@
  * @module token-usage/wire
  */
 
-import type { AuxKind, UsageRecord } from './usage-record.ts'
+import type { AuxKind, UsageRecord, WebTool } from './usage-record.ts'
 import type { CompactionAttributionItem } from './compaction-attribution.ts'
 
-export type { AuxKind, UsageFields, UsageRecord } from './usage-record.ts'
+export type { AuxKind, UsageFields, UsageRecord, WebTool } from './usage-record.ts'
 export type { CompactionAttributionItem, CompactionSourceKind } from './compaction-attribution.ts'
 
 /** The stats endpoint path, served by the host half's webServer route. */
@@ -587,6 +587,47 @@ export interface UsageAuxRow {
   totals: UsageTotals
 }
 
+/**
+ * One per-(day, model, tool) cell of web-tool invocations (`web_search` or
+ * `web_fetch`). The counters are invocation facts, not billing units; a
+ * search's reported tokens fold into the ordinary request dimensions instead,
+ * and an unmetered call contributes nothing there.
+ */
+export interface UsageWebRow {
+  day: string
+  /** Model that served the search rounds; '' when none was observed. */
+  model: string
+  /** Which web tool made these calls (`web_search` or `web_fetch`). */
+  tool: WebTool
+  /** Tool calls in this cell (one per invocation). */
+  calls: number
+  /** Calls whose `tool/result` reported an error. */
+  failures: number
+}
+
+/** Per-tool breakdown nested under the web-tools overhead row. */
+export interface UsageWebToolRow {
+  tool: WebTool
+  calls: number
+  failures: number
+}
+
+/**
+ * The web-tools layer of the stats payload: the settings page's
+ * "runtime overhead" block renders one collapsible row beside the auxiliary
+ * kinds, breaking down `web_search` and `web_fetch` calls. Calls are recorded
+ * from the session log's `tool/call` + `tool/result` pair, so `calls` is the
+ * truthful invocation count even when the host reported no token figure.
+ */
+export interface WebSearchSummary {
+  /** Total web-tool calls (`web_search` + `web_fetch`). */
+  calls: number
+  /** Calls whose result reported an error. */
+  failures: number
+  /** Per-tool rows in fixed display order (`web_search`, `web_fetch`), non-empty tools only. */
+  byTool: UsageWebToolRow[]
+}
+
 /** One per-model row nested under an auxiliary kind: the model's share of one
  * bypass-request kind, keyed by the canonical id (a priced alias family folds
  * onto its modelId, unpriced names keep their spelling). The runtime-overhead
@@ -711,6 +752,12 @@ export interface TokenSummary {
    * then model then rate ascending; the settings page's session table folds
    * from these (see {@link UsageSessionRow}). */
   bySession: UsageSessionRow[]
+  /** Per-(day, model) invocation counters of the recorded web searches.
+   * Metered searches also fold their tokens and rounds into the totals,
+   * byDay, byModel, rateRows and bySession; unmetered searches appear only
+   * here. A summary read without raw history carries no rows (absent on
+   * legacy-shaped payloads). */
+  webRows?: UsageWebRow[]
   /** The most recent records, descending by time. */
   recent: UsageRecord[]
 }
@@ -786,6 +833,10 @@ export interface CostedSummary extends TokenSummary {
    * block. Its usage is already included in the totals above; this field only
    * splits it out by kind and prices it for display. */
   aux: AuxSummary
+  /** The web-search layer: recorded `web_search` invocation counts. Reported
+   * search tokens are already inside the totals above; these counters are
+   * never billing units. */
+  web: WebSearchSummary
 }
 
 /** The full stats payload served at {@link STATS_PATH}. A discriminated

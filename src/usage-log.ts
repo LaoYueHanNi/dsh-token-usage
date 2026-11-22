@@ -226,7 +226,8 @@ export class UsageLog {
    * - only ids in `eligible` (the snapshot taken before the walk) are
    *   candidates, so a row a live request appended during the walk survives;
    * - non-session-log rows (`kind: 'aux'` and any unknown future kind) are
-   *   unconditionally exempt from both deletion and reassignment;
+   *   unconditionally exempt from both deletion and reassignment; web-search
+   *   rows are session-log derived and stay reconcilable;
    * - a row is dropped only when its owning session was read **in full** by
    *   the walk, so "the walk did not see it" is never inferred from a session
    *   that failed to load, from a session missing out of the list (deleted,
@@ -483,9 +484,10 @@ interface ReconcileDayFilesResult {
 /**
  * Rewrite touched day files without stale droppable rows and with unique
  * session-owner reassignments applied. Non-session-log origins (`kind: 'aux'`
- * and any unknown future kind), unreadable-session rows, mid-walk live rows,
- * and malformed lines remain intact. Touched files are backed up before any
- * rewrite.
+ * and any unknown future kind) are exempt; `kind: 'web'` is session-log
+ * derived and therefore reconcilable like a plain request. Unreadable-session
+ * rows, mid-walk live rows, and malformed lines remain intact. Touched files
+ * are backed up before any rewrite.
  */
 async function reconcileDayFiles(
   dir: string,
