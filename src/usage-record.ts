@@ -107,9 +107,9 @@ export interface UsageRecord {
   /** Auxiliary row only: which bypass call produced it. Absent on every
    * other kind; a future unknown value normalizes to `'other'` on read. */
   auxKind?: AuxKind
-  /** Failure row only: the provider-neutral `LlmFailure.code` the attempt
-   * failed with (RATE_LIMIT, TRANSPORT, QUOTA, …). Absent on every other
-   * kind; a future code renders verbatim. */
+  /** Failure row (or refused billed auxiliary row) only: the provider-neutral
+   * `LlmFailure.code` the attempt failed with (RATE_LIMIT, CONTENT_REFUSED, …).
+   * Absent on other rows; a future code renders verbatim. */
   failureCode?: string
   /** Wall time in milliseconds from request dispatch (`step/start`) to message settlement (`assistant/message`). */
   latencyMs?: number
@@ -653,9 +653,9 @@ export function coerceRecord(value: unknown): UsageRecord | null {
       : isAux ? { kind: 'aux' as const }
         : {}
   const auxKind = isAux ? { auxKind: normalizeAuxKind(record.auxKind) } : {}
-  // Failure classification survives the round trip on failure rows only
-  // (a non-string or foreign-kind code normalizes to omission).
-  const failureCode = isFailure && typeof record.failureCode === 'string' && record.failureCode !== ''
+  // Failure classification survives the round trip on failure rows and refused
+  // auxiliary rows (a non-string or foreign-kind code normalizes to omission).
+  const failureCode = (isFailure || isAux) && typeof record.failureCode === 'string' && record.failureCode !== ''
     ? { failureCode: record.failureCode } : {}
   const latency = isCount(record.latencyMs) ? { latencyMs: record.latencyMs } : {}
   const firstToken = isCount(record.firstTokenLatencyMs) ? { firstTokenLatencyMs: record.firstTokenLatencyMs } : {}

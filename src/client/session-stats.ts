@@ -279,19 +279,22 @@ export function resolveHeaderTiming(input: {
   serverTiming: ChildTiming | undefined
   totalPerf?: Pick<UsageTotals, 'perfStreamCount' | 'perfStreamFirstMsSum' | 'perfStreamTpsSum'> | undefined
 }): HeaderTiming {
-  const live = timingFromBuckets(input.liveStats)
-  const server = timingFromBuckets(input.serverTiming)
-  const mirror = timingFromBuckets(input.mirrorAggregate)
-  const perf = timingFromPerfTotals(input.totalPerf)
-  const order = input.isSoloActive ? [live, server, mirror, perf] : [server, mirror, perf]
-  let ttftMs: number | undefined
-  let tokensPerSec: number | undefined
-  for (const candidate of order) {
-    if (ttftMs === undefined && candidate.ttftMs !== undefined) ttftMs = candidate.ttftMs
-    if (tokensPerSec === undefined && candidate.tokensPerSec !== undefined) tokensPerSec = candidate.tokensPerSec
+  const candidates = input.isSoloActive
+    ? [
+        timingFromBuckets(input.liveStats),
+        timingFromBuckets(input.serverTiming),
+        timingFromBuckets(input.mirrorAggregate),
+        timingFromPerfTotals(input.totalPerf),
+      ]
+    : [
+        timingFromBuckets(input.serverTiming),
+        timingFromBuckets(input.mirrorAggregate),
+        timingFromPerfTotals(input.totalPerf),
+      ]
+  for (const candidate of candidates) {
+    if (candidate.ttftMs !== undefined || candidate.tokensPerSec !== undefined) {
+      return candidate
+    }
   }
-  return {
-    ...(ttftMs !== undefined ? { ttftMs } : {}),
-    ...(tokensPerSec !== undefined ? { tokensPerSec } : {}),
-  }
+  return {}
 }

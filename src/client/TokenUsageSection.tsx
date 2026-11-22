@@ -23,7 +23,7 @@ import { STATS_PATH } from '../wire.ts'
 import { useAsyncResource } from './async-resource.ts'
 import { DateRangePicker } from './DateRangePicker.tsx'
 import { shiftedDayKey } from './day.ts'
-import { currencyViewOf } from './format.ts'
+import { auxCallCount, currencyViewOf } from './format.ts'
 import { MenuSelect } from './MenuSelect.tsx'
 import { DashboardCards } from './DashboardCards.tsx'
 import { OverheadRows } from './OverheadRows.tsx'
@@ -350,11 +350,12 @@ export function TokenUsageSection({ t, close, sessionListed, openSession, varian
   // New hosts aggregate before the session top-N cut. Older payloads retain
   // the former client-side fold as a compatibility fallback only.
   const projectRows = state.value.projectRows ?? projectRowsOf(state.value.sessionRows ?? [])
-  // The auxiliary (bypass) request count: the runtime-overhead tab is part of
-  // the detail switch whenever any dimension has rows, and the tab content
-  // renders its own empty hint when this stays 0 (or an older host payload
-  // carries no auxiliary layer at all).
-  const auxRequests = state.value.aux?.total.requests ?? 0
+  // Total auxiliary (bypass) calls — completed requests plus recorded
+  // failures (e.g. CONTENT_REFUSED): the runtime-overhead tab is part of the
+  // detail switch whenever any dimension has rows (or overhead calls exist),
+  // and the tab content renders its own empty hint when this stays 0 (or an
+  // older host payload carries no auxiliary layer at all).
+  const auxRequests = state.value.aux !== undefined ? auxCallCount(state.value.aux.total) : 0
   return (
     <div ref={rootRef} className={rootClass}>
     <PricingAssociationProvider resolutions={state.value.modelResolutions} feedVersion={state.value.feedVersion} view={view} t={t}>

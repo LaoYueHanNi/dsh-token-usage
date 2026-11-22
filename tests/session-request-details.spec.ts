@@ -537,4 +537,31 @@ describe('buildSessionRequestDetails — derived figures', () => {
     expect(details.items[1]!.cache.band).toBe('excluded')
     expect(details.items[1]!.cache.reason).toBe('not-success')
   })
+
+  it('marks refused billed aux records as failed with auxKind and failureCode preserved', () => {
+    const details = buildSessionRequestDetails({
+      records: [
+        record({
+          requestId: 'aux:session-title:1:1',
+          kind: 'aux',
+          auxKind: 'session-title',
+          time: 2_000,
+          failureCode: 'CONTENT_REFUSED',
+          usage: { inputTokens: 80, outputTokens: 12 },
+        }),
+      ],
+      live: { attempts: [], activeCount: 0 },
+      pricing: NO_PRICING,
+      asOf: 3_000,
+      liveCapability: 'lifecycle',
+    })
+    expect(details.items[0]).toMatchObject({
+      state: 'failed',
+      kind: 'aux',
+      auxKind: 'session-title',
+      failureCode: 'CONTENT_REFUSED',
+      inputTokens: 80,
+      outputTokens: 12,
+    })
+  })
 })

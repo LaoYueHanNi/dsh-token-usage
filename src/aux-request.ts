@@ -95,6 +95,9 @@ export interface AuxRequestRecordInput {
    * Historical auxiliary rows cannot be backfilled: they never landed in
    * the session log. */
   provider?: string
+  /** Optional provider-neutral `LlmFailure.code` when a refused bypass call
+   * (such as `CONTENT_REFUSED`) still emitted billed usage. */
+  failureCode?: string
 }
 
 /**
@@ -116,6 +119,7 @@ export function recordFromAuxRequest(input: AuxRequestRecordInput): UsageRecord 
     ...(usage !== undefined ? { usage } : {}),
     kind: 'aux',
     auxKind: input.auxKind,
+    ...(input.failureCode !== undefined && input.failureCode !== '' ? { failureCode: input.failureCode } : {}),
     ...(input.provider !== undefined && input.provider !== '' ? { provider: input.provider } : {}),
   }
 }

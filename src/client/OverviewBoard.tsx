@@ -19,7 +19,7 @@ import { StatCard, RequestsStatCard, OverheadPill } from './StatCard.tsx'
 import { TrendChart } from './TrendChart.tsx'
 import { HitRateText } from './HitRateText.tsx'
 import type { CurrencyView } from './format.ts'
-import { formatCost, formatTokens } from './format.ts'
+import { formatCost, formatTokens, auxCallCount } from './format.ts'
 import { totalTokens } from './day.ts'
 import styles from './OverviewBoard.module.css'
 
@@ -101,7 +101,7 @@ export function OverviewBoard({
               ? {
                   labelExtra: (
                     <OverheadPill
-                      requests={aux?.total.requests}
+                      requests={aux !== undefined ? auxCallCount(aux.total) : undefined}
                       byKind={aux?.byKind}
                       onActivate={onOverheadActivate}
                       t={t}
@@ -113,7 +113,7 @@ export function OverviewBoard({
                   failureBare: true,
                 }
               : {
-                  overheadRequests: aux?.total.requests,
+                  overheadRequests: aux !== undefined ? auxCallCount(aux.total) : undefined,
                   overheadByKind: aux?.byKind,
                   onOverheadActivate,
                 })}

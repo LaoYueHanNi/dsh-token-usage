@@ -17,7 +17,7 @@ Status: implemented
 
 分类不依赖宿主新增导出（`isAgentLoopRequest` 等），避免低版本 DSH 缺 API 时插件加载失败：有 `sessionId` 的请求属于主对话（已由 `assistant/message` 记录）或压缩/标题（`purpose` 明确），无 `sessionId` 的旁路请求再按固定 system 提示词识别——`REVIEW_POLICY` 开头是自动审查，`Translate the following text` 开头是推理翻译，其余落 `other` 兜底类别（首次出现打一条日志，便于发现宿主新增旁路调用点）。请求没有 `purpose` 标记时不做猜测式归属。
 
-记录行：`kind: 'aux'` + `auxKind: 'auto-review' | 'session-title' | 'translation' | 'other'`，无法确认归属时 `sessionId: ''`，`model` 为请求实际路由，usage 为 provider 上报的四桶，`requestId` 为 `aux:<kind>:<流开始毫秒>:<进程内计数>`。成功的流才写行；失败/取消的流没有计费 usage，只写插件警告日志（含失败码），不落数据。配置新增 `recordAux`（默认 `true`，composition-only，与 `recordCompaction` 并列）可关闭采集。
+记录行：`kind: 'aux'` + `auxKind: 'auto-review' | 'session-title' | 'timeline-report' | 'translation' | 'other'`，无法确认归属时 `sessionId: ''`，`model` 为请求实际路由，usage 为 provider 上报的四桶，`requestId` 为 `aux:<kind>:<流开始毫秒>:<进程内计数>`。成功的流正常写行；当遇到 `CONTENT_REFUSED` 且伴随有效 `usage` 时保留计费并附带 `failureCode: 'CONTENT_REFUSED'`，其余失败/取消的流只写插件警告日志（含失败码），不落数据。配置新增 `recordAux`（默认 `true`，composition-only，与 `recordCompaction` 并列）可关闭采集。
 
 聚合口径（用户口径：计入总消耗、按模型包含、按会话无法关联则不含）：
 

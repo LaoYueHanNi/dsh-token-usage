@@ -99,7 +99,7 @@ function attemptOfRecord(record: UsageRecord): MergedAttempt {
   const firstTokenLatencyMs = clock !== undefined
     ? clock.firstTokenAt !== undefined ? clock.firstTokenAt - clock.startedAt : undefined
     : record.firstTokenLatencyMs
-  const state: RequestDetailView['state'] = record.kind === 'failure'
+  const state: RequestDetailView['state'] = record.kind === 'failure' || record.failureCode !== undefined
     ? 'failed'
     : record.interrupted === true ? 'cancelled'
       : 'completed'

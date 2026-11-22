@@ -144,4 +144,25 @@ describe('OverheadRows', () => {
     expect(within(list).getByRole('button', { name: zh['aux.kind.timeline-report'] })).toBeTruthy()
     expect(within(list).getByText('deepseek-chat')).toBeTruthy()
   })
+
+  it('renders refused billed auxiliary calls even when successful aux requests is zero', () => {
+    const failedOnlyAux: AuxSummary = {
+      total: { ...totals(0, 50, 10), failures: 1, failuresByCode: { CONTENT_REFUSED: 1 } },
+      cost: 0.04,
+      byKind: [
+        {
+          auxKind: 'session-title',
+          totals: { ...totals(0, 50, 10), failures: 1, failuresByCode: { CONTENT_REFUSED: 1 } },
+          cost: 0.04,
+          byModel: [
+            { model: 'deepseek-chat', totals: { ...totals(0, 50, 10), failures: 1 }, cost: 0.04 },
+          ],
+        },
+      ],
+    }
+    render(<OverheadRows aux={failedOnlyAux} costState="ready" view={VIEW} t={t} />)
+    expect(screen.queryByText(zh['aux.empty'])).toBeNull()
+    expect(screen.getByText(zh['aux.totalCount'].replace('{count}', '1'))).toBeTruthy()
+    expect(screen.getByText('deepseek-chat')).toBeTruthy()
+  })
 })
