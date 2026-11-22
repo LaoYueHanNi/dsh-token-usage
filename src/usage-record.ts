@@ -67,6 +67,15 @@ export type AuxKind = 'auto-review' | 'session-title' | 'translation' | 'other'
 /** Every auxiliary kind, in the fixed display order the tables use. */
 export const AUX_KINDS: readonly AuxKind[] = ['auto-review', 'session-title', 'translation', 'other']
 
+/**
+ * Whether a raw JSONL row's `kind` field belongs to session-log-derived
+ * origins that `reconcile` may drop or reassign. Auxiliary rows (`'aux'`)
+ * and any unknown future kind are unconditionally exempt.
+ */
+export function isReconcilableKind(rawKind: unknown): boolean {
+  return rawKind === undefined || rawKind === 'request' || rawKind === 'compaction' || rawKind === 'failure'
+}
+
 /** One JSONL row: one provider model call (successful or failed). */
 export interface UsageRecord {
   /** Stable request identity: the assistant message id (dedupe key), a
@@ -451,24 +460,30 @@ export function recordOfEvent(
   }
 }
 
+function headerConfigOf(event: SessionEvent): { model?: unknown; provider?: unknown } | undefined {
+  if (event.type !== 'request/header') return undefined
+  const data = event.data as { header?: { config?: { model?: unknown; provider?: unknown } } } | undefined
+  return data?.header?.config
+}
+
 /**
  * The model id an event reveals about the session's current route, when it
- * does: `request/context` announces route changes before dispatch (it logs
- * only on change), and `assistant/message` confirms the model that actually
- * produced a message. Both fold into the same last-known value, so a turn
- * that ends in an error can still attribute its failure row to a model.
+ * does: `request/header` establishes the call config at the start of an epoch
+ * or fork resume, `request/context` announces route changes before dispatch
+ * (it logs only on change), and `assistant/message` confirms the model that
+ * actually produced a message. All three fold into the same last-known value,
+ * so a turn that ends in an error can still attribute its failure row to a model.
  */
 export function modelOfEvent(event: SessionEvent): string | undefined {
   if (event.type === 'request/context') return event.data.model
   if (event.type === 'assistant/message') return event.data.message.source.model
-  return undefined
+  return nonEmpty(headerConfigOf(event)?.model)
 }
 
 /**
  * The route key an event reveals about the session's current route, when
- * it does. Same two sources as {@link modelOfEvent}: `request/context`
- * announces a route change before dispatch, and `assistant/message`
- * confirms the route that produced a message. An empty key reveals
+ * it does. Same sources as {@link modelOfEvent}: `request/header`,
+ * `request/context`, and `assistant/message`. An empty key reveals
  * nothing — it must not wipe a route already known. Compaction and
  * `llm/retry` name their own route on the row, but they do not move this
  * last-known value; a later `turn/end` keeps following the request route.
@@ -476,11 +491,11 @@ export function modelOfEvent(event: SessionEvent): string | undefined {
 export function providerOfEvent(event: SessionEvent): string | undefined {
   if (event.type === 'request/context') return nonEmpty(event.data.provider)
   if (event.type === 'assistant/message') return nonEmpty(event.data.message.source.provider)
-  return undefined
+  return nonEmpty(headerConfigOf(event)?.provider)
 }
 
-function nonEmpty(value: string | undefined): string | undefined {
-  return value !== undefined && value !== '' ? value : undefined
+function nonEmpty(value: unknown): string | undefined {
+  return typeof value === 'string' && value !== '' ? value : undefined
 }
 
 function normalizeCount(value: unknown): number | undefined {

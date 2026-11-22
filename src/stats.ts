@@ -961,20 +961,25 @@ export const SESSION_ROW_LIMIT = 1000
 export interface SessionMetaEntry {
   title?: string
   cwd?: string
+  origin?: 'subagent'
   parentSession?: string
 }
 
 /**
  * Build the child → parent lineage index from the session-metadata index.
- * Shared by the session-table fold and the scope-rule expansion so both see
- * exactly the same ancestry (a parent the index never saw is a root).
+ * Strictly admits only sessions tagged `origin === 'subagent'`; ordinary forks
+ * (including historical forks retaining `parentSession`) never collapse into a
+ * parent. Shared by the session-table fold and the scope-rule expansion so
+ * both see exactly the same ancestry (a parent the index never saw is a root).
  */
 export function buildLineageIndex(
   meta: ReadonlyMap<string, SessionMetaEntry>,
 ): Map<string, string> {
   const parentOf = new Map<string, string>()
   for (const [id, entry] of meta) {
-    if (entry.parentSession !== undefined && entry.parentSession !== '') parentOf.set(id, entry.parentSession)
+    if (entry.origin === 'subagent' && entry.parentSession !== undefined && entry.parentSession !== '') {
+      parentOf.set(id, entry.parentSession)
+    }
   }
   return parentOf
 }

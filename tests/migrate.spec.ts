@@ -9,6 +9,7 @@ import { mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { BACKUPS_DIR } from '../src/backup.ts'
 import { cleanSource, copyData, type MigrationProgress } from '../src/migrate.ts'
 import { ASSOCIATIONS_FILE } from '../src/pricing-associations.ts'
 
@@ -207,3 +208,42 @@ async function copyFileSafe(source: string, destination: string): Promise<void> 
   const { copyFile } = await import('node:fs/promises')
   await copyFile(source, destination)
 }
+
+describe('.backups migration compatibility', () => {
+  it('copies plugin backup snapshots with size verification and empties source directory cleanly', async () => {
+    const snap = '20261122-143000-001-00-reconcile'
+    await writeFile(join(oldDir, 'usage-2026-01-15.jsonl'), 'live\n', 'utf8')
+    await mkdir(join(oldDir, BACKUPS_DIR, snap), { recursive: true })
+    await writeFile(join(oldDir, BACKUPS_DIR, snap, 'usage-2026-01-15.jsonl'), 'before-reconcile\n', 'utf8')
+
+    const copied = await copyData(oldDir, newDir)
+    expect(copied).toEqual([
+      'usage-2026-01-15.jsonl',
+      join(BACKUPS_DIR, snap, 'usage-2026-01-15.jsonl'),
+    ])
+    expect(await readFile(join(newDir, BACKUPS_DIR, snap, 'usage-2026-01-15.jsonl'), 'utf8'))
+      .toBe('before-reconcile\n')
+
+    const result = await cleanSource(oldDir, newDir)
+    expect(result).toEqual({ copied: 2, cleaned: 2 })
+    expect(existsSync(oldDir)).toBe(false)
+  })
+
+  it('preserves existing target backup files and keeps foreign files inside .backups intact', async () => {
+    const snap = '20261122-143000-001-00-refile'
+    await mkdir(join(oldDir, BACKUPS_DIR, snap), { recursive: true })
+    await writeFile(join(oldDir, BACKUPS_DIR, snap, 'usage-2026-01-15.jsonl'), 'source-backup\n', 'utf8')
+    await writeFile(join(oldDir, BACKUPS_DIR, 'user-notes.txt'), 'keep me', 'utf8')
+    await mkdir(join(newDir, BACKUPS_DIR, snap), { recursive: true })
+    await writeFile(join(newDir, BACKUPS_DIR, snap, 'usage-2026-01-15.jsonl'), 'target-backup\n', 'utf8')
+
+    await copyData(oldDir, newDir)
+    expect(await readFile(join(newDir, BACKUPS_DIR, snap, 'usage-2026-01-15.jsonl'), 'utf8'))
+      .toBe('target-backup\n')
+
+    await cleanSource(oldDir, newDir)
+    expect(existsSync(join(oldDir, BACKUPS_DIR, snap))).toBe(false)
+    expect(await readFile(join(oldDir, BACKUPS_DIR, 'user-notes.txt'), 'utf8')).toBe('keep me')
+    expect(existsSync(oldDir)).toBe(true)
+  })
+})

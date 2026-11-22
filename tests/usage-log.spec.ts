@@ -1,9 +1,12 @@
+import { existsSync } from 'node:fs'
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { BACKUPS_DIR, isBackupSnapshotName } from '../src/backup.ts'
+import { PROVIDER_FIELD } from '../src/field-completion.ts'
 import { dayFileName, dayFileNameOf, UsageLog } from '../src/usage-log.ts'
-import { serializeRecord } from '../src/usage-record.ts'
+import { serializeRecord, type UsageRecord } from '../src/usage-record.ts'
 import { messageEvent } from './helpers.ts'
 import { recordFromEvent } from '../src/usage-record.ts'
 
@@ -169,7 +172,12 @@ describe('UsageLog.refileByEventDay', () => {
     const log = new UsageLog(dir)
     await log.scan()
     expect(await log.refileByEventDay()).toBe(1)
-    expect((await readdir(dir)).sort()).toEqual(['usage-2026-01-10.jsonl', 'usage-2026-01-15.jsonl'])
+    const dirEntries = (await readdir(dir)).sort()
+    expect(dirEntries).toContain(BACKUPS_DIR)
+    expect(dirEntries.filter(name => name.endsWith('.jsonl'))).toEqual([
+      'usage-2026-01-10.jsonl',
+      'usage-2026-01-15.jsonl',
+    ])
     expect(await readFile(join(dir, 'usage-2026-01-10.jsonl'), 'utf8')).toContain('"requestId":"old"')
     expect(await readFile(join(dir, 'usage-2026-01-15.jsonl'), 'utf8')).toContain('"requestId":"today"')
     expect(await readFile(join(dir, 'usage-2026-01-15.jsonl'), 'utf8')).not.toContain('"requestId":"old"')
@@ -236,6 +244,34 @@ describe('UsageLog.backfillTiming', () => {
 
     // Second run should be a no-op since the row now has both latencyMs and firstTokenLatencyMs
     expect(await log.backfillTiming(fakePersistence as any)).toBe(0)
+
+    const snapshots = (await readdir(join(dir, BACKUPS_DIR))).filter(isBackupSnapshotName)
+    expect(snapshots).toHaveLength(1)
+    expect(snapshots[0]!.endsWith('-backfill-timing')).toBe(true)
+    const backupRow = JSON.parse((await readFile(join(dir, BACKUPS_DIR, snapshots[0]!, 'usage-2026-01-15.jsonl'), 'utf8')).trim())
+    expect(backupRow.latencyMs).toBeUndefined()
+  })
+
+  it('does not create backups when timing backfill makes zero changes', async () => {
+    const dir = await tempDir()
+    const targetDate = new Date(2026, 0, 15, 8).getTime()
+    const existing = {
+      requestId: 'msg-done',
+      time: targetDate,
+      sessionId: 'session-1',
+      model: 'deepseek-chat',
+      usage: { inputTokens: 10, outputTokens: 5 },
+      latencyMs: 3200,
+      firstTokenLatencyMs: 420,
+    }
+    await writeFile(join(dir, 'usage-2026-01-15.jsonl'), `${serializeRecord(existing)}\n`)
+    const fakePersistence = {
+      async list() { return [] },
+      async open() { throw new Error('unexpected') },
+    }
+    const log = new UsageLog(dir)
+    expect(await log.backfillTiming(fakePersistence as any)).toBe(0)
+    expect(existsSync(join(dir, BACKUPS_DIR))).toBe(false)
   })
 
   it('backfills firstTokenLatencyMs from compact stream for rows with existing latencyMs', async () => {
@@ -297,6 +333,230 @@ describe('UsageLog.backfillTiming', () => {
     const parsed = JSON.parse(content.trim())
     expect(parsed.latencyMs).toBe(3200)
     expect(parsed.firstTokenLatencyMs).toBe(600)
+  })
+})
+
+describe('UsageLog.reconcile', () => {
+  it('unconditionally exempts attributed and unattributed aux rows and unknown future kinds', async () => {
+    const dir = await tempDir()
+    const dayTime = new Date(2026, 0, 15, 12).getTime()
+    const ownedTitle: UsageRecord = {
+      requestId: 'aux:session-title:1:1',
+      time: dayTime,
+      sessionId: 's1',
+      model: 'deepseek-chat',
+      kind: 'aux',
+      auxKind: 'session-title',
+      usage: { inputTokens: 10, outputTokens: 2 },
+    }
+    const ownedReview: UsageRecord = {
+      requestId: 'aux:auto-review:2:2',
+      time: dayTime + 10,
+      sessionId: 's1',
+      model: 'deepseek-chat',
+      kind: 'aux',
+      auxKind: 'auto-review',
+      usage: { inputTokens: 20, outputTokens: 4 },
+    }
+    const unownedAux: UsageRecord = {
+      requestId: 'aux:translation:3:3',
+      time: dayTime + 20,
+      sessionId: '',
+      model: 'deepseek-chat',
+      kind: 'aux',
+      auxKind: 'translation',
+      usage: { inputTokens: 8, outputTokens: 1 },
+    }
+    const staleFailure: UsageRecord = {
+      requestId: 'failure:s1:99',
+      time: dayTime + 30,
+      sessionId: 's1',
+      model: 'deepseek-chat',
+      kind: 'failure',
+      failureCode: 'RATE_LIMIT',
+    }
+    const unknownFutureRaw = JSON.stringify({
+      requestId: 'web-search:s1:4',
+      time: dayTime + 40,
+      sessionId: 's1',
+      model: 'deepseek-chat',
+      kind: 'web-search',
+      queries: ['foo'],
+    })
+    const originalBody = [
+      serializeRecord(ownedTitle),
+      serializeRecord(ownedReview),
+      serializeRecord(unownedAux),
+      serializeRecord(staleFailure),
+      unknownFutureRaw,
+      '{corrupt-line',
+    ].join('\n') + '\n'
+    await writeFile(join(dir, 'usage-2026-01-15.jsonl'), originalBody, 'utf8')
+
+    const log = new UsageLog(dir)
+    await log.scan()
+    const eligible = log.ids()
+    const removed = await log.reconcile(new Set<string>(), new Set(['s1']), eligible)
+    expect(removed).toBe(1)
+
+    const updatedLines = (await readFile(join(dir, 'usage-2026-01-15.jsonl'), 'utf8')).trim().split('\n')
+    expect(updatedLines).toHaveLength(5)
+    expect(updatedLines.map(line => (line === '{corrupt-line' ? line : JSON.parse(line).requestId))).toEqual([
+      'aux:session-title:1:1',
+      'aux:auto-review:2:2',
+      'aux:translation:3:3',
+      'web-search:s1:4',
+      '{corrupt-line',
+    ])
+    // Future unknown kind line keeps its original JSON verbatim without stripping extra fields.
+    expect(updatedLines[3]).toBe(unknownFutureRaw)
+    expect(log.has('failure:s1:99')).toBe(false)
+    expect(log.has('aux:session-title:1:1')).toBe(true)
+
+    const snapshots = (await readdir(join(dir, BACKUPS_DIR))).filter(isBackupSnapshotName)
+    expect(snapshots).toHaveLength(1)
+    expect(snapshots[0]!.endsWith('-reconcile')).toBe(true)
+    expect(await readFile(join(dir, BACKUPS_DIR, snapshots[0]!, 'usage-2026-01-15.jsonl'), 'utf8')).toBe(originalBody)
+  })
+
+  it('reassigns misattributed session-log rows in place while preserving live fields', async () => {
+    const dir = await tempDir()
+    const dayTime = new Date(2026, 0, 15, 12).getTime()
+    const misattributed: UsageRecord = {
+      requestId: 'msg-parent-1',
+      time: dayTime,
+      sessionId: 'fork-child',
+      model: 'deepseek-chat',
+      usage: { inputTokens: 100, outputTokens: 20 },
+      attemptTiming: { startedAt: dayTime - 500, settledAt: dayTime, firstTokenAt: dayTime - 400 },
+    }
+    const unreadableChildOwned: UsageRecord = {
+      requestId: 'msg-unreadable',
+      time: dayTime + 10,
+      sessionId: 'unreadable-fork',
+      model: 'deepseek-chat',
+      usage: { inputTokens: 10, outputTokens: 2 },
+    }
+    await writeFile(
+      join(dir, 'usage-2026-01-15.jsonl'),
+      `${serializeRecord(misattributed)}\n${serializeRecord(unreadableChildOwned)}\n`,
+      'utf8',
+    )
+
+    const log = new UsageLog(dir)
+    await log.scan()
+    let reassigned = 0
+    const removed = await log.reconcile(
+      new Set(['msg-parent-1', 'msg-unreadable']),
+      new Set(['parent-1', 'fork-child']),
+      log.ids(),
+      new Map([
+        ['msg-parent-1', 'parent-1'],
+        ['msg-unreadable', 'parent-1'],
+      ]),
+      (count) => { reassigned = count },
+    )
+    expect(removed).toBe(0)
+    expect(reassigned).toBe(1)
+
+    const rows = (await readFile(join(dir, 'usage-2026-01-15.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map(line => JSON.parse(line) as UsageRecord)
+    expect(rows[0]!.sessionId).toBe('parent-1')
+    expect(rows[0]!.attemptTiming).toEqual({
+      startedAt: dayTime - 500,
+      settledAt: dayTime,
+      firstTokenAt: dayTime - 400,
+    })
+    // Original owner session was not readable, so reassignment is safely skipped.
+    expect(rows[1]!.sessionId).toBe('unreadable-fork')
+
+    const snapshots = (await readdir(join(dir, BACKUPS_DIR))).filter(isBackupSnapshotName)
+    expect(snapshots).toHaveLength(1)
+    expect(snapshots[0]!.endsWith('-reconcile')).toBe(true)
+  })
+
+  it('creates no backup directory when reconcile makes zero changes', async () => {
+    const dir = await tempDir()
+    await writeFile(join(dir, 'usage-2026-01-15.jsonl'), `${serializeRecord(record('m1', 1))}\n`, 'utf8')
+    const log = new UsageLog(dir)
+    await log.scan()
+    const removed = await log.reconcile(new Set(['m1']), new Set(['session-1']), log.ids())
+    expect(removed).toBe(0)
+    expect(existsSync(join(dir, BACKUPS_DIR))).toBe(false)
+  })
+})
+
+describe('UsageLog rewrite backups for refile and completeFields', () => {
+  it('backs up source and existing target day files before refiling', async () => {
+    const dir = await tempDir()
+    const oldTime = new Date(2026, 0, 10, 8).getTime()
+    const todayTime = new Date(2026, 0, 15, 12).getTime()
+    const parked = record('old', 1, oldTime)
+    const alreadyThere = record('existing-old', 2, oldTime + 1_000)
+    const staying = record('today', 3, todayTime)
+    const srcRaw = `${serializeRecord(parked)}\n${serializeRecord(staying)}\n`
+    const dstRaw = `${serializeRecord(alreadyThere)}\n`
+    await writeFile(join(dir, 'usage-2026-01-15.jsonl'), srcRaw, 'utf8')
+    await writeFile(join(dir, 'usage-2026-01-10.jsonl'), dstRaw, 'utf8')
+
+    const log = new UsageLog(dir)
+    await log.scan()
+    expect(await log.refileByEventDay()).toBe(1)
+
+    const snapshots = (await readdir(join(dir, BACKUPS_DIR))).filter(isBackupSnapshotName)
+    expect(snapshots).toHaveLength(1)
+    expect(snapshots[0]!.endsWith('-refile')).toBe(true)
+    const snapDir = join(dir, BACKUPS_DIR, snapshots[0]!)
+    expect(await readFile(join(snapDir, 'usage-2026-01-15.jsonl'), 'utf8')).toBe(srcRaw)
+    expect(await readFile(join(snapDir, 'usage-2026-01-10.jsonl'), 'utf8')).toBe(dstRaw)
+
+    // Second pass has 0 moves and creates no extra backup.
+    expect(await log.refileByEventDay()).toBe(0)
+    expect((await readdir(join(dir, BACKUPS_DIR))).filter(isBackupSnapshotName)).toHaveLength(1)
+  })
+
+  it('backs up modified day files before completeFields rewrite and skips backup on zero changes', async () => {
+    const dir = await tempDir()
+    const targetDate = new Date(2026, 0, 15, 8).getTime()
+    const unattributed = {
+      requestId: 'msg-no-provider',
+      time: targetDate,
+      sessionId: 'session-1',
+      model: 'deepseek-chat',
+      usage: { inputTokens: 10, outputTokens: 5 },
+    }
+    const raw = `${serializeRecord(unattributed)}\n`
+    await writeFile(join(dir, 'usage-2026-01-15.jsonl'), raw, 'utf8')
+
+    const fakePersistence = {
+      async list() { return [{ header: { id: 'session-1' as any } }] },
+      async open() {
+        return {
+          read: () => Promise.resolve({
+            events: [
+              messageEvent({ messageId: 'msg-no-provider', seq: 1, time: targetDate, provider: 'deepseek-official' }),
+            ],
+          }),
+          close: () => Promise.resolve(),
+        }
+      },
+    }
+
+    const log = new UsageLog(dir)
+    const result = await log.completeFields(fakePersistence as any, [PROVIDER_FIELD])
+    expect(result.patched).toBe(1)
+
+    const snapshots = (await readdir(join(dir, BACKUPS_DIR))).filter(isBackupSnapshotName)
+    expect(snapshots).toHaveLength(1)
+    expect(snapshots[0]!.endsWith('-complete-fields')).toBe(true)
+    expect(await readFile(join(dir, BACKUPS_DIR, snapshots[0]!, 'usage-2026-01-15.jsonl'), 'utf8')).toBe(raw)
+
+    // Subsequent pass needs no edits and writes no extra backup.
+    const second = await log.completeFields(fakePersistence as any, [PROVIDER_FIELD])
+    expect(second.patched).toBe(0)
+    expect((await readdir(join(dir, BACKUPS_DIR))).filter(isBackupSnapshotName)).toHaveLength(1)
   })
 })
 

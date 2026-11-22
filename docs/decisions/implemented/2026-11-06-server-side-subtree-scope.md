@@ -13,7 +13,7 @@ Status: implemented
 统计请求改为**表达范围规则，不枚举集合**：`?root=<sessionId>&scope=self|subtree&fields=...`，`scope=self` 为默认、可省略。浏览器端 `UsageView` 与 `CostPill` 的三处读取全部改用该形式；`requestKey` / `scopeKey` 改为常量长度的 root + scope + freshness，不再把上百个 id 拼成约 17 KiB 的内存字符串。
 
 - `wire.ts` 新增 `StatsScope` / `ROOT_PARAM` / `SCOPE_PARAM` / `decodeStatsScope`；`encodeStatsQuery` 在带 `root` 时忽略 legacy id 列表，两种形式互斥。
-- `stats.ts` 新增 `buildLineageIndex` / `resolveSessionScope`：从 [会话元数据索引](./2026-09-05-session-dimension-rollup.md) 的 `parentSession` 建 parent → children 索引，深度优先展开子树（`seen` 防环），并按「直接子 + 其后代」派生 `childGroups`。`buildSessionRows` 复用同一个 `buildLineageIndex`，保证会话表折叠与范围展开口径一致。
+- `stats.ts` 新增 `buildLineageIndex` / `resolveSessionScope`：从 [会话元数据索引](./2026-09-05-session-dimension-rollup.md) 中严格按 `origin === 'subagent'`（见 [DR: 适配 Fork 会话继承前缀去重、旧账本修正与严格子代理血缘判定](../implemented/2026-11-22-fork-session-inherited-prefix-dedup.md)）读取 `parentSession` 建 parent → children 索引，深度优先展开子树（`seen` 防环），并按「直接子 + 其后代」派生 `childGroups`。`buildSessionRows` 复用同一个 `buildLineageIndex`，保证会话表折叠与范围展开口径一致。
 - `stats-route.ts` 把元数据读取提前为每请求一次（store 有 mtime 缓存），收到 `root` 时用 `resolveSessionScope` 覆盖 `sessionIds` / `childGroups`；`childGroups` 仅在 `fields=session`（用量页）时派生，chip / detail 读不付这个成本。root 无已知血缘时退化为只统计 root 自己，不报错。
 - `childBreakdown` 由「每组一次全量过滤」改为一次遍历按组分桶，避免 200 个直接子会话时重扫日志 200 次（这条路径过去被 431 挡住，从未真正跑到过）。
 - **legacy `sessionId` / `childId` 参数保留为服务端兼容层**（旧前端 bundle、手写 URL、现有测试），但浏览器端不再产生；后续版本可移除。

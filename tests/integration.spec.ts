@@ -348,6 +348,70 @@ describe('plugin integration', () => {
     expect(byId.get('m0')!.compactionAttribution).toBeUndefined()
   })
 
+  it('ignores non-own inherited prefix events and resolves error route from session fallback', async () => {
+    const mounted = await mount()
+    await waitForState(mounted.dir)
+
+    // Case 1: If non-own events (isOwnSeq === false) arrive on session/event,
+    // they never persist rows or feed compactionAttribution, only route/title state.
+    const forkedReplay = {
+      id: 'fork-child',
+      inheritedEventCount: 5,
+      isOwnSeq: (seq: number) => seq >= 5,
+    }
+    ctx!.emit('session/event', forkedReplay, messageEvent({
+      messageId: 'parent-msg', seq: 1, provider: 'kimi', model: 'kimi-k2',
+    }))
+    ctx!.emit('session/event', forkedReplay, compactionEvent({ seq: 2 }))
+    ctx!.emit('session/event', forkedReplay, retryEvent({ seq: 3 }))
+    ctx!.emit('session/event', forkedReplay, pruneEvent({ seq: 4, tokens: 900 }))
+    ctx!.emit('session/event', forkedReplay, {
+      type: 'turn/end',
+      seq: SessionSeq(6),
+      time: 1_700_000_000_006,
+      data: { turn: 2, reason: { kind: 'error', error: { message: 'boom', code: 'RATE_LIMIT', status: 429 } } },
+    })
+    ctx!.emit('session/event', forkedReplay, messageEvent({ messageId: 'child-msg', seq: 7 }))
+
+    // Case 2: On a real DSH fork (inherited prefix is not replayed on session/event),
+    // an immediate own failure falls back to session.requestHeader().
+    const forkedFresh = {
+      id: 'fork-fresh',
+      inheritedEventCount: 5,
+      isOwnSeq: (seq: number) => seq >= 5,
+      requestHeader: () => ({ config: { provider: 'deepseek-official', model: 'deepseek-reasoner' } }),
+      requestContext: () => undefined,
+    }
+    ctx!.emit('session/event', forkedFresh, {
+      type: 'turn/end',
+      seq: SessionSeq(5),
+      time: 1_700_000_000_008,
+      data: { turn: 2, reason: { kind: 'error', error: { message: 'boom', code: 'TIMEOUT', status: 504 } } },
+    })
+
+    const rows = await pollRows(mounted.dir, 3)
+    expect(rows.map(row => row.requestId)).toEqual([
+      'failure:fork-child:6',
+      'child-msg',
+      'failure:fork-fresh:5',
+    ])
+    expect(rows[0]).toMatchObject({
+      sessionId: 'fork-child',
+      model: 'kimi-k2',
+      provider: 'kimi',
+      kind: 'failure',
+      failureCode: 'RATE_LIMIT',
+    })
+    expect(rows[1]!.compactionAttribution).toBeUndefined()
+    expect(rows[2]).toMatchObject({
+      sessionId: 'fork-fresh',
+      model: 'deepseek-reasoner',
+      provider: 'deepseek-official',
+      kind: 'failure',
+      failureCode: 'TIMEOUT',
+    })
+  })
+
   it('ignores non-assistant/message events', async () => {
     const mounted = await mount()
     await waitForState(mounted.dir)

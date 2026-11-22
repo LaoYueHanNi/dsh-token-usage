@@ -12,13 +12,16 @@ Status: implemented
 
 ## Decision
 
-手动全量扫描改为对账：对每个可读会话，读到的记录若已在账本里则跳过、若不在则写入；全部可读会话读完后，账本里该会话有、会话日志没有的行删除。进度与结果展示三种计数：跳过、写入、删除。
+> [!NOTE]
+> 本决策中“对账仅按 `eligible && !keep && readable` 判定所有行、且直接原地覆写日文件”的规则已于 2026-11-22 由 [DR: 对账采用可重建来源白名单，并在改写日文件前自动滚动备份](../implemented/2026-11-22-reconcile-whitelist-and-rewrite-backup.md) 部分取代。归属修正规则详见 [DR: 适配 Fork 会话继承前缀去重、旧账本修正与严格子代理血缘判定](../implemented/2026-11-22-fork-session-inherited-prefix-dedup.md)。
 
-落地（`src/sync.ts` / `src/usage-log.ts`）：
+手动全量扫描改为对账：对每个可读会话，读到的记录若已在账本里则跳过、若不在则写入；全部可读会话读完后，账本里该会话有、会话日志没有的可重建行删除。进度与结果展示三种计数：跳过、写入、删除。
+
+落地（`src/sync.ts` / `src/usage-log.ts` / `src/backup.ts`）：
 
 1. 扫描前 `log.ids()` 拍一张已保存 id 快照（`eligible`）——走读途中 live 写入的行不在快照里，对账不得删。
-2. 走读时收集 `reproduced`（本轮读出的全部 requestId，无论写入还是跳过）和 `readable`（读成功的会话 id）。读失败的会话不计 `readable`。
-3. 走读结束后 `log.reconcile(keep, readableSessions, eligible)`：只删同时满足「在 eligible 里」「不在 keep 里」「`owners` 指向的会话属于 readable」的行。畸形 JSONL 行不是候选，留在原文件。按日文件原子重写，走 append 队列。
+2. 走读时收集 `reproduced`（本轮读出的全部 requestId，无论写入还是跳过）、`reproducedOwners`（唯一重现会话映射）和 `readable`（读成功的会话 id）。读失败的会话不计 `readable`。
+3. 走读结束后 `log.reconcile(keep, readableSessions, eligible, expectedOwners?, onReassigned?)`：仅在原始 `kind` 属于会话日志可重建白名单（`undefined` / `'request'` / `'compaction'` / `'failure'`）时参与对账；旁路记录（`kind: 'aux'`）与未知未来 `kind`、畸形 JSONL 行一律豁免保留。仅删同时满足「在 eligible 里」「不在 keep 里」「`owners` 指向的会话属于 readable」的行，并在改写前将受影响日文件备份到 `.backups/`，按日文件原子重写，走 append 队列。
 4. **只删已完整读取的会话的陈旧行**，不是「会话不在 `list()` 里」的行。宿主 `list()` 有一条静默跳过路径（头部格式不支持的会话不进列表；0.1.5-rc.1 上 27 个 v0 `subagent/descriptor version 2` 被迁移拒绝即此列），删孤儿行不可逆。已读失败 / 未列出的会话，其行一律保留。
 5. **启动路径不对账**：`autoSyncIfNeeded` 传 `reconcile: false`。首次安装账本是空的，无陈旧行可删；对账会拖长 `syncHistory`，使 `markInitialized` 写 `state.json` 落到数据目录迁移之后，把已删的旧目录重建出来（已实测）。手动全量扫描才是清理入口。
 6. `reconcile` **故意不调 `ensureDir`**：队列里还挂着对账时目录可能已被迁移删掉，`mkdir` 会把空目录造回来。缺目录 = 无文件可对账，`readdir` 报错即返回 0。

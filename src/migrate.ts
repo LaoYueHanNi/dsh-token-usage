@@ -23,13 +23,16 @@
 
 import { constants } from 'node:fs'
 import { access, copyFile, mkdir, readFile, readdir, rmdir, stat, unlink } from 'node:fs/promises'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { BACKUPS_DIR, isBackupSnapshotName } from './backup.ts'
 import { consoleLogger, type LoggerLike } from './log.ts'
 import { ASSOCIATIONS_FILE } from './pricing-associations.ts'
 
+const BACKUP_DAY_FILE = /^usage-\d{4}-\d{2}-\d{2}\.jsonl$/u
+
 /** Files that belong to this plugin; anything else in the directory stays. */
 const OWNED_PATTERNS = [
-  /^usage-\d{4}-\d{2}-\d{2}\.jsonl$/u,
+  BACKUP_DAY_FILE,
   /^state\.json$/u,
   /^pricing\.json$/u,
   /^pricing\.ccsa\.json$/u,
@@ -88,6 +91,28 @@ async function ownedFiles(dir: string): Promise<string[]> {
   return names.filter(isOwned)
 }
 
+/** List plugin-owned day files inside `.backups/<snapshot>/` as relative paths. */
+async function listBackupFiles(dir: string): Promise<string[]> {
+  const backupsRoot = join(dir, BACKUPS_DIR)
+  const entries = await readdir(backupsRoot, { withFileTypes: true }).catch(() => [])
+  const snapshots = entries
+    .filter(entry => entry.isDirectory() && isBackupSnapshotName(entry.name))
+    .map(entry => entry.name)
+    .sort()
+  const files: string[] = []
+  for (const snapshot of snapshots) {
+    const items = await readdir(join(backupsRoot, snapshot), { withFileTypes: true }).catch(() => [])
+    const dayFiles = items
+      .filter(item => item.isFile() && BACKUP_DAY_FILE.test(item.name))
+      .map(item => item.name)
+      .sort()
+    for (const file of dayFiles) {
+      files.push(join(BACKUPS_DIR, snapshot, file))
+    }
+  }
+  return files
+}
+
 /**
  * Phase one: copy every owned file into the target, verbatim. A target file
  * with the same name is NOT overwritten: existing normal files win, while
@@ -98,7 +123,7 @@ async function ownedFiles(dir: string): Promise<string[]> {
  * @param oldDir - the quiesced source directory.
  * @param newDir - the target directory (created when missing).
  * @param onProgress - per-file progress callback.
- * @returns names of the files that were copied.
+ * @returns names (or backup-relative paths) of the files that were copied.
  */
 export async function copyData(
   oldDir: string,
@@ -115,6 +140,8 @@ export async function copyData(
   // rebuilds from the copied day files.
   await unlink(join(newDir, ROLLUP_FILE)).catch(() => undefined)
   const names = await ownedFiles(oldDir)
+  const backupRelPaths = await listBackupFiles(oldDir)
+  const total = names.length + backupRelPaths.length
   const copied: string[] = []
   for (const name of names) {
     const destination = join(newDir, name)
@@ -126,12 +153,12 @@ export async function copyData(
         throw new Error('pricing-associations.json changed during migration')
       }
       copied.push(name)
-      onProgress?.({ done: copied.length, total: names.length, phase: 'copying' })
+      onProgress?.({ done: copied.length, total, phase: 'copying' })
       continue
     }
     if (await exists(destination)) {
       copied.push(name)
-      onProgress?.({ done: copied.length, total: names.length, phase: 'copying' })
+      onProgress?.({ done: copied.length, total, phase: 'copying' })
       continue
     }
     await copyFile(join(oldDir, name), destination)
@@ -142,7 +169,23 @@ export async function copyData(
       throw new Error(`size mismatch after copying ${name}: ${String(source.size)} -> ${String(target.size)}`)
     }
     copied.push(name)
-    onProgress?.({ done: copied.length, total: names.length, phase: 'copying' })
+    onProgress?.({ done: copied.length, total, phase: 'copying' })
+  }
+  for (const relPath of backupRelPaths) {
+    const destination = join(newDir, relPath)
+    if (await exists(destination)) {
+      copied.push(relPath)
+      onProgress?.({ done: copied.length, total, phase: 'copying' })
+      continue
+    }
+    await mkdir(dirname(destination), { recursive: true })
+    await copyFile(join(oldDir, relPath), destination)
+    const [source, target] = await Promise.all([stat(join(oldDir, relPath)), stat(destination)])
+    if (source.size !== target.size) {
+      throw new Error(`size mismatch after copying ${relPath}: ${String(source.size)} -> ${String(target.size)}`)
+    }
+    copied.push(relPath)
+    onProgress?.({ done: copied.length, total, phase: 'copying' })
   }
   return copied
 }
@@ -165,6 +208,7 @@ export async function cleanSource(
   logger: LoggerLike = consoleLogger,
 ): Promise<MigrationResult> {
   const names = await ownedFiles(oldDir)
+  const backupRelPaths = await listBackupFiles(oldDir)
   const removable: string[] = []
   for (const name of names) {
     if (name === ASSOCIATIONS_FILE) {
@@ -177,13 +221,28 @@ export async function cleanSource(
         === await stat(join(newDir, name)).then(s => s.size, () => -2)
     if (landed) removable.push(name)
   }
+  const removableBackups: string[] = []
+  for (const relPath of backupRelPaths) {
+    const landed = await access(join(newDir, relPath)).then(() => true, () => false)
+      && await stat(join(oldDir, relPath)).then(s => s.size, () => -1)
+        === await stat(join(newDir, relPath)).then(s => s.size, () => -2)
+    if (landed) removableBackups.push(relPath)
+  }
+  const totalRemovable = removable.length + removableBackups.length
   let cleaned = 0
   for (const name of removable) {
     await unlink(join(oldDir, name)).catch((error: unknown) => {
       logger.error(`[token-usage] cannot remove ${name}:`, error)
     })
     cleaned += 1
-    onProgress?.({ done: cleaned, total: removable.length, phase: 'cleaning' })
+    onProgress?.({ done: cleaned, total: totalRemovable, phase: 'cleaning' })
+  }
+  for (const relPath of removableBackups) {
+    await unlink(join(oldDir, relPath)).catch((error: unknown) => {
+      logger.error(`[token-usage] cannot remove ${relPath}:`, error)
+    })
+    cleaned += 1
+    onProgress?.({ done: cleaned, total: totalRemovable, phase: 'cleaning' })
   }
   // The source rollup is derived state with no target-side counterpart; it
   // leaves with the directory so an emptied source can actually go away.
@@ -198,9 +257,23 @@ export async function cleanSource(
     await unlink(join(oldDir, `${name}.tmp`)).catch(() => undefined)
   }
   await unlink(join(oldDir, `${ROLLUP_FILE}.tmp`)).catch(() => undefined)
+  // Clean emptied plugin backup snapshot folders and `.backups/`, keeping any
+  // unknown files or directories the user placed inside intact.
+  const backupsRoot = join(oldDir, BACKUPS_DIR)
+  const backupEntries = await readdir(backupsRoot, { withFileTypes: true }).catch(() => [])
+  for (const entry of backupEntries) {
+    if (!entry.isDirectory() || !isBackupSnapshotName(entry.name)) continue
+    const snapshotDir = join(backupsRoot, entry.name)
+    if ((await readdir(snapshotDir).catch(() => null))?.length === 0) {
+      await rmdir(snapshotDir).catch(() => undefined)
+    }
+  }
+  if ((await readdir(backupsRoot).catch(() => null))?.length === 0) {
+    await rmdir(backupsRoot).catch(() => undefined)
+  }
   // The directory itself goes only when nothing owned or unknown remains.
   if ((await readdir(oldDir).catch(() => null))?.length === 0) {
     await rmdir(oldDir).catch(() => undefined)
   }
-  return { copied: names.length, cleaned }
+  return { copied: names.length + backupRelPaths.length, cleaned }
 }

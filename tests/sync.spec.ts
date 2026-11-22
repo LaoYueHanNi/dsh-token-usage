@@ -1,11 +1,14 @@
-import { mkdtemp } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { SessionSeq, type SessionEvent, type SessionId } from '@deepseek-ai/dsh-session'
+import { BACKUPS_DIR, isBackupSnapshotName } from '../src/backup.ts'
 import { autoSyncIfNeeded, syncHistory, type SyncLog, type SyncPersistence } from '../src/sync.ts'
 import { isInitialized } from '../src/sync-state.ts'
-import { compactionEvent, messageEvent, retryEvent, turnEndEvent } from './helpers.ts'
+import { UsageLog } from '../src/usage-log.ts'
+import { serializeRecord, type UsageRecord } from '../src/usage-record.ts'
+import { compactionEvent, messageEvent, pruneEvent, retryEvent, turnEndEvent } from './helpers.ts'
 
 function fakePersistence(sessions: Array<{ id: string; events: SessionEvent[]; header?: { cwd?: string; origin?: 'subagent'; parentSession?: string } }>): SyncPersistence {
   return {
@@ -808,5 +811,352 @@ describe('syncHistory reconcile', () => {
     const second = await syncHistory({ persistence, log })
     expect(second).toEqual({ added: 0, skipped: 1, removed: 0, failedSessions: 0 })
     expect(log.rows.map(row => row.requestId)).toEqual(['m1'])
+  })
+})
+
+function endSeedEvent(seq: number, inherited?: true): SessionEvent<'session/end-seed'> {
+  return {
+    type: 'session/end-seed',
+    seq: SessionSeq(seq),
+    time: 1_700_000_000_000 + seq,
+    data: inherited ? { inherited: true } : {},
+  } as SessionEvent<'session/end-seed'>
+}
+
+function requestHeaderEvent(seq: number, model: string, provider: string): SessionEvent<'request/header'> {
+  return {
+    type: 'request/header',
+    seq: SessionSeq(seq),
+    time: 1_700_000_000_000 + seq,
+    data: {
+      reason: 'resume',
+      header: {
+        config: { provider, model },
+      },
+    },
+  } as unknown as SessionEvent<'request/header'>
+}
+
+describe('syncHistory fork handling', () => {
+  const tempDirs: string[] = []
+
+  afterEach(async () => {
+    await Promise.all(tempDirs.splice(0).map(dir => rm(dir, { recursive: true, force: true }).catch(() => undefined)))
+  })
+
+  it('skips parent segment read via handle.read(inheritedEventCount) when own title and route exist', async () => {
+    const log = new FakeLog()
+    const readCalls: Array<{ id: string; offset: number | undefined; length: number | undefined }> = []
+    const parentEvents: SessionEvent[] = [
+      titleEvent('Parent title', 0),
+      messageEvent({ messageId: 'p-msg-1', seq: 1, provider: 'deepseek', model: 'deepseek-chat' }),
+      compactionEvent({ seq: 2 }),
+      retryEvent({ seq: 3 }),
+    ]
+    const childEvents: SessionEvent[] = [
+      ...parentEvents,
+      endSeedEvent(4, true),
+      titleEvent('Fork title', 5),
+      requestHeaderEvent(6, 'deepseek-reasoner', 'deepseek-official'),
+      turnEndEvent({ seq: 7 }),
+      messageEvent({ messageId: 'c-msg-1', seq: 8, provider: 'deepseek-official', model: 'deepseek-reasoner' }),
+    ]
+    const persistence: SyncPersistence = {
+      async list() {
+        return [
+          { header: { id: 'fork-child' as SessionId } },
+          { header: { id: 'parent' as SessionId } },
+        ]
+      },
+      async open(id) {
+        const isChild = id === 'fork-child'
+        const all = isChild ? childEvents : parentEvents
+        return {
+          inheritedEventCount: isChild ? 4 : 0,
+          async read(offset = 0, length = all.length) {
+            readCalls.push({ id, offset, length })
+            return { events: all.slice(offset, offset + length) }
+          },
+          async close() {},
+        }
+      },
+    }
+    const upserts: Array<{ id: string; patch: Record<string, unknown> }> = []
+    const result = await syncHistory({
+      persistence,
+      log,
+      meta: { async upsert(id, patch) { upserts.push({ id, patch: { ...patch } }) } },
+    })
+
+    // SQLite-style slice: fork-child reads only from offset 4 and never falls back to reading 0..4.
+    expect(readCalls).toEqual([
+      { id: 'fork-child', offset: 4, length: childEvents.length },
+      { id: 'parent', offset: 0, length: parentEvents.length },
+    ])
+    expect(result).toEqual({ added: 5, skipped: 0, removed: 0, failedSessions: 0 })
+
+    const byId = new Map(log.rows.map(row => [row.requestId, row]))
+    expect(byId.get('p-msg-1')?.sessionId).toBe('parent')
+    expect(byId.get('compaction:parent:2')?.sessionId).toBe('parent')
+    expect(byId.get('failure:parent:3')?.sessionId).toBe('parent')
+    expect(byId.has('compaction:fork-child:2')).toBe(false)
+    expect(byId.has('failure:fork-child:3')).toBe(false)
+    expect(byId.get('failure:fork-child:7')).toMatchObject({
+      sessionId: 'fork-child',
+      model: 'deepseek-reasoner',
+      provider: 'deepseek-official',
+    })
+    expect(byId.get('c-msg-1')?.sessionId).toBe('fork-child')
+    expect(upserts).toEqual([
+      { id: 'fork-child', patch: { title: 'Fork title' } },
+      { id: 'parent', patch: { title: 'Parent title' } },
+    ])
+  })
+
+  it('reads prefix on demand to fold inherited title and route without persisting prefix rows or windows', async () => {
+    const log = new FakeLog()
+    const readCalls: Array<{ id: string; offset: number | undefined; length: number | undefined }> = []
+    const parentEvents: SessionEvent[] = [
+      titleEvent('Inherited title', 0),
+      { type: 'step/start', seq: 1, time: 1_000, data: { turn: 1, step: 1 } } as SessionEvent,
+      messageEvent({ messageId: 'p-msg-1', seq: 2, provider: 'kimi', model: 'kimi-k2' }),
+      pruneEvent({ seq: 3, tokens: 500 }),
+      compactionEvent({ seq: 4 }),
+    ]
+    const childEvents: SessionEvent[] = [
+      ...parentEvents,
+      endSeedEvent(5, true),
+      // Own failure arrives BEFORE any own request/context or request/header.
+      turnEndEvent({ seq: 6 }),
+      // Own message must not inherit parent's openStep or compactionAttribution window.
+      messageEvent({ messageId: 'c-msg-1', seq: 7, time: 5_000, provider: 'kimi', model: 'kimi-k2' }),
+    ]
+    const persistence: SyncPersistence = {
+      async list() {
+        return [{ header: { id: 'fork-child' as SessionId } }]
+      },
+      async open() {
+        return {
+          inheritedEventCount: 5,
+          async read(offset = 0, length = childEvents.length) {
+            readCalls.push({ id: 'fork-child', offset, length })
+            return { events: childEvents.slice(offset, offset + length) }
+          },
+          async close() {},
+        }
+      },
+    }
+    const upserts: Array<{ id: string; patch: Record<string, unknown> }> = []
+    const result = await syncHistory({
+      persistence,
+      log,
+      meta: { async upsert(id, patch) { upserts.push({ id, patch: { ...patch } }) } },
+    })
+
+    expect(readCalls).toEqual([
+      { id: 'fork-child', offset: 5, length: childEvents.length },
+      { id: 'fork-child', offset: 0, length: 5 },
+    ])
+    expect(result).toEqual({ added: 2, skipped: 0, removed: 0, failedSessions: 0 })
+    expect(log.rows).toHaveLength(2)
+    expect(log.rows[0]).toMatchObject({
+      requestId: 'failure:fork-child:6',
+      sessionId: 'fork-child',
+      model: 'kimi-k2',
+      provider: 'kimi',
+    })
+    expect(log.rows[1]).toMatchObject({
+      requestId: 'c-msg-1',
+      sessionId: 'fork-child',
+    })
+    expect((log.rows[1] as unknown as UsageRecord).latencyMs).toBeUndefined()
+    expect((log.rows[1] as unknown as UsageRecord).compactionAttribution).toBeUndefined()
+    expect(upserts).toEqual([{ id: 'fork-child', patch: { title: 'Inherited title' } }])
+  })
+
+  it('handles JSONL-style handles ignoring offset and falling back to last inherited session/end-seed', async () => {
+    const log = new FakeLog()
+    const rootEvents: SessionEvent[] = [
+      titleEvent('Root A', 0),
+      messageEvent({ messageId: 'a-msg', seq: 1 }),
+      compactionEvent({ seq: 2 }),
+    ]
+    const midEvents: SessionEvent[] = [
+      ...rootEvents,
+      endSeedEvent(3, true),
+      retryEvent({ seq: 4 }),
+      // Ordinary resume marker (no inherited: true) must NOT truncate own history.
+      endSeedEvent(5),
+      messageEvent({ messageId: 'b-msg', seq: 6 }),
+    ]
+    const leafEvents: SessionEvent[] = [
+      ...midEvents,
+      endSeedEvent(7, true),
+      messageEvent({ messageId: 'c-msg', seq: 8 }),
+    ]
+    const persistence: SyncPersistence = {
+      async list() {
+        return [
+          { header: { id: 'leaf-c' as SessionId } },
+          { header: { id: 'mid-b' as SessionId } },
+          { header: { id: 'root-a' as SessionId } },
+        ]
+      },
+      async open(id) {
+        if (id === 'leaf-c') {
+          return {
+            // Older host: no inheritedEventCount exposed; fallback must locate LAST inherited seed marker (seq 7).
+            read: () => Promise.resolve({ events: leafEvents }),
+            close: () => Promise.resolve(),
+          }
+        }
+        if (id === 'mid-b') {
+          return {
+            // JSONL-style handle with inheritedEventCount that ignores offset and returns from seq 0.
+            inheritedEventCount: 3,
+            read: () => Promise.resolve({ events: midEvents }),
+            close: () => Promise.resolve(),
+          }
+        }
+        return {
+          read: () => Promise.resolve({ events: rootEvents }),
+          close: () => Promise.resolve(),
+        }
+      },
+    }
+
+    const result = await syncHistory({ persistence, log })
+    expect(result).toEqual({ added: 5, skipped: 0, removed: 0, failedSessions: 0 })
+    const owners = new Map(log.rows.map(row => [row.requestId, row.sessionId]))
+    expect(owners.get('a-msg')).toBe('root-a')
+    expect(owners.get('compaction:root-a:2')).toBe('root-a')
+    expect(owners.get('failure:mid-b:4')).toBe('mid-b')
+    expect(owners.get('b-msg')).toBe('mid-b')
+    expect(owners.get('c-msg')).toBe('leaf-c')
+    expect(owners.has('compaction:mid-b:2')).toBe(false)
+    expect(owners.has('compaction:leaf-c:2')).toBe(false)
+    expect(owners.has('failure:leaf-c:4')).toBe(false)
+  })
+
+  it('repairs damaged pre-fix ledger on full sync: drops fork duplicates and reassigns misattributed parent messages', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'token-usage-fork-repair-'))
+    tempDirs.push(dir)
+    const dayTime = new Date(2026, 0, 15, 12).getTime()
+
+    const preExisting: UsageRecord[] = [
+      // Previously misattributed to fork-child because sync walked child before parent.
+      {
+        requestId: 'p-msg-1',
+        time: dayTime,
+        sessionId: 'fork-child',
+        model: 'deepseek-chat',
+        usage: { inputTokens: 100, outputTokens: 20 },
+        attemptTiming: { startedAt: dayTime - 400, settledAt: dayTime, firstTokenAt: dayTime - 300 },
+      },
+      // Duplicate compaction & failure billed under fork-child from inherited prefix.
+      {
+        requestId: 'compaction:fork-child:2',
+        time: dayTime + 10,
+        sessionId: 'fork-child',
+        model: 'deepseek-chat',
+        kind: 'compaction',
+        usage: { inputTokens: 50_000, outputTokens: 200 },
+      },
+      {
+        requestId: 'failure:fork-child:3',
+        time: dayTime + 20,
+        sessionId: 'fork-child',
+        model: 'deepseek-chat',
+        kind: 'failure',
+        failureCode: 'RATE_LIMIT',
+      },
+      // Valid parent compaction/failure already present.
+      {
+        requestId: 'compaction:parent:2',
+        time: dayTime + 10,
+        sessionId: 'parent',
+        model: 'deepseek-chat',
+        kind: 'compaction',
+        usage: { inputTokens: 50_000, outputTokens: 200 },
+      },
+      {
+        requestId: 'failure:parent:3',
+        time: dayTime + 20,
+        sessionId: 'parent',
+        model: 'deepseek-chat',
+        kind: 'failure',
+        failureCode: 'RATE_LIMIT',
+      },
+      // Child's own message.
+      {
+        requestId: 'c-msg-1',
+        time: dayTime + 30,
+        sessionId: 'fork-child',
+        model: 'deepseek-chat',
+        usage: { inputTokens: 10, outputTokens: 5 },
+      },
+    ]
+    await writeFile(
+      join(dir, 'usage-2026-01-15.jsonl'),
+      preExisting.map(serializeRecord).join('\n') + '\n',
+      'utf8',
+    )
+
+    const parentEvents: SessionEvent[] = [
+      messageEvent({ messageId: 'p-msg-1', seq: 1, time: dayTime }),
+      compactionEvent({ seq: 2, time: dayTime + 10 }),
+      retryEvent({ seq: 3, time: dayTime + 20 }),
+    ]
+    const childEvents: SessionEvent[] = [
+      ...parentEvents,
+      endSeedEvent(4, true),
+      messageEvent({ messageId: 'c-msg-1', seq: 5, time: dayTime + 30 }),
+    ]
+    const persistence: SyncPersistence = {
+      async list() {
+        return [
+          { header: { id: 'fork-child' as SessionId } },
+          { header: { id: 'parent' as SessionId } },
+        ]
+      },
+      async open(id) {
+        const isChild = id === 'fork-child'
+        const all = isChild ? childEvents : parentEvents
+        return {
+          inheritedEventCount: isChild ? 3 : 0,
+          read: (offset = 0, length = all.length) => Promise.resolve({ events: all.slice(offset, offset + length) }),
+          close: () => Promise.resolve(),
+        }
+      },
+    }
+
+    const log = new UsageLog(dir)
+    const result = await syncHistory({ persistence, log })
+    expect(result).toEqual({ added: 0, skipped: 4, removed: 2, failedSessions: 0, reassigned: 1 })
+
+    const dayFile = (await readFile(join(dir, 'usage-2026-01-15.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map(line => JSON.parse(line) as UsageRecord)
+    expect(dayFile.map(row => [row.requestId, row.sessionId])).toEqual([
+      ['p-msg-1', 'parent'],
+      ['compaction:parent:2', 'parent'],
+      ['failure:parent:3', 'parent'],
+      ['c-msg-1', 'fork-child'],
+    ])
+    expect(dayFile[0]!.attemptTiming).toEqual({
+      startedAt: dayTime - 400,
+      settledAt: dayTime,
+      firstTokenAt: dayTime - 300,
+    })
+
+    // A backup snapshot was created before reconciling the day file.
+    const snapshots = (await readdir(join(dir, BACKUPS_DIR))).filter(isBackupSnapshotName)
+    expect(snapshots).toHaveLength(1)
+    expect(snapshots[0]!.endsWith('-reconcile')).toBe(true)
+
+    // Subsequent sync is completely clean.
+    const repeat = await syncHistory({ persistence, log })
+    expect(repeat).toEqual({ added: 0, skipped: 4, removed: 0, failedSessions: 0 })
   })
 })

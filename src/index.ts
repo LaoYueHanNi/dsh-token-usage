@@ -54,7 +54,7 @@ import { RequestObserver } from './request-observe.ts'
 import { CompactionAttributionWindow } from './compaction-attribution.ts'
 import { classifyAuxRequest, recordFromAuxRequest } from './aux-request.ts'
 import { markFieldCompletionOutcome, markTimingSynced, pendingCompleterIds, readSyncState } from './sync-state.ts'
-import { autoSyncIfNeeded, syncHistory, titleOfEvent } from './sync.ts'
+import { autoSyncIfNeeded, isOwnSessionEvent, syncHistory, titleOfEvent } from './sync.ts'
 import { clearRecordCache, warmRecordCache } from './record-cache.ts'
 import { invalidateSummary } from './stats.ts'
 import { createDirectoryGuardRoute, createFullSyncRoute, createMigrationRoute, createPricingRoute, createPricingSyncRoute, createStatsRoute, type FullSyncTrigger } from './stats-route.ts'
@@ -625,11 +625,13 @@ export function apply(ctx: Context, config: Config = {}) {
         // learned to record (or rows a crash dropped): drop the derived
         // stats state so the next read aggregates over the appended rows.
         const moved = await target.log.refileByEventDay()
-        if (result.added > 0 || result.removed > 0 || moved > 0) invalidateDerivedState(target.dir)
+        const reassigned = result.reassigned ?? 0
+        if (result.added > 0 || result.removed > 0 || reassigned > 0 || moved > 0) invalidateDerivedState(target.dir)
         if (moved > 0) {
           logger.info(`[token-usage] refiled ${String(moved)} rows onto event-day files`)
         }
-        logger.info(`[token-usage] full sync done: ${String(result.added)} added, ${String(result.skipped)} skipped, ${String(result.removed)} removed, ${String(result.failedSessions)} failed sessions`)
+        const reassignedNote = reassigned > 0 ? `, ${String(reassigned)} reassigned` : ''
+        logger.info(`[token-usage] full sync done: ${String(result.added)} added, ${String(result.skipped)} skipped, ${String(result.removed)} removed${reassignedNote}, ${String(result.failedSessions)} failed sessions`)
       })
       .catch((error: unknown) => {
         const message = error instanceof Error ? error.message : String(error)
@@ -648,6 +650,7 @@ export function apply(ctx: Context, config: Config = {}) {
   // so tracking works before (and regardless of) the data directory start.
   const quotaTracker = new ProviderTracker()
   ctx.on('session/event', (session: Session, event: SessionEvent) => {
+    if (!isOwnSessionEvent(session, event)) return
     // request/context fires at dispatch — the provider is known before the
     // first token; assistant/message re-confirms it from the provenance.
     if (event.type === 'request/context') {
@@ -973,7 +976,31 @@ export function apply(ctx: Context, config: Config = {}) {
     // Header facts are immutable, so one upsert per session is enough even
     // though events keep arriving; the index store dedupes the write anyway.
     const headerSeen = new Set<string>()
+    const fallbackRouteOfSession = (session: unknown): { model?: string; provider?: string } => {
+      if (typeof session !== 'object' || session === null) return {}
+      const candidate = session as {
+        requestContext?: () => { provider?: unknown; model?: unknown } | undefined
+        requestHeader?: () => { config?: { provider?: unknown; model?: unknown } } | undefined
+      }
+      const context = typeof candidate.requestContext === 'function' ? candidate.requestContext() : undefined
+      const headerConfig = typeof candidate.requestHeader === 'function' ? candidate.requestHeader()?.config : undefined
+      const model = typeof context?.model === 'string' && context.model !== ''
+        ? context.model
+        : typeof headerConfig?.model === 'string' && headerConfig.model !== ''
+          ? headerConfig.model
+          : undefined
+      const provider = typeof context?.provider === 'string' && context.provider !== ''
+        ? context.provider
+        : typeof headerConfig?.provider === 'string' && headerConfig.provider !== ''
+          ? headerConfig.provider
+          : undefined
+      return {
+        ...(model !== undefined ? { model } : {}),
+        ...(provider !== undefined ? { provider } : {}),
+      }
+    }
     ctx.on('session/event', (session: Session, event: SessionEvent) => {
+      const ownEvent = isOwnSessionEvent(session, event)
       // Session-table identity capture, alongside the usage rows: the
       // latest-wins title fold (a rename, an auto-generated title, and a
       // fallback all append the same `session/title` event — who is last
@@ -996,6 +1023,13 @@ export function apply(ctx: Context, config: Config = {}) {
         }
         if (Object.keys(patch).length > 0) void meta.upsert(session.id, patch).catch(error => logger.warn('[token-usage] session header upsert failed:', error))
       }
+      const revealed = modelOfEvent(event)
+      if (revealed !== undefined) lastModel.set(session.id, revealed)
+      const revealedProvider = providerOfEvent(event)
+      if (revealedProvider !== undefined) lastProvider.set(session.id, revealedProvider)
+      // Inherited prefix events never persist rows, never move active step
+      // timings, and never feed compaction attribution into the child.
+      if (!ownEvent) return
       if (event.type === 'step/start') {
         activeSteps.set(session.id, {
           turn: event.data.turn,
@@ -1026,15 +1060,25 @@ export function apply(ctx: Context, config: Config = {}) {
       } else if (event.type === 'step/end' || event.type === 'turn/end') {
         activeSteps.delete(session.id)
       }
-      const revealed = modelOfEvent(event)
-      if (revealed !== undefined) lastModel.set(session.id, revealed)
-      const revealedProvider = providerOfEvent(event)
-      if (revealedProvider !== undefined) lastProvider.set(session.id, revealedProvider)
       const attributionWindow = attributionWindowOf(session.id)
       attributionWindow.observe(event)
+      let resolvedModel = lastModel.get(session.id)
+      let resolvedProvider = lastProvider.get(session.id)
+      if (resolvedModel === undefined || resolvedModel === ''
+        || resolvedProvider === undefined || resolvedProvider === '') {
+        const fallback = fallbackRouteOfSession(session)
+        if ((resolvedModel === undefined || resolvedModel === '') && fallback.model !== undefined) {
+          resolvedModel = fallback.model
+          lastModel.set(session.id, resolvedModel)
+        }
+        if ((resolvedProvider === undefined || resolvedProvider === '') && fallback.provider !== undefined) {
+          resolvedProvider = fallback.provider
+          lastProvider.set(session.id, resolvedProvider)
+        }
+      }
       const record = recordOfEvent(
-        event, session.id, lastModel.get(session.id) ?? '', recordCompaction, timing,
-        lastProvider.get(session.id) ?? '',
+        event, session.id, resolvedModel ?? '', recordCompaction, timing,
+        resolvedProvider ?? '',
       )
       if (record === null) return
       // The attribution lands only on plain-request rows: the compaction

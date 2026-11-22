@@ -93,6 +93,10 @@ describe('subagentParentOf', () => {
     expect(subagentParentOf(mirror(), 'root')).toBeUndefined()
   })
 
+  it('returns undefined for an ordinary fork even when parentId is populated', () => {
+    expect(subagentParentOf(mirror(), 'fork')).toBeUndefined()
+  })
+
   it('returns undefined when the record points at itself', () => {
     // A corrupted or test fixture that sets parentId == id would loop; the
     // check refuses to answer rather than produce a 1-node cycle.

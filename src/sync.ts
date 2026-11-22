@@ -43,6 +43,10 @@ export interface SyncResult {
    * absent from this run; every such session is reported through
    * {@link SyncDeps.onSessionFailure} and counted here. */
   failedSessions: number
+  /** Rows whose `sessionId` was corrected in place during reconcile (for
+   * example, a parent `assistant/message` previously misattributed to a fork
+   * child). Omitted when zero. */
+  reassigned?: number
 }
 
 /**
@@ -98,6 +102,9 @@ export type SyncSessionEntry = { readonly header: { readonly id: SessionId } }
 export interface SyncSessionHandle {
   /** The immutable stored header, fixed when the handle was opened. */
   readonly header?: SessionHeaderFacts | undefined
+  /** Exact fork-inherited prefix length when supplied by the host persistence
+   * handle (0 for unseeded sessions; undefined on older hosts). */
+  readonly inheritedEventCount?: number | undefined
   /** The log slice; with no arguments, the whole log from seq 0. */
   read(offset?: number, length?: number, options?: { signal?: AbortSignal }): Promise<{ events: readonly SessionEvent[] }>
   /** Release the handle — idempotent. On a read handle this frees local
@@ -204,6 +211,141 @@ export function titleOfEvent(event: SessionEvent): string | undefined {
 }
 
 /**
+ * Whether an event is the fork-boundary marker inserted after a child's
+ * inherited prefix (`session/end-seed { inherited: true }`). Ordinary resume
+ * markers (`{}`) carry no `inherited: true` flag and return false.
+ */
+export function isInheritedSeedMarker(event: SessionEvent): boolean {
+  if ((event as { type: string }).type !== 'session/end-seed') return false
+  return (event as { data?: { inherited?: unknown } }).data?.inherited === true
+}
+
+/**
+ * Locate the last `session/end-seed { inherited: true }` marker in a full event
+ * log, or `-1` when none exists. Scanning from the tail handles nested forks
+ * (`A -> B -> C`), whose copied prefix may retain an ancestor's earlier marker.
+ */
+export function findLastInheritedSeedIndex(events: readonly SessionEvent[]): number {
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const event = events[i]
+    if (event !== undefined && isInheritedSeedMarker(event)) return i
+  }
+  return -1
+}
+
+/**
+ * Whether a live `session/event` delivery belongs to `session` rather than
+ * its fork-inherited prefix. Prefers `session.isOwnSeq(event.seq)`, falls back
+ * to comparing `event.seq` against `session.inheritedEventCount`, and defaults
+ * to true for older hosts or minimal test doubles without fork metadata.
+ */
+export function isOwnSessionEvent(session: unknown, event: SessionEvent): boolean {
+  if (typeof session !== 'object' || session === null) return true
+  const candidate = session as { isOwnSeq?: unknown; inheritedEventCount?: unknown }
+  if (typeof candidate.isOwnSeq === 'function') {
+    return Boolean((candidate.isOwnSeq as (seq: SessionEvent['seq']) => unknown)(event.seq))
+  }
+  if (typeof candidate.inheritedEventCount === 'number'
+    && Number.isSafeInteger(candidate.inheritedEventCount)
+    && candidate.inheritedEventCount >= 0) {
+    return event.seq >= candidate.inheritedEventCount
+  }
+  return true
+}
+
+/**
+ * Whether `ownEvents` contains an own failure event before its own route
+ * events establish `model` and `provider`, requiring prefix folding.
+ */
+function needsPrefixRouteForOwnEvents(ownEvents: readonly SessionEvent[]): boolean {
+  let hasModel = false
+  let hasProvider = false
+  for (const event of ownEvents) {
+    if (modelOfEvent(event) !== undefined) hasModel = true
+    if (providerOfEvent(event) !== undefined) hasProvider = true
+    if (hasModel && hasProvider) return false
+    if (event.type === 'llm/retry' && !hasModel) return true
+    if (event.type === 'turn/end' && event.data.reason.kind === 'error' && (!hasModel || !hasProvider)) {
+      return true
+    }
+  }
+  return false
+}
+
+/**
+ * Read one session's events for history sync, splitting the fork-inherited
+ * prefix (folded only for title/route state) from the session's own events.
+ * Uses `handle.inheritedEventCount` slice reads when exposed so SQLite can skip
+ * decompressing parent segments unless a missing own title or early own failure
+ * needs the prefix; falls back to the last `session/end-seed { inherited: true }`
+ * marker on older hosts.
+ */
+async function readSessionForSync(
+  persistence: SyncPersistence,
+  id: SessionId,
+  options: { needMeta: boolean; signal?: AbortSignal },
+): Promise<{
+  prefixEvents: readonly SessionEvent[]
+  ownEvents: readonly SessionEvent[]
+  meta?: SessionHeaderFacts | undefined
+}> {
+  const { signal } = options
+  const handle = await persistence.open(id, 'read', signal === undefined ? {} : { signal })
+  try {
+    const readOpts = signal === undefined ? undefined : { signal }
+    const rawInherited = handle.inheritedEventCount
+    const inheritedCount = typeof rawInherited === 'number'
+      && Number.isSafeInteger(rawInherited)
+      && rawInherited >= 0
+      ? rawInherited
+      : undefined
+    if (inheritedCount !== undefined && inheritedCount > 0) {
+      const slice = readOpts === undefined
+        ? await handle.read(inheritedCount)
+        : await handle.read(inheritedCount, undefined, readOpts)
+      if (slice.events.length > 0 && slice.events[0]!.seq < inheritedCount) {
+        // Defensive fallback for handles that ignore `offset` and return from seq 0.
+        const prefixEvents: SessionEvent[] = []
+        const ownEvents: SessionEvent[] = []
+        for (const event of slice.events) {
+          if (event.seq < inheritedCount) prefixEvents.push(event)
+          else ownEvents.push(event)
+        }
+        return { prefixEvents, ownEvents, meta: handle.header }
+      }
+      const ownEvents = slice.events
+      const needsTitle = options.needMeta && !ownEvents.some(event => titleOfEvent(event) !== undefined)
+      const needsRoute = needsPrefixRouteForOwnEvents(ownEvents)
+      let prefixEvents: readonly SessionEvent[] = []
+      if (needsTitle || needsRoute) {
+        const prefixSlice = readOpts === undefined
+          ? await handle.read(0, inheritedCount)
+          : await handle.read(0, inheritedCount, readOpts)
+        prefixEvents = prefixSlice.events.filter(event => event.seq < inheritedCount)
+      }
+      return { prefixEvents, ownEvents, meta: handle.header }
+    }
+    const { events } = readOpts === undefined
+      ? await handle.read()
+      : await handle.read(undefined, undefined, readOpts)
+    if (inheritedCount === 0) {
+      return { prefixEvents: [], ownEvents: events, meta: handle.header }
+    }
+    const cutIndex = findLastInheritedSeedIndex(events)
+    if (cutIndex >= 0) {
+      return {
+        prefixEvents: events.slice(0, cutIndex),
+        ownEvents: events.slice(cutIndex),
+        meta: handle.header,
+      }
+    }
+    return { prefixEvents: [], ownEvents: events, meta: handle.header }
+  } finally {
+    await handle.close().catch(() => {})
+  }
+}
+
+/**
  * Append every missing request row. The log's dedupe set is rebuilt from the
  * data files first, so a second run is a no-op and rows recorded live in a
  * previous process are not duplicated.
@@ -228,11 +370,15 @@ export async function syncHistory(
   let added = 0
   let skipped = 0
   let removed = 0
+  let reassigned = 0
   let failedSessions = 0
   const total = sessions.length
   let processed = 0
   /** Every id this walk reproduces; the reconcile pass keeps exactly these. */
   const reproduced = new Set<string>()
+  /** Reproducing sessions observed per request id; unique owners feed
+   * in-place reassignment of previously misattributed rows. */
+  const reproducedOwners = new Map<string, Set<string>>()
   /** Sessions this walk read in full. Only their rows may be reconciled: a
    * row whose session is missing from the list (deleted, or hidden behind a
    * header this build cannot read) is never dropped for its absence. */
@@ -243,9 +389,16 @@ export async function syncHistory(
     // One unreadable session log (a format the current dsh build rejects,
     // a torn file, …) must not abort the whole walk: skip the session,
     // report it, and let the rest of the history land.
-    let inspection: { events: readonly SessionEvent[]; meta?: SessionHeaderFacts | undefined }
+    let inspection: {
+      prefixEvents: readonly SessionEvent[]
+      ownEvents: readonly SessionEvent[]
+      meta?: SessionHeaderFacts | undefined
+    }
     try {
-      inspection = await reader.read(id, signal)
+      inspection = await readSessionForSync(deps.persistence, id, {
+        needMeta: deps.meta !== undefined,
+        ...(signal !== undefined ? { signal } : {}),
+      })
     } catch (error) {
       // A cancellation is the caller's (or the host read path's) abort —
       // always fatal to the run, never a session to skip.
@@ -260,21 +413,34 @@ export async function syncHistory(
     // the ledger must hold, so its stale coordinates become droppable.
     readable.add(id)
     // Last-known route of this session: a turn/end error names neither a
-    // model nor a provider, so the walk follows the same request/context +
-    // assistant/message events the live recorder does. Compaction and
-    // llm/retry carry their own route on the event and do not move this.
+    // model nor a provider, so the walk follows the same request/header +
+    // request/context + assistant/message events the live recorder does.
+    // Compaction and llm/retry carry their own route on the event and do not
+    // move this.
     let model = ''
     let provider = ''
     // Latest-wins title: title events append in seq order, so the LAST one
     // seen is the current title — a rename, an auto-generated title, and a
     // fallback all land as the same append, one fold covers every source.
     let title: string | undefined
+    // Fold state-only context (route and title) across the fork-inherited
+    // prefix without persisting rows, reproducing ids, or carrying open steps
+    // and compaction windows across the fork boundary.
+    for (const event of inspection.prefixEvents) {
+      signal?.throwIfAborted()
+      const revealed = modelOfEvent(event)
+      if (revealed !== undefined) model = revealed
+      const revealedProvider = providerOfEvent(event)
+      if (revealedProvider !== undefined) provider = revealedProvider
+      const revealedTitle = titleOfEvent(event)
+      if (revealedTitle !== undefined) title = revealedTitle
+    }
     let openStep: { turn: number; step: number; startTime: number } | null = null
     // The compaction attribution window of this session — the SAME
     // implementation the live recorder drives, so a rescan attributes rows
     // exactly like a live observation would.
     const attributionWindow = new CompactionAttributionWindow()
-    for (const event of inspection.events) {
+    for (const event of inspection.ownEvents) {
       signal?.throwIfAborted()
       if (event.type === 'step/start') {
         openStep = {
@@ -325,6 +491,12 @@ export async function syncHistory(
       // Keep the id whether the row was already saved or lands now: the
       // reconcile pass keeps exactly the ids this walk produced.
       reproduced.add(record.requestId)
+      let owners = reproducedOwners.get(record.requestId)
+      if (owners === undefined) {
+        owners = new Set()
+        reproducedOwners.set(record.requestId, owners)
+      }
+      owners.add(id)
       if (await deps.log.record(record)) added += 1
       else skipped += 1
     }
@@ -336,7 +508,7 @@ export async function syncHistory(
       const patch = {
         ...(title !== undefined ? { title } : {}),
         ...(header?.cwd !== undefined && header.cwd !== '' ? { cwd: header.cwd } : {}),
-        ...(header?.origin !== undefined ? { origin: header.origin } : {}),
+        ...(header?.origin === 'subagent' ? { origin: header.origin } : {}),
         ...(header?.parentSession !== undefined && header.parentSession !== '' ? { parentSession: header.parentSession } : {}),
       }
       if (Object.keys(patch).length > 0) await deps.meta.upsert(id, patch)
@@ -348,9 +520,28 @@ export async function syncHistory(
   // saved row no readable session reproduces is a relic of an older stored
   // format. A session that merely failed to load protects its own rows.
   if (deps.reconcile !== false) {
-    removed = await deps.log.reconcile(reproduced, readable, eligible)
+    const expectedOwners = new Map<string, string>()
+    for (const [requestId, owners] of reproducedOwners) {
+      if (owners.size === 1) {
+        const [owner] = owners
+        if (owner !== undefined) expectedOwners.set(requestId, owner)
+      }
+    }
+    removed = await deps.log.reconcile(
+      reproduced,
+      readable,
+      eligible,
+      expectedOwners,
+      (count) => { reassigned = count },
+    )
   }
-  return { added, skipped, removed, failedSessions }
+  return {
+    added,
+    skipped,
+    removed,
+    failedSessions,
+    ...(reassigned > 0 ? { reassigned } : {}),
+  }
 }
 
 /**

@@ -56,6 +56,7 @@ import type {} from '@deepseek-ai/dsh-compaction/types'
 import type { AuxKind } from './usage-record.ts'
 import { isTokenDelta, type UsageFields, type UsageRecord } from './usage-record.ts'
 import { AUTO_REVIEW_PROMPT_PREFIX } from './aux-request.ts'
+import { isOwnSessionEvent } from './sync.ts'
 import type { ConversationStatus, RequestDetailState } from './wire.ts'
 
 /** One live attempt observed at the waterfall: the runtime-state shape the
@@ -173,7 +174,7 @@ export class RequestObserver {
    * itself could not (message ids, turn-end failure codes). */
   attachSessions(ctx: Context): void {
     const off = ctx.on('session/event', (session: Session, event: SessionEvent) => {
-      if (this.disposed) return
+      if (this.disposed || !isOwnSessionEvent(session, event)) return
       this.observeEvent(session.id, event)
     })
     this.disposers.push(off)

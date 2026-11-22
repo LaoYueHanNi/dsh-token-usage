@@ -93,17 +93,19 @@ export function subtreeIds(
 }
 
 /**
- * The immediate subagent parent of one session, when the record names one.
- * The check is on `parentId` rather than `origin` so a mirrored summary that
- * lost its origin tag still answers its lineage — the index is built once
- * per render and shared across all three helpers via {@link ChildIndex}.
+ * The immediate subagent parent of one session, when the record is tagged
+ * `origin === 'subagent'` and names a parent. Ordinary forks — including
+ * historical forks that retained `parentId` without `origin: 'subagent'` —
+ * answer `undefined`, matching {@link buildChildIndex}.
  * @param rows - the retained session-summary mirror.
  * @param id - the current focus session id.
- * @returns the parent session id, or undefined when the record has no
- * parent link (a top-level session or an ordinary fork).
+ * @returns the parent session id, or undefined when the record is not a
+ * subagent child.
  */
 export function subagentParentOf(rows: SessionRows, id: string): string | undefined {
-  const parent = rows[id]?.parentId
+  const row = rows[id]
+  if (row?.origin !== 'subagent') return undefined
+  const parent = row.parentId
   return parent === undefined || parent === id ? undefined : parent
 }
 

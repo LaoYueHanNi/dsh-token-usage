@@ -13,8 +13,10 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Context, Service } from '@deepseek-ai/cordis'
 import * as plugin from '../src/index.ts'
-import { messageEvent } from './helpers.ts'
-import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import { syncHistory } from '../src/sync.ts'
+import { UsageLog } from '../src/usage-log.ts'
+import { messageEvent, retryEvent } from './helpers.ts'
+import type { SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
 
 /** Minimal host service stubs: the plugin only needs their presence. */
 class MockSessions extends Service {
@@ -244,5 +246,49 @@ describe('auxiliary request recording', () => {
     await streamWaterfall(ctx!, AUTO_REVIEW_REQUEST, SUCCESS_CHUNKS)
     await new Promise(resolve => setTimeout(resolve, 150))
     expect(await readAllRows(dir)).toHaveLength(0)
+  })
+
+  it('preserves session-attributed aux rows across full syncHistory with reconcile', async () => {
+    const dir = await mount()
+    // 1. Live bypass calls carrying a real owning sessionId land via llm/stream.
+    await streamWaterfall(ctx!, {
+      ...AUTO_REVIEW_REQUEST,
+      sessionId: 'session-1',
+      purpose: 'session-title',
+    }, SUCCESS_CHUNKS)
+    await streamWaterfall(ctx!, {
+      ...AUTO_REVIEW_REQUEST,
+      sessionId: 'session-1',
+    }, SUCCESS_CHUNKS)
+    await pollRows(dir, 2)
+
+    // 2. Also emit a stale failure row that does not exist in session-1's log,
+    //    so reconcile genuinely rewrites the same day file on full sync.
+    ctx!.emit('session/event', { id: 'session-1' }, retryEvent({ seq: 99 }))
+    await pollRows(dir, 3)
+
+    // Unmount so the live plugin queue flushes before running syncHistory on disk.
+    ctx!.registry.delete(plugin)
+    ctx = undefined
+
+    const persistence = {
+      async list() { return [{ header: { id: 'session-1' as SessionId } }] },
+      async open() {
+        return {
+          read: () => Promise.resolve({ events: [messageEvent({ messageId: 'm1', seq: 1 })] }),
+          close: () => Promise.resolve(),
+        }
+      },
+    }
+    const log = new UsageLog(dir)
+    const result = await syncHistory({ persistence, log })
+    expect(result).toEqual({ added: 1, skipped: 0, removed: 1, failedSessions: 0 })
+
+    const rowsAfter = await readAllRows(dir)
+    const ids = rowsAfter.map(row => row.requestId)
+    expect(ids).toContain('m1')
+    expect(ids.filter(id => String(id).startsWith('aux:session-title:'))).toHaveLength(1)
+    expect(ids.filter(id => String(id).startsWith('aux:auto-review:'))).toHaveLength(1)
+    expect(ids).not.toContain('failure:session-1:99')
   })
 })

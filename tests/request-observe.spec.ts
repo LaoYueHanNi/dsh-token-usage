@@ -499,5 +499,17 @@ describe('live request observer', () => {
       expect(observer.snapshot(['s1']).conversations?.get('s1')).toBeUndefined()
       observer.dispose()
     })
+
+    it('ignores non-own inherited prefix events in RequestObserver', async () => {
+      const { ctx, observer } = await mounted()
+      const forkedSession = {
+        id: 'fork-child',
+        isOwnSeq: (seq: number) => seq >= 10,
+      }
+      ctx.emit('session/event', forkedSession, retryEvent({ seq: 3, turn: 1, step: 1 }))
+      ctx.emit('session/event', forkedSession, turnEndEvent({ seq: 4, turn: 1, reason: { kind: 'completed' } }))
+      expect(observer.snapshot(['fork-child']).conversations?.get('fork-child')).toBeUndefined()
+      observer.dispose()
+    })
   })
 })

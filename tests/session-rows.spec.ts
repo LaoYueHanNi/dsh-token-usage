@@ -189,10 +189,10 @@ describe('buildSessionRows', () => {
   }
   const meta = new Map<string, SessionMetaEntry>(Object.entries({
     s1: { title: 'Root session', cwd: '/work/app' },
-    c1: { cwd: '/work/app', parentSession: 's1' },
-    g1: { parentSession: 'c1' },
+    c1: { cwd: '/work/app', origin: 'subagent', parentSession: 's1' },
+    g1: { origin: 'subagent', parentSession: 'c1' },
     s2: { title: 'Other work', cwd: '/work/app' },
-    o1: { title: 'Orphan', parentSession: 'p-missing' },
+    o1: { title: 'Orphan', origin: 'subagent', parentSession: 'p-missing' },
   }))
   const costed = (): CostedSummary => attachCosts({ dataDir: '/x', ...summarizeRecords(records) }, pricing)
 
@@ -238,13 +238,29 @@ describe('buildSessionRows', () => {
       record(DAY(2026, 1, 15, 9), 'b', 'deepseek-chat', { input: 20 }),
     ]
     const cycleMeta = new Map<string, SessionMetaEntry>(Object.entries({
-      a: { parentSession: 'b' },
-      b: { parentSession: 'a' },
+      a: { origin: 'subagent', parentSession: 'b' },
+      b: { origin: 'subagent', parentSession: 'a' },
     }))
     const summary = attachCosts({ dataDir: '/x', ...summarizeRecords(cycleRecords) }, pricing)
     const rows = buildSessionRows(summary, cycleMeta, 20)
     // Both survive as top-level rows (the walk stops on the revisit); the
     // sum is untouched either way.
     expect(rows.map(row => row.sessionId).sort()).toEqual(['a', 'b'])
+  })
+
+  it('keeps historical ordinary forks (parentSession without origin subagent) as independent top-level rows', () => {
+    const forkRecords = [
+      record(DAY(2026, 1, 15, 9), 'root', 'deepseek-chat', { input: 100 }),
+      record(DAY(2026, 1, 15, 10), 'legacyFork', 'deepseek-chat', { input: 50 }),
+    ]
+    const forkMeta = new Map<string, SessionMetaEntry>(Object.entries({
+      root: { title: 'Root' },
+      legacyFork: { title: 'Fork', parentSession: 'root' },
+    }))
+    const summary = attachCosts({ dataDir: '/x', ...summarizeRecords(forkRecords) }, pricing)
+    const rows = buildSessionRows(summary, forkMeta, 20)
+    expect(rows.map(row => row.sessionId)).toEqual(['root', 'legacyFork'])
+    expect(rows[0]!.totals.inputTokens).toBe(100)
+    expect(rows[0]!.childCount).toBeUndefined()
   })
 })

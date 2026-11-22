@@ -1179,7 +1179,7 @@ describe('createStatsRoute session table', () => {
     await writeFile(join(dir, 'usage-2026-01-12.jsonl'), JSON.stringify(dayRecord(2, 'deepseek-chat')) + '\n')
     await writeFile(join(dir, 'sessions.json'), JSON.stringify({
       ...Object.fromEntries(records.map((row, i) => [row.sessionId, { cwd: i === SESSION_ROW_LIMIT ? '/work/omitted' : '/work/main' }])),
-      child: { cwd: '/work/child', parentSession: `root-${SESSION_ROW_LIMIT}` },
+      child: { cwd: '/work/child', origin: 'subagent', parentSession: `root-${SESSION_ROW_LIMIT}` },
     }))
     await writeFile(join(dir, 'pricing.ccsa.json'), JSON.stringify({ currency: 'RMB', models: [
       { modelId: 'deepseek-chat', inputCostPerMillion: 1_000_000, outputCostPerMillion: 0 },
@@ -1199,7 +1199,7 @@ describe('createStatsRoute session table', () => {
     const dir = await sessionDataDir()
     await writeFile(join(dir, 'sessions.json'), JSON.stringify({
       alpha: { title: 'Alpha root', cwd: '/work/app' },
-      child: { title: 'Child task', cwd: '/work/app', parentSession: 'alpha' },
+      child: { title: 'Child task', cwd: '/work/app', origin: 'subagent', parentSession: 'alpha' },
     }))
     const route = createStatsRoute(() => dir)
     const { res, captured } = fakeResponse()
@@ -1225,7 +1225,7 @@ describe('createStatsRoute session table', () => {
     const dir = await sessionDataDir()
     await writeFile(join(dir, 'sessions.json'), JSON.stringify({
       alpha: { title: 'Alpha root', cwd: '/work/app' },
-      child: { title: 'Child task', cwd: '/work/app', parentSession: 'alpha' },
+      child: { title: 'Child task', cwd: '/work/app', origin: 'subagent', parentSession: 'alpha' },
     }))
     const route = createStatsRoute(() => dir)
     const { res, captured } = fakeResponse()

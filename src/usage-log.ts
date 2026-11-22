@@ -11,8 +11,16 @@
 import { appendFile, mkdir, readdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { SessionId } from '@deepseek-ai/dsh-session'
+import { backupDayFiles } from './backup.ts'
 import { consoleLogger, type LoggerLike } from './log.ts'
-import { extractFirstTokenTimeFromStream, parseRecord, serializeRecord, type UsageRecord } from './usage-record.ts'
+import {
+  coerceRecord,
+  extractFirstTokenTimeFromStream,
+  isReconcilableKind,
+  parseRecord,
+  serializeRecord,
+  type UsageRecord,
+} from './usage-record.ts'
 import { readerOf, type SyncPersistence } from './sync.ts'
 import type { FieldCompleter } from './field-completion.ts'
 
@@ -209,14 +217,16 @@ export class UsageLog {
 
   /**
    * Drop every saved row that the authoritative session walk did not
-   * reproduce. A row whose request id no longer appears in any session log is
-   * a relic of an older stored format: the host rewrote the event coordinates
-   * when it migrated the log to the current format generation, so the walk
-   * reproduces the same requests under new ids.
+   * reproduce (and reassign session-log-derived rows whose owning session was
+   * misattributed by an older walk order). A row whose request id no longer
+   * appears in any session log is a relic of an older stored format or an
+   * inherited fork prefix that the child session once duplicated.
    *
-   * Three guards keep this pass from destroying live data:
+   * Four guards keep this pass from destroying live or bypass data:
    * - only ids in `eligible` (the snapshot taken before the walk) are
    *   candidates, so a row a live request appended during the walk survives;
+   * - non-session-log rows (`kind: 'aux'` and any unknown future kind) are
+   *   unconditionally exempt from both deletion and reassignment;
    * - a row is dropped only when its owning session was read **in full** by
    *   the walk, so "the walk did not see it" is never inferred from a session
    *   that failed to load, from a session missing out of the list (deleted,
@@ -224,33 +234,43 @@ export class UsageLog {
    *   owner is unknown;
    * - malformed lines are never candidates and stay where they are.
    *
-   * A day file is rewritten only when it actually loses a row, and the
-   * rewrite is atomic. Runs on the append queue so a live write cannot
-   * interleave with it.
+   * Touched day files are backed up atomically to `.backups/` before rewriting,
+   * and rewritten only when a row changes or drops. Runs on the append queue
+   * so a live write cannot interleave with it.
    * @param keep - request ids the walk reproduced from readable sessions.
    * @param readableSessions - sessions the walk read in full.
    * @param eligible - the pre-walk snapshot of saved request ids.
+   * @param expectedOwners - optional unique owning session per reproduced id.
+   * @param onReassigned - optional callback reporting how many rows changed owner.
    * @returns the number of rows removed.
    */
   reconcile(
     keep: ReadonlySet<string>,
     readableSessions: ReadonlySet<string>,
     eligible: ReadonlySet<string>,
+    expectedOwners?: ReadonlyMap<string, string>,
+    onReassigned?: (count: number) => void,
   ): Promise<number> {
     let removed = 0
     const task = this.queue.then(async () => {
       // Deliberately no ensureDir: a reconcile still queued when this store's
       // directory is relocated away would otherwise resurrect it. A missing
       // directory has nothing to reconcile, and readdir reports exactly that.
-      const dropped = await reconcileDayFiles(
+      const result = await reconcileDayFiles(
         this.dir,
-        { keep, readableSessions, eligible, owners: this.owners },
+        { keep, readableSessions, eligible, owners: this.owners, expectedOwners },
         this.logger,
       )
-      removed = dropped.length
-      for (const id of dropped) {
+      removed = result.dropped.length
+      for (const id of result.dropped) {
         this.seen.delete(id)
         this.owners.delete(id)
+      }
+      for (const [id, owner] of result.reassigned) {
+        this.owners.set(id, owner)
+      }
+      if (result.reassigned.size > 0) {
+        onReassigned?.(result.reassigned.size)
       }
     })
     this.queue = task.catch(() => {})
@@ -288,10 +308,34 @@ export class UsageLog {
   }
 }
 
-/** One parsed day-file line: a record, or a raw malformed line kept in place. */
+/** One parsed day-file line: a record, its original raw `kind`, and original text. */
 interface DayLine {
   record: UsageRecord | null
+  rawKind: unknown
   raw: string
+  dirty?: boolean
+}
+
+function parseDayLine(raw: string): DayLine {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return { record: null, rawKind: undefined, raw }
+  }
+  const rawKind = typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+    ? (parsed as Record<string, unknown>).kind
+    : undefined
+  return { record: coerceRecord(parsed), rawKind, raw }
+}
+
+async function listDayFileNames(dir: string, logger: LoggerLike): Promise<string[] | null> {
+  try {
+    return (await readdir(dir)).filter(name => DAY_FILE.test(name)).sort()
+  } catch (error) {
+    logger.error('[token-usage] cannot list data dir ' + dir + ':', error)
+    return null
+  }
 }
 
 async function readDayLines(dir: string, name: string, logger: LoggerLike): Promise<DayLine[]> {
@@ -304,7 +348,7 @@ async function readDayLines(dir: string, name: string, logger: LoggerLike): Prom
   const lines: DayLine[] = []
   for (const raw of text.split('\n')) {
     if (raw === '') continue
-    lines.push({ record: parseRecord(raw), raw })
+    lines.push(parseDayLine(raw))
   }
   return lines
 }
@@ -331,14 +375,20 @@ async function replaceFile(tmp: string, target: string): Promise<void> {
   }
 }
 
-async function rewriteDayFile(dir: string, name: string, records: UsageRecord[]): Promise<void> {
+/**
+ * Atomically rewrite one day file from its surviving lines. Unmodified lines
+ * keep their exact original JSON text so unknown future fields and malformed
+ * lines round-trip untouched.
+ */
+async function writeDayLines(dir: string, name: string, lines: readonly DayLine[]): Promise<void> {
   const target = join(dir, name)
-  if (records.length === 0) {
+  if (lines.length === 0) {
     await unlink(target).catch(() => undefined)
     return
   }
+  const body = `${lines.map(line => (line.dirty === true && line.record !== null ? serializeRecord(line.record) : line.raw)).join('\n')}\n`
   const tmp = join(dir, `${name}.tmp`)
-  await writeFile(tmp, `${records.map(serializeRecord).join('\n')}\n`, 'utf8')
+  await writeFile(tmp, body, 'utf8')
   await replaceFile(tmp, target)
 }
 
@@ -347,52 +397,65 @@ async function rewriteDayFile(dir: string, name: string, records: UsageRecord[])
  * Malformed lines stay in the source file so a bad row is never dropped.
  */
 async function refileDayFiles(dir: string, logger: LoggerLike): Promise<number> {
-  let names: string[]
-  try {
-    names = (await readdir(dir)).filter(name => DAY_FILE.test(name)).sort()
-  } catch (error) {
-    logger.error('[token-usage] cannot list data dir ' + dir + ':', error)
-    return 0
-  }
+  const names = await listDayFileNames(dir, logger)
+  if (names === null) return 0
+  const sourceLines = new Map<string, DayLine[]>()
+  const sourcePlans = new Map<string, DayLine[]>()
+  const incomingByTarget = new Map<string, DayLine[]>()
   let moved = 0
   for (const source of names) {
     const lines = await readDayLines(dir, source, logger)
-    const stay: UsageRecord[] = []
-    const stray: string[] = []
-    const leave = new Map<string, UsageRecord[]>()
+    sourceLines.set(source, lines)
+    const stay: DayLine[] = []
+    let sourceChanged = false
     for (const line of lines) {
       if (line.record === null) {
-        stray.push(line.raw)
+        stay.push(line)
         continue
       }
       const target = dayFileNameOf(line.record.time)
       if (target === source) {
-        stay.push(line.record)
+        stay.push(line)
         continue
       }
-      const bucket = leave.get(target) ?? []
-      bucket.push(line.record)
-      leave.set(target, bucket)
+      const bucket = incomingByTarget.get(target) ?? []
+      bucket.push(line)
+      incomingByTarget.set(target, bucket)
+      sourceChanged = true
       moved += 1
     }
-    if (leave.size === 0) continue
-    for (const [target, records] of leave) {
-      const existing = (await readDayLines(dir, target, logger))
-        .map(line => line.record)
-        .filter((record): record is UsageRecord => record !== null)
-      const seen = new Set(existing.map(record => record.requestId))
-      const appended = records.filter(record => !seen.has(record.requestId))
-      await rewriteDayFile(dir, target, [...existing, ...appended])
+    if (sourceChanged) {
+      sourcePlans.set(source, stay)
     }
-    if (stray.length > 0) {
-      const target = join(dir, source)
-      const body = `${stay.map(serializeRecord).join('\n')}${stay.length > 0 ? '\n' : ''}${stray.join('\n')}\n`
-      const tmp = join(dir, `${source}.tmp`)
-      await writeFile(tmp, body, 'utf8')
-      await replaceFile(tmp, target)
-    } else {
-      await rewriteDayFile(dir, source, stay)
+  }
+  if (moved === 0) return 0
+
+  const finalContents = new Map<string, DayLine[]>()
+  for (const [source, stay] of sourcePlans) {
+    finalContents.set(source, stay)
+  }
+  for (const [target, incoming] of incomingByTarget) {
+    const base = finalContents.get(target)
+      ?? sourceLines.get(target)
+      ?? await readDayLines(dir, target, logger)
+    const seen = new Set<string>()
+    for (const line of base) {
+      if (line.record !== null) seen.add(line.record.requestId)
     }
+    const appended: DayLine[] = []
+    for (const line of incoming) {
+      /* v8 ignore next -- only lines with a valid record enter incomingByTarget. */
+      if (line.record === null) continue
+      if (seen.has(line.record.requestId)) continue
+      seen.add(line.record.requestId)
+      appended.push(line)
+    }
+    finalContents.set(target, [...base, ...appended])
+  }
+
+  await backupDayFiles(dir, [...finalContents.keys()], 'refile', logger)
+  for (const [name, lines] of finalContents) {
+    await writeDayLines(dir, name, lines)
   }
   return moved
 }
@@ -407,56 +470,79 @@ interface ReconcileSets {
   eligible: ReadonlySet<string>
   /** Owning session of every saved id. */
   owners: ReadonlyMap<string, string>
+  /** Authoritative owning session per reproduced id when unique across sessions. */
+  expectedOwners?: ReadonlyMap<string, string> | undefined
+}
+
+/** Result of reconciling day files on disk. */
+interface ReconcileDayFilesResult {
+  dropped: string[]
+  reassigned: Map<string, string>
 }
 
 /**
- * Rewrite every day file without the rows {@link ReconcileSets} marks
- * droppable, and report the dropped ids. A file is touched only when it
- * actually loses a row; malformed lines stay in place so a bad row is never
- * silently dropped by the pass that exists to remove rows on purpose.
+ * Rewrite touched day files without stale droppable rows and with unique
+ * session-owner reassignments applied. Non-session-log origins (`kind: 'aux'`
+ * and any unknown future kind), unreadable-session rows, mid-walk live rows,
+ * and malformed lines remain intact. Touched files are backed up before any
+ * rewrite.
  */
-async function reconcileDayFiles(dir: string, sets: ReconcileSets, logger: LoggerLike): Promise<string[]> {
-  let names: string[]
-  try {
-    names = (await readdir(dir)).filter(name => DAY_FILE.test(name)).sort()
-  } catch (error) {
-    logger.error('[token-usage] cannot list data dir ' + dir + ':', error)
-    return []
-  }
+async function reconcileDayFiles(
+  dir: string,
+  sets: ReconcileSets,
+  logger: LoggerLike,
+): Promise<ReconcileDayFilesResult> {
+  const names = await listDayFileNames(dir, logger)
+  if (names === null) return { dropped: [], reassigned: new Map() }
   const dropped: string[] = []
+  const reassigned = new Map<string, string>()
+  const touched = new Map<string, DayLine[]>()
   for (const name of names) {
     const lines = await readDayLines(dir, name, logger)
-    const stay: UsageRecord[] = []
-    const stray: string[] = []
-    let lost = 0
+    const stay: DayLine[] = []
+    let fileChanged = false
     for (const line of lines) {
       if (line.record === null) {
-        stray.push(line.raw)
+        stay.push(line)
+        continue
+      }
+      if (!isReconcilableKind(line.rawKind)) {
+        stay.push(line)
         continue
       }
       const id = line.record.requestId
+      const currentOwner = sets.owners.get(id) ?? line.record.sessionId
       const doomed = sets.eligible.has(id)
         && !sets.keep.has(id)
-        && sets.readableSessions.has(sets.owners.get(id) ?? '')
+        && sets.readableSessions.has(currentOwner)
       if (doomed) {
         dropped.push(id)
-        lost += 1
+        fileChanged = true
         continue
       }
-      stay.push(line.record)
+      const expectedOwner = sets.expectedOwners?.get(id)
+      if (sets.eligible.has(id)
+        && expectedOwner !== undefined
+        && expectedOwner !== line.record.sessionId
+        && sets.readableSessions.has(line.record.sessionId)
+        && sets.readableSessions.has(expectedOwner)) {
+        line.record.sessionId = expectedOwner
+        line.dirty = true
+        reassigned.set(id, expectedOwner)
+        fileChanged = true
+      }
+      stay.push(line)
     }
-    if (lost === 0) continue
-    if (stray.length > 0) {
-      const target = join(dir, name)
-      const body = `${stay.map(serializeRecord).join('\n')}${stay.length > 0 ? '\n' : ''}${stray.join('\n')}\n`
-      const tmp = join(dir, `${name}.tmp`)
-      await writeFile(tmp, body, 'utf8')
-      await replaceFile(tmp, target)
-    } else {
-      await rewriteDayFile(dir, name, stay)
+    if (fileChanged) {
+      touched.set(name, stay)
     }
   }
-  return dropped
+  if (touched.size === 0) return { dropped, reassigned }
+  await backupDayFiles(dir, [...touched.keys()], 'reconcile', logger)
+  for (const [name, lines] of touched) {
+    await writeDayLines(dir, name, lines)
+  }
+  return { dropped, reassigned }
 }
 
 /**
@@ -468,15 +554,10 @@ export async function backfillDayFilesTiming(
   persistence: SyncPersistence,
   logger: LoggerLike = consoleLogger,
 ): Promise<number> {
-  let names: string[]
-  try {
-    names = (await readdir(dir)).filter(name => DAY_FILE.test(name)).sort()
-  } catch (error) {
-    logger.error('[token-usage] cannot list data dir ' + dir + ':', error)
-    return 0
-  }
+  const names = await listDayFileNames(dir, logger)
+  if (names === null) return 0
   const fileLines = new Map<string, DayLine[]>()
-  const missingBySession = new Map<string, Map<string, UsageRecord>>()
+  const missingBySession = new Map<string, Map<string, { line: DayLine; fileName: string }>>()
 
   for (const name of names) {
     const lines = await readDayLines(dir, name, logger)
@@ -491,7 +572,7 @@ export async function backfillDayFilesTiming(
           sessionMap = new Map()
           missingBySession.set(line.record.sessionId, sessionMap)
         }
-        sessionMap.set(line.record.requestId, line.record)
+        sessionMap.set(line.record.requestId, { line, fileName: name })
       }
     }
     if (fileHasMissing) {
@@ -502,6 +583,7 @@ export async function backfillDayFilesTiming(
   if (missingBySession.size === 0) return 0
 
   const reader = readerOf(persistence)
+  const changedFiles = new Set<string>()
   let patchedCount = 0
 
   for (const [sessionId, targetMap] of missingBySession) {
@@ -509,26 +591,42 @@ export async function backfillDayFilesTiming(
       const inspection = await reader.read(sessionId as SessionId)
       let openStep: { turn: number; step: number; startTime: number } | null = null
       for (const event of inspection.events) {
-        if (event.type === 'step/start') {
+        if (event.type === 'session/end-seed') {
+          openStep = null
+        } else if (event.type === 'step/start') {
           openStep = {
             turn: event.data.turn,
             step: event.data.step,
             startTime: event.time,
           }
         } else if (event.type === 'assistant/message') {
-          if (targetMap.has(event.data.message.id)) {
-            const targetRecord = targetMap.get(event.data.message.id)!
+          const targetEntry = targetMap.get(event.data.message.id)
+          if (targetEntry !== undefined && targetEntry.line.record !== null) {
+            const targetRecord = targetEntry.line.record
             if (openStep !== null
               && openStep.turn === event.data.turn
               && openStep.step === event.data.step) {
-              targetRecord.latencyMs = Math.max(0, event.time - openStep.startTime)
+              const latencyMs = Math.max(0, event.time - openStep.startTime)
               // The timed model stream embedded in assistant/message carries
               // the first token delta's timestamp.
               const firstTokenTime = extractFirstTokenTimeFromStream(event.data.stream)
-              if (firstTokenTime !== undefined) {
-                targetRecord.firstTokenLatencyMs = Math.max(0, firstTokenTime - openStep.startTime)
+              const firstTokenLatencyMs = firstTokenTime !== undefined
+                ? Math.max(0, firstTokenTime - openStep.startTime)
+                : undefined
+              let rowUpdated = false
+              if (targetRecord.latencyMs !== latencyMs) {
+                targetRecord.latencyMs = latencyMs
+                rowUpdated = true
               }
-              patchedCount += 1
+              if (firstTokenLatencyMs !== undefined && targetRecord.firstTokenLatencyMs !== firstTokenLatencyMs) {
+                targetRecord.firstTokenLatencyMs = firstTokenLatencyMs
+                rowUpdated = true
+              }
+              if (rowUpdated) {
+                targetEntry.line.dirty = true
+                changedFiles.add(targetEntry.fileName)
+                patchedCount += 1
+              }
             }
           }
           openStep = null
@@ -543,25 +641,11 @@ export async function backfillDayFilesTiming(
 
   if (patchedCount === 0) return 0
 
-  for (const [name, lines] of fileLines) {
-    const stay: UsageRecord[] = []
-    const stray: string[] = []
-    for (const line of lines) {
-      if (line.record === null) {
-        stray.push(line.raw)
-      } else {
-        stay.push(line.record)
-      }
-    }
-    if (stray.length > 0) {
-      const target = join(dir, name)
-      const body = `${stay.map(serializeRecord).join('\n')}${stay.length > 0 ? '\n' : ''}${stray.join('\n')}\n`
-      const tmp = join(dir, `${name}.tmp`)
-      await writeFile(tmp, body, 'utf8')
-      await replaceFile(tmp, target)
-    } else {
-      await rewriteDayFile(dir, name, stay)
-    }
+  await backupDayFiles(dir, [...changedFiles], 'backfill-timing', logger)
+  for (const name of changedFiles) {
+    const lines = fileLines.get(name)
+    if (lines === undefined) continue
+    await writeDayLines(dir, name, lines)
   }
 
   return patchedCount
@@ -597,13 +681,8 @@ export async function completeDayFiles(
 ): Promise<FieldCompletionResult> {
   const none: FieldCompletionResult = { patched: 0, cleanIds: [], retriedIds: [], failedSessions: 0 }
   if (completers.length === 0) return none
-  let names: string[]
-  try {
-    names = (await readdir(dir)).filter(name => DAY_FILE.test(name)).sort()
-  } catch (error) {
-    logger.error('[token-usage] cannot list data dir ' + dir + ':', error)
-    return none
-  }
+  const names = await listDayFileNames(dir, logger)
+  if (names === null) return none
   const fileLines = new Map<string, DayLine[]>()
   const candidates = new Map<string, Set<string>>()
   for (const name of names) {
@@ -661,6 +740,7 @@ export async function completeDayFiles(
           if (completer.fill(record, proof)) rowChanged = true
         }
         if (rowChanged) {
+          line.dirty = true
           patched += 1
           fileChanged = true
         }
@@ -668,23 +748,12 @@ export async function completeDayFiles(
       if (fileChanged) changedFiles.add(name)
     }
   }
-  for (const name of changedFiles) {
-    const lines = fileLines.get(name)
-    if (lines === undefined) continue
-    const stay: UsageRecord[] = []
-    const stray: string[] = []
-    for (const line of lines) {
-      if (line.record === null) stray.push(line.raw)
-      else stay.push(line.record)
-    }
-    if (stray.length > 0) {
-      const target = join(dir, name)
-      const body = `${stay.map(serializeRecord).join('\n')}${stay.length > 0 ? '\n' : ''}${stray.join('\n')}\n`
-      const tmp = join(dir, `${name}.tmp`)
-      await writeFile(tmp, body, 'utf8')
-      await replaceFile(tmp, target)
-    } else {
-      await rewriteDayFile(dir, name, stay)
+  if (changedFiles.size > 0) {
+    await backupDayFiles(dir, [...changedFiles], 'complete-fields', logger)
+    for (const name of changedFiles) {
+      const lines = fileLines.get(name)
+      if (lines === undefined) continue
+      await writeDayLines(dir, name, lines)
     }
   }
   const cleanIds: string[] = []
