@@ -206,22 +206,47 @@ describe('live request observer', () => {
     expect(attempts.filter(attempt => attempt.state === 'cancelled')).toHaveLength(1)
   })
 
-  it('keeps unowned bypass calls out while attributing session-title requests', async () => {
+  it('keeps unowned bypass calls out while attributing purpose-marked and legacy aux requests', async () => {
     const { ctx, observer } = await mounted()
     await stream(ctx, { provider: 'p', model: 'm' }, [{ type: 'finish', reason: { kind: 'stop' } }])
+    await stream(ctx, { provider: 'p', model: 'm', purpose: 'timeline-report' }, [{ type: 'finish', reason: { kind: 'stop' } }])
     await stream(ctx, { sessionId: 's1', purpose: 'session-title', provider: 'p', model: 'm' }, [{ type: 'finish', reason: { kind: 'stop' } }])
-    expect(observer.snapshot(['s1']).attempts).toMatchObject([{ kind: 'aux', auxKind: 'session-title', state: 'completed' }])
+    await stream(ctx, { sessionId: 's1', purpose: 'auto-review', provider: 'p', model: 'm' }, [{ type: 'finish', reason: { kind: 'stop' } }])
+    await stream(ctx, { sessionId: 's1', purpose: 'timeline-report', provider: 'p', model: 'm' }, [{ type: 'finish', reason: { kind: 'stop' } }])
+    await stream(ctx, { sessionId: 's1', system: 'REVIEW_POLICY\nlegacy', provider: 'p', model: 'm' }, [{ type: 'finish', reason: { kind: 'stop' } }])
+    await stream(ctx, { sessionId: 's1', purpose: 'future-purpose', provider: 'p', model: 'm' }, [{ type: 'finish', reason: { kind: 'stop' } }])
+    expect(observer.snapshot(['s1']).attempts).toMatchObject([
+      { kind: 'aux', auxKind: 'session-title', state: 'completed' },
+      { kind: 'aux', auxKind: 'auto-review', state: 'completed' },
+      { kind: 'aux', auxKind: 'timeline-report', state: 'completed' },
+      { kind: 'aux', auxKind: 'auto-review', state: 'completed' },
+      { kind: 'aux', auxKind: 'other', state: 'completed' },
+    ])
   })
 
-  it('links an attributed auxiliary attempt to its persisted id without changing its kind', async () => {
+  it('links attributed auxiliary attempts (session-title, auto-review, timeline-report) to their persisted ids', async () => {
     const { ctx, observer } = await mounted()
     await stream(ctx, { sessionId: 's1', purpose: 'session-title', provider: 'p', model: 'm' }, [
       { type: 'usage', usage: { inputTokens: 12, outputTokens: 2, cacheReadTokens: 0 } },
       { type: 'finish', reason: { kind: 'stop' } },
     ])
-    const attempt = observer.snapshot(['s1']).attempts[0]!
-    observer.linkAuxAttempt({ sessionId: 's1', auxKind: 'session-title', startedAt: attempt.startedAt, provider: 'p', model: 'm', requestId: 'aux:session-title:1:1' })
-    expect(observer.snapshot(['s1']).attempts[0]).toMatchObject({ kind: 'aux', durableRequestId: 'aux:session-title:1:1' })
+    await stream(ctx, { sessionId: 's1', purpose: 'auto-review', provider: 'p', model: 'm' }, [
+      { type: 'usage', usage: { inputTokens: 24, outputTokens: 4, cacheReadTokens: 0 } },
+      { type: 'finish', reason: { kind: 'stop' } },
+    ])
+    await stream(ctx, { sessionId: 's1', purpose: 'timeline-report', provider: 'p', model: 'm' }, [
+      { type: 'usage', usage: { inputTokens: 36, outputTokens: 6, cacheReadTokens: 0 } },
+      { type: 'finish', reason: { kind: 'stop' } },
+    ])
+    const attempts = observer.snapshot(['s1']).attempts
+    observer.linkAuxAttempt({ sessionId: 's1', auxKind: 'session-title', startedAt: attempts[0]!.startedAt, provider: 'p', model: 'm', requestId: 'aux:session-title:1:1' })
+    observer.linkAuxAttempt({ sessionId: 's1', auxKind: 'auto-review', startedAt: attempts[1]!.startedAt, provider: 'p', model: 'm', requestId: 'aux:auto-review:1:2' })
+    observer.linkAuxAttempt({ sessionId: 's1', auxKind: 'timeline-report', startedAt: attempts[2]!.startedAt, provider: 'p', model: 'm', requestId: 'aux:timeline-report:1:3' })
+    expect(observer.snapshot(['s1']).attempts).toMatchObject([
+      { kind: 'aux', auxKind: 'session-title', durableRequestId: 'aux:session-title:1:1' },
+      { kind: 'aux', auxKind: 'auto-review', durableRequestId: 'aux:auto-review:1:2' },
+      { kind: 'aux', auxKind: 'timeline-report', durableRequestId: 'aux:timeline-report:1:3' },
+    ])
   })
 
   it('attributes compaction calls with purpose compaction and the owning session', async () => {

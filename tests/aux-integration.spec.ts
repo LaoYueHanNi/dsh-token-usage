@@ -11,8 +11,11 @@ import { mkdtemp, readdir, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { IncomingMessage, ServerResponse } from 'node:http'
 import { Context, Service } from '@deepseek-ai/cordis'
+import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import * as plugin from '../src/index.ts'
+import { STATS_PATH } from '../src/stats-route.ts'
 import { syncHistory } from '../src/sync.ts'
 import { UsageLog } from '../src/usage-log.ts'
 import { messageEvent, retryEvent } from './helpers.ts'
@@ -206,15 +209,38 @@ describe('auxiliary request recording', () => {
     expect(rows[0]!.requestId).toMatch(/^aux:auto-review:\d+:\d+$/u)
   })
 
-  it('classifies session-title requests by their purpose marker', async () => {
+  it('classifies session-title, auto-review, and timeline-report requests by purpose and retains session attribution', async () => {
     const dir = await mount()
     await streamWaterfall(ctx!, {
       ...AUTO_REVIEW_REQUEST,
       sessionId: 'session-1',
       purpose: 'session-title',
     }, SUCCESS_CHUNKS)
-    const rows = await pollRows(dir, 1)
+    await streamWaterfall(ctx!, {
+      provider: 'deepseek-account',
+      model: 'deepseek-chat',
+      messages: [],
+      sessionId: 'session-1',
+      purpose: 'auto-review',
+    }, SUCCESS_CHUNKS)
+    await streamWaterfall(ctx!, {
+      provider: 'deepseek-account',
+      model: 'deepseek-chat',
+      messages: [],
+      sessionId: 'session-1',
+      purpose: 'timeline-report',
+    }, SUCCESS_CHUNKS)
+    await streamWaterfall(ctx!, {
+      provider: 'deepseek-account',
+      model: 'deepseek-chat',
+      messages: [],
+      purpose: 'timeline-report',
+    }, SUCCESS_CHUNKS)
+    const rows = await pollRows(dir, 4)
     expect(rows[0]).toMatchObject({ kind: 'aux', auxKind: 'session-title', sessionId: 'session-1' })
+    expect(rows[1]).toMatchObject({ kind: 'aux', auxKind: 'auto-review', sessionId: 'session-1' })
+    expect(rows[2]).toMatchObject({ kind: 'aux', auxKind: 'timeline-report', sessionId: 'session-1' })
+    expect(rows[3]).toMatchObject({ kind: 'aux', auxKind: 'timeline-report', sessionId: '' })
   })
 
   it('does not record conversation-loop or compaction requests', async () => {
@@ -297,15 +323,25 @@ describe('auxiliary request recording', () => {
       purpose: 'session-title',
     }, SUCCESS_CHUNKS)
     await streamWaterfall(ctx!, {
-      ...AUTO_REVIEW_REQUEST,
+      provider: 'deepseek-account',
+      model: 'deepseek-chat',
+      messages: [],
       sessionId: 'session-1',
+      purpose: 'auto-review',
     }, SUCCESS_CHUNKS)
-    await pollRows(dir, 2)
+    await streamWaterfall(ctx!, {
+      provider: 'deepseek-account',
+      model: 'deepseek-chat',
+      messages: [],
+      sessionId: 'session-1',
+      purpose: 'timeline-report',
+    }, SUCCESS_CHUNKS)
+    await pollRows(dir, 3)
 
     // 2. Also emit a stale failure row that does not exist in session-1's log,
     //    so reconcile genuinely rewrites the same day file on full sync.
     ctx!.emit('session/event', { id: 'session-1' }, retryEvent({ seq: 99 }))
-    await pollRows(dir, 3)
+    await pollRows(dir, 4)
 
     // Unmount so the live plugin queue flushes before running syncHistory on disk.
     ctx!.registry.delete(plugin)
@@ -329,6 +365,66 @@ describe('auxiliary request recording', () => {
     expect(ids).toContain('m1')
     expect(ids.filter(id => String(id).startsWith('aux:session-title:'))).toHaveLength(1)
     expect(ids.filter(id => String(id).startsWith('aux:auto-review:'))).toHaveLength(1)
+    expect(ids.filter(id => String(id).startsWith('aux:timeline-report:'))).toHaveLength(1)
     expect(ids).not.toContain('failure:session-1:99')
+  })
+
+  it('links live RequestObserver attempts with persisted aux rows for auto-review and timeline-report without duplication in stats route', async () => {
+    const routes: WebRoute[] = []
+    class MockWebServer extends Service {
+      constructor(c: Context) { super(c, 'webServer') }
+      register(route: WebRoute): () => void { routes.push(route); return () => {} }
+    }
+    const next = new Context()
+    await next.plugin(MockSessions)
+    await next.plugin(MockPersistence)
+    await next.plugin(MockLlm)
+    await next.plugin(MockWebServer)
+    await next.plugin(plugin, {})
+    ctx = next
+    const dir = join(home, 'token-usage')
+    await waitForState(dir)
+
+    const deadline = Date.now() + 2_000
+    let statsRoute: WebRoute | undefined
+    while (Date.now() < deadline) {
+      statsRoute = routes.find(route => route.path === STATS_PATH)
+      if (statsRoute !== undefined) break
+      await new Promise(resolve => setTimeout(resolve, 20))
+    }
+    expect(statsRoute).toBeDefined()
+
+    await streamWaterfall(ctx, {
+      provider: 'deepseek-account',
+      model: 'deepseek-chat',
+      messages: [],
+      sessionId: 'session-1',
+      purpose: 'auto-review',
+    }, SUCCESS_CHUNKS)
+    await streamWaterfall(ctx, {
+      provider: 'deepseek-account',
+      model: 'deepseek-chat',
+      messages: [],
+      sessionId: 'session-1',
+      purpose: 'timeline-report',
+    }, SUCCESS_CHUNKS)
+    await pollRows(dir, 2)
+
+    const req = { method: 'GET', url: `${STATS_PATH}?root=session-1&scope=self&fields=session`, headers: {} } as IncomingMessage
+    let body = ''
+    const res = {
+      writeHead: () => {},
+      end: (chunk?: unknown) => { if (typeof chunk === 'string') body += chunk },
+    } as unknown as ServerResponse
+    await statsRoute!.handler(req, res)
+    const payload = JSON.parse(body) as {
+      total: { requests: number }
+      requestDetails: { items: Array<{ id: string; kind: string; auxKind?: string; cache: { band: string; reason?: string } }> }
+    }
+    expect(payload.total.requests).toBe(2)
+    expect(payload.requestDetails.items).toHaveLength(2)
+    const kinds = payload.requestDetails.items.map(item => `${item.kind}:${item.auxKind ?? ''}`).sort()
+    expect(kinds).toEqual(['aux:auto-review', 'aux:timeline-report'])
+    expect(payload.requestDetails.items.every(item => item.cache.band === 'excluded' && item.cache.reason === 'auxiliary')).toBe(true)
   })
 })

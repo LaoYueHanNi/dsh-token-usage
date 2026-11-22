@@ -108,10 +108,10 @@ export interface Config {
    * skips them in both the live hook and the history sync. Composition-only. */
   recordCompaction?: boolean
   /** Whether auxiliary (bypass) model requests — Auto review authorization,
-   * session-title generation, reasoning translation — are recorded and billed
-   * like plain requests (default `true`). Those calls never produce a
-   * conversation event, so they are captured on the `llm/stream` waterfall;
-   * `false` skips the capture. Composition-only. */
+   * session-title generation, timeline report synthesis, reasoning translation
+   * — are recorded and billed like plain requests (default `true`). Those
+   * calls never produce a conversation event, so they are captured on the
+   * `llm/stream` waterfall; `false` skips the capture. Composition-only. */
   recordAux?: boolean
   /** Whether the usage dashboard entry is pinned as a resident row in the
    * client sidebar (default `false`: the entry lives in the sidebar More
@@ -811,11 +811,12 @@ export function apply(ctx: Context, config: Config = {}) {
 
   /**
    * Record auxiliary (bypass) model requests: the Auto review authorization
-   * gate, session-title generation, and reasoning translation. Those calls
-   * are issued through `ctx.llm.stream()` by their owning host packages and
-   * do not produce an `assistant/message` usage event, so the conversation
-   * recorder above cannot see their provider usage — the `llm/stream`
-   * waterfall every streaming call passes through is the one capture point.
+   * gate, session-title generation, timeline report synthesis, and reasoning
+   * translation. Those calls are issued through `ctx.llm.stream()` by their
+   * owning host packages and do not produce an `assistant/message` usage
+   * event, so the conversation recorder above cannot see their provider
+   * usage — the `llm/stream` waterfall every streaming call passes through is
+   * the one capture point.
    *
    * The listener is a pass-through wrapper: it yields every chunk unchanged,
    * remembers the `usage` chunk and the terminal `finish`, and appends one
@@ -878,7 +879,9 @@ export function apply(ctx: Context, config: Config = {}) {
             if (target !== undefined) {
               auxSeq += 1
               const requestId = `aux:${auxKind}:${String(startedAt)}:${String(auxSeq)}`
-              const sessionId = options.sessionId === undefined ? undefined : String(options.sessionId)
+              const sessionId = options.sessionId !== undefined && String(options.sessionId) !== ''
+                ? String(options.sessionId)
+                : undefined
               if (sessionId !== undefined) {
                 requestObserver.linkAuxAttempt({
                   sessionId,

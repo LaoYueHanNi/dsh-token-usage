@@ -2,19 +2,20 @@
  * Auxiliary (bypass) model requests of the token-usage plugin: classification
  * and record projection for provider calls that are NOT part of a
  * conversation turn — the Auto review authorization gate, session-title
- * generation, and reasoning translation. Those calls are issued through
- * `ctx.llm.stream()` by their owning host packages and do not produce an
- * `assistant/message` usage event, so the plugin records them on the
- * `llm/stream` waterfall every streaming call passes through
- * (see `LlmRuntime.stream`).
+ * generation, timeline report synthesis, and reasoning translation. Those
+ * calls are issued through `ctx.llm.stream()` by their owning host packages
+ * and do not produce an `assistant/message` usage event, so the plugin
+ * records them on the `llm/stream` waterfall every streaming call passes
+ * through (see `LlmRuntime.stream`).
  *
  * Classification never relies on host exports that older DSH builds may not
- * ship: the conversation loop always carries a `sessionId`, compaction and
- * title requests carry their `purpose`, and the two remaining bypass callers
- * (Auto review, translator) are recognized by their fixed system prompts.
- * Anything else lands in the defensive `other` bucket rather than being
- * dropped, so a future host feature still shows up in the runtime-overhead
- * totals.
+ * ship: declared purposes (`LlmRequestPurposeMap`) take precedence
+ * (`compaction` is excluded because `compaction/summary` logs it;
+ * `session-title`, `auto-review`, and `timeline-report` map directly, and
+ * any unrecognized `purpose` falls into `other` even when carrying a
+ * `sessionId`), while older unmarked Auto review and translator calls fall
+ * back to their fixed system prompt prefixes. Ordinary conversation-loop
+ * requests carry a `sessionId` with `purpose === undefined`.
  *
  * @module token-usage/aux-request
  */
@@ -43,18 +44,26 @@ export const TRANSLATION_PROMPT_PREFIX = 'Translate the following text'
  * (which logs its own `compaction/summary` event carrying usage).
  */
 export function classifyAuxRequest(options: GenerateOptions): AuxKind | undefined {
+  // Widen from the imported DSH version's `purpose` union so keys declared by
+  // newer/optional producer packages (LlmRequestPurposeMap) typecheck cleanly
+  // without casts across host versions.
+  const purpose: string | undefined = options.purpose
   // Compaction summaries are already recorded from `compaction/summary`.
-  if (options.purpose === 'compaction') return undefined
-  // Title generation is a bypass call, but its purpose marker is explicit.
-  if (options.purpose === 'session-title') return 'session-title'
-  // Newer Auto-review hosts may stamp the owning session while older hosts
-  // still omit it.  The fixed policy remains authoritative in either shape.
+  if (purpose === 'compaction') return undefined
+  if (purpose === 'session-title') return 'session-title'
+  if (purpose === 'auto-review') return 'auto-review'
+  if (purpose === 'timeline-report') return 'timeline-report'
+  // Ordinary conversation requests never set `purpose`; any unrecognized
+  // purpose value belongs to a host auxiliary producer and should land in
+  // `other` rather than be dropped as a conversation request.
+  if (purpose !== undefined) return 'other'
+  // Legacy Auto-review hosts omitted `purpose` (and sometimes `sessionId`);
+  // the fixed policy prompt remains authoritative fallback.
   const system = options.system
   if (typeof system === 'string' && system.startsWith(AUTO_REVIEW_PROMPT_PREFIX)) return 'auto-review'
   // Every conversation-loop request is marked with the session it serves
-  // (dsh-agent-loop freezes `sessionId` into its request); the loop records
-  // the call through `assistant/message`. A hand-built request without a
-  // session is the bypass shape.
+  // (dsh-agent-loop freezes `sessionId` into its request) and leaves
+  // `purpose` absent; the loop records the call through `assistant/message`.
   if (options.sessionId !== undefined) return undefined
   if (typeof system === 'string') {
     if (system.startsWith(TRANSLATION_PROMPT_PREFIX)) return 'translation'
@@ -70,8 +79,9 @@ export interface AuxRequestRecordInput {
   requestId: string
   /** Stream-start wall time, epoch milliseconds. */
   time: number
-  /** Owning conversation when the host stamped one (currently title
-   * generation; older unowned bypass calls stay empty). */
+  /** Owning session when the host stamped one (session-title, auto-review,
+   * and session-scoped timeline-report calls; older or global bypass calls
+   * stay empty). */
   sessionId?: string
   /** Provider model id the bypass call routed to. */
   model: string

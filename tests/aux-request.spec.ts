@@ -39,8 +39,36 @@ describe('classifyAuxRequest', () => {
     }))).toBe('session-title')
   })
 
-  it('classifies the Auto review reviewer by its fixed policy prompt', () => {
+  it('classifies auto-review and timeline-report by their purpose markers with or without sessionId', () => {
     expect(classifyAuxRequest(request({
+      sessionId: 'session-1' as GenerateOptions['sessionId'],
+      purpose: 'auto-review' as GenerateOptions['purpose'],
+    }))).toBe('auto-review')
+    expect(classifyAuxRequest(request({
+      purpose: 'auto-review' as GenerateOptions['purpose'],
+    }))).toBe('auto-review')
+    expect(classifyAuxRequest(request({
+      sessionId: 'session-1' as GenerateOptions['sessionId'],
+      purpose: 'timeline-report' as GenerateOptions['purpose'],
+    }))).toBe('timeline-report')
+    expect(classifyAuxRequest(request({
+      purpose: 'timeline-report' as GenerateOptions['purpose'],
+    }))).toBe('timeline-report')
+  })
+
+  it('buckets an unrecognized purpose into other even when carrying a sessionId', () => {
+    expect(classifyAuxRequest(request({
+      sessionId: 'session-1' as GenerateOptions['sessionId'],
+      purpose: 'future-aux-purpose' as GenerateOptions['purpose'],
+    }))).toBe('other')
+  })
+
+  it('classifies the Auto review reviewer by its fixed policy prompt on legacy hosts', () => {
+    expect(classifyAuxRequest(request({
+      system: `${AUTO_REVIEW_PROMPT_PREFIX}\nYou are the final authorization reviewer …`,
+    }))).toBe('auto-review')
+    expect(classifyAuxRequest(request({
+      sessionId: 'session-1' as GenerateOptions['sessionId'],
       system: `${AUTO_REVIEW_PROMPT_PREFIX}\nYou are the final authorization reviewer …`,
     }))).toBe('auto-review')
   })
@@ -138,6 +166,15 @@ describe('aux row parsing', () => {
 
   it('round-trips through the JSONL format', () => {
     expect(parseRecord(serializeRecord(row))).toEqual(row)
+    const timelineRow = recordFromAuxRequest({
+      auxKind: 'timeline-report',
+      requestId: 'aux:timeline-report:1:4',
+      time: 2,
+      sessionId: 'session-1',
+      model: 'deepseek-chat',
+      usage: { inputTokens: 15, outputTokens: 6 },
+    })
+    expect(parseRecord(serializeRecord(timelineRow))).toEqual(timelineRow)
   })
 
   it('normalizes an unknown auxiliary kind to other instead of dropping the row', () => {

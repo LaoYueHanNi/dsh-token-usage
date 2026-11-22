@@ -924,7 +924,7 @@ describe('UsageView request pool', () => {
     expectText('还没有上一条请求 · 下一条到来后，当前请求会移入这里')
   })
 
-  it('marks a session-attributed title request and never adds the cache-low tag', async () => {
+  it('marks session-attributed title, auto-review, and timeline-report requests without adding cache-low tags', async () => {
     const title = {
       ...LOSS_ROW,
       id: 'aux-title',
@@ -933,12 +933,28 @@ describe('UsageView request pool', () => {
       requestedModel: 'title-model',
       cache: { rate: 0, eligibility: 'eligible' as const, band: 'excluded' as const, reason: 'auxiliary' as const },
     }
-    stubFetch({ root: summaryWithRequestDetails([title]) })
+    const review = {
+      ...LOSS_ROW,
+      id: 'aux-review',
+      kind: 'aux' as const,
+      auxKind: 'auto-review' as const,
+      requestedModel: 'review-model',
+      cache: { rate: 0, eligibility: 'eligible' as const, band: 'excluded' as const, reason: 'auxiliary' as const },
+    }
+    const timeline = {
+      ...LOSS_ROW,
+      id: 'aux-timeline',
+      kind: 'aux' as const,
+      auxKind: 'timeline-report' as const,
+      requestedModel: 'timeline-model',
+      cache: { rate: 0, eligibility: 'eligible' as const, band: 'excluded' as const, reason: 'auxiliary' as const },
+    }
+    stubFetch({ root: summaryWithRequestDetails([title, review, timeline]) })
     renderView()
     await waitFor(() => expectText('最新请求'))
-    // A single request is shown only in the latest panel; it moves into the
-    // history table once a newer request arrives.
     expect(screen.getAllByText('标题')).toHaveLength(1)
+    expect(screen.getAllByText('审查')).toHaveLength(1)
+    expect(screen.getAllByText('时间线')).toHaveLength(1)
     expect(screen.queryByText('缓存过低')).toBeNull()
   })
 

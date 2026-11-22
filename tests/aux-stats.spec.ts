@@ -307,4 +307,41 @@ describe('rollup auxiliary dimension', () => {
     expect(stored?.auxRows).toHaveLength(1)
     expect(stored?.auxRows[0]).toMatchObject({ auxKind: 'auto-review', model: 'deepseek-flash' })
   })
+
+  it('aggregates timeline-report in auxRows and folds session-attributed auto-review/timeline-report into bySession', () => {
+    const at = day(1, 15, 10)
+    const records: UsageRecord[] = [
+      request(at, 'deepseek-chat', { input: 100, output: 20 }, 's1'),
+      {
+        requestId: 'aux:auto-review:1:1',
+        time: at + 1_000,
+        sessionId: 's1',
+        model: 'deepseek-chat',
+        kind: 'aux',
+        auxKind: 'auto-review',
+        usage: { inputTokens: 30, outputTokens: 5 },
+      },
+      {
+        requestId: 'aux:timeline-report:1:2',
+        time: at + 2_000,
+        sessionId: 's1',
+        model: 'deepseek-chat',
+        kind: 'aux',
+        auxKind: 'timeline-report',
+        usage: { inputTokens: 50, outputTokens: 10 },
+      },
+      aux(at + 3_000, 'timeline-report', 'deepseek-chat', { input: 20, output: 4 }),
+    ]
+    const costed = attachCosts({ dataDir: '/tmp', ...summarizeRecords(records) }, {})
+    expect(costed.total.requests).toBe(4)
+    expect(costed.bySession).toHaveLength(1)
+    expect(costed.bySession[0]!.sessionId).toBe('s1')
+    expect(costed.bySession[0]!.totals.requests).toBe(3)
+    expect(costed.bySession[0]!.totals.inputTokens).toBe(180)
+    expect(costed.aux.total.requests).toBe(3)
+    expect(costed.aux.byKind.map(k => [k.auxKind, k.totals.requests])).toEqual([
+      ['auto-review', 1],
+      ['timeline-report', 2],
+    ])
+  })
 })

@@ -8,7 +8,10 @@ Status: implemented
 
 ## Decision
 
-- 继续把所有辅助调用记录为 `kind: 'aux'`，并保留 `auxKind` 分类。只有 `sessionId` 由宿主直接提供且请求类型可识别时才写入记录；当前标题生成请求归属 `session-title`，无 `sessionId` 的 Auto review、翻译和未知旁路请求仍使用空会话 id，保持全局运行开销口径。
+> [!NOTE]
+> 归属范围已于 2026-11-22 由 [DR: 升级辅助请求分类至 LlmRequestPurposeMap 并支持 timeline-report 与 auto-review 会话归属](../implemented/2026-11-22-llm-request-purpose-classification.md) 扩展：随 DSH 0.2.2 在 `auto-review` 与会话级 `timeline-report` 上携带 `sessionId` 与 `purpose`，两者一并纳入对应会话用量与实时请求池。
+
+- 继续把所有辅助调用记录为 `kind: 'aux'`，并保留 `auxKind` 分类。只有 `sessionId` 由宿主直接提供且请求类型可识别时才写入记录；无 `sessionId` 的翻译、全局时间线报告、旧版 Auto review 和未知旁路请求仍使用空会话 id，保持全局运行开销口径。
 - 实时观察器对带会话 id 的标题请求（以及未来带会话 id 的 Auto review）创建 `aux` 请求行。辅助行显示在对应会话或“含子会话”范围内，模型右侧贴短标签“标题”/“审查”等；它们的缓存评估固定为 `auxiliary` 排除，不显示“缓存过低”标签。失败、取消和无归属旁路调用沿既有规则处理。
 - 辅助记录落盘后，运行观察器用同一会话、类型、路由和启动时间窗口把它链接到 `aux:<kind>:<time>:<seq>` 持久 id，避免实时行与日志行重复。持久化行保留 `kind`/`auxKind`，并参与该会话的 `total`、趋势、按模型和 `bySession`；未归属辅助行仍只参与全局维度与 `auxRows`。
 - 实时请求表的指标顺序固定为“缓存命中、输入、输出、缓存读、缓存写、首字、耗时、速度、费用”；当展示池内没有任何请求报告缓存写桶时，整列（包括最新请求页脚项）隐藏。表格在窄容器中保持局部横向滚动，不隐藏仍有数据的指标。

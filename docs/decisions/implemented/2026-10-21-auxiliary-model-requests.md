@@ -11,7 +11,7 @@ Status: implemented
 ## Decision
 
 > [!NOTE]
-> 本决策中“辅助请求一律没有会话归属、按会话不含”的部分已于 2026-10-25 由 [DR: 将可证明归属的辅助请求纳入会话用量](../implemented/2026-10-25-session-attributed-auxiliary-requests.md) 部分取代；“失败的辅助流一律只记日志不落数据”的部分已于 2026-11-22 由 [DR: 补齐 CONTENT_REFUSED 等新错误码本地化与拒绝前用量计费](../implemented/2026-11-22-content-refused-billing-and-failure-codes.md) 部分取代（`CONTENT_REFUSED` 且伴随有效 `usage` 时保留计费行）。当前仍无法安全归属的旁路请求继续保持全局运行开销口径。
+> 本决策中“辅助请求一律没有会话归属、按会话不含”的部分已于 2026-10-25 由 [DR: 将可证明归属的辅助请求纳入会话用量](../implemented/2026-10-25-session-attributed-auxiliary-requests.md) 部分取代；“失败的辅助流一律只记日志不落数据”的部分已于 2026-11-22 由 [DR: 补齐 CONTENT_REFUSED 等新错误码本地化与拒绝前用量计费](../implemented/2026-11-22-content-refused-billing-and-failure-codes.md) 部分取代（`CONTENT_REFUSED` 且伴随有效 `usage` 时保留计费行）；“Auto review 仅靠提示词前缀识别且类别固定为四类”的部分已于 2026-11-22 由 [DR: 升级辅助请求分类至 LlmRequestPurposeMap 并支持 timeline-report 与 auto-review 会话归属](../implemented/2026-11-22-llm-request-purpose-classification.md) 部分取代（优先按 `purpose` 识别 `auto-review` 与新增的 `timeline-report`）。当前仍无法安全归属的旁路请求继续保持全局运行开销口径。
 
 采集点改为模型服务的统一入口：插件监听 `llm/stream` waterfall。dsh-llm 的 `LlmRuntime.stream` / 已准备调用的 `stream()` 都经过 `ctx.waterfall(this, 'llm/stream', options, () => adapterStream(...))`，且该 waterfall 是同步组合——监听器同步返回一个**原样透传的 async generator**：逐步 `yield` 上游 chunk、记住 `usage` chunk 与终止 `finish`，流结束后（fire-and-forget）向当前数据目录追加一行 JSONL。不消费、不改写、不延迟任何 chunk。
 
