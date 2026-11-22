@@ -1,0 +1,38 @@
+/* Sidebar trailing badge (browser half). The shell's `.panelTrailing` owns
+ * placement, size, colour and the hover hand-off to the unpin action; this
+ * file only composes the two figures inside it. */
+
+.wide {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Cost is the primary figure (the reason the badge exists); the token count
+ * rides quieter beside it. */
+.cost {
+  color: var(--dsw-alias-label-secondary);
+}
+
+.tokens {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.separator {
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 10px;
+}
+
+/* Collapsed rail: the shell anchors the content over the icon's top corner
+ * (a few pixels), so shrink below the inherited 12px and carry cost only. */
+.rail {
+  display: inline-block;
+  font-size: 9px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}

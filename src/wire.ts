@@ -119,6 +119,10 @@ export function decodeChildGroups(source: URL | URLSearchParams): ChildGroup[] {
  * `fields: 'full'` is omitted — that is the default the settings page hits.
  */
 export function encodeStatsQuery(options: {
+  /** First local day key (`YYYY-MM-DD`), inclusive. */
+  from?: string
+  /** Last local day key (`YYYY-MM-DD`), inclusive. */
+  to?: string
   root?: string
   scope?: StatsScope
   sessionIds?: readonly string[]
@@ -126,6 +130,8 @@ export function encodeStatsQuery(options: {
   fields?: StatsFields
 }): string {
   const parts: string[] = []
+  if (options.from !== undefined && options.from !== '') parts.push(`from=${encodeURIComponent(options.from)}`)
+  if (options.to !== undefined && options.to !== '') parts.push(`to=${encodeURIComponent(options.to)}`)
   if (options.root !== undefined && options.root !== '') {
     parts.push(`${ROOT_PARAM}=${encodeURIComponent(options.root)}`)
     if (options.scope === 'subtree') parts.push(`${SCOPE_PARAM}=subtree`)
@@ -1000,6 +1006,23 @@ export interface SessionRequestDetails {
   /** 头条请求（`items[0]`）所属会话的对话状态；缺失表示没有结论（本轮仍在
    * 进行中，或插件进程尚未观察到该会话的事件）。 */
   conversation?: ConversationStatus
+}
+
+/**
+ * Whole-scope `fields=chip` read: the totals-only face the sidebar trailing
+ * badge polls, so a periodic refresh never drags the full byModel / byDay /
+ * session layers over the wire. Cost semantics match the usage page:
+ * `totalCost` is RMB, trust it only while `costState` is ready.
+ */
+export interface WholeChipSummary {
+  scope: 'whole'
+  total: UsageTotals
+  totalCost: number
+  unpricedModels: string[]
+  costState: CostState
+  feedVersion?: number
+  currency: DisplayCurrency
+  usdExchangeRate: number
 }
 
 /**

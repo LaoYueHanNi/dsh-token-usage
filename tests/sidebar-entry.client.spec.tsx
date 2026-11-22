@@ -350,3 +350,19 @@ describe('sidebar pin row (sidebarPinned setting)', () => {
     expect(store.getSnapshot().dirty).toBe(false)
   })
 })
+
+describe('sidebar trailing badge registration', () => {
+  it('registers the badge for the token-usage row on a shell that declares the trailing seat', () => {
+    const { ctx, slots } = createClientApp([...SHELL_DECLARATIONS, 'main', 'sidebar.panellist', 'sidebar.panellist.trailing'])
+    client.apply(ctx)
+    const badge = slots.registered.find(row => row.name === 'sidebar.panellist.trailing')
+    expect(badge?.id).toBe('token-usage')
+    expect(badge?.order).toBe(50)
+  })
+
+  it('never registers the badge on a shell without the trailing seat', () => {
+    const { ctx, slots } = createClientApp([...SHELL_DECLARATIONS, 'main', 'sidebar.panellist'])
+    client.apply(ctx)
+    expect(slots.registered.some(row => row.name === 'sidebar.panellist.trailing')).toBe(false)
+  })
+})

@@ -22,7 +22,7 @@ import { SessionMetaStore } from './session-meta.ts'
 import { projectRowsOf } from './project-rows.ts'
 import { bucketSeries, pointsOfBuckets } from './trend-bucket.ts'
 import { decodeChildGroups, decodeSessionScope, decodeStatsScope, DIR_GUARD_PATH, FULL_SYNC_PATH, MIGRATION_PATH, PRICING_PATH, STATS_PATH, UNPRICED_KEY } from './wire.ts'
-import type { ChildGroup, ChildTiming, ChildUsageSummary, CostedSummary, DirectoryGuardView, DisplayCurrency, FullSyncView, PricingOverviewPayload, PricingTable, RequestPoint, SessionRequestDetails, SessionUsageRow, StatsFields, StatsPayload, StatsScope, TokenSummary } from './wire.ts'
+import type { ChildGroup, ChildTiming, ChildUsageSummary, CostedSummary, DirectoryGuardView, DisplayCurrency, FullSyncView, PricingOverviewPayload, PricingTable, RequestPoint, SessionRequestDetails, SessionUsageRow, StatsFields, StatsPayload, StatsScope, TokenSummary, WholeChipSummary } from './wire.ts'
 import { effectiveModelOf, type UsageRecord } from './usage-record.ts'
 import { AssociationError } from './pricing-associations.ts'
 import { PRICING_SYNC_PATH, type PricingSyncResult } from './wire.ts'
@@ -626,15 +626,29 @@ export function createStatsRoute(dir: () => string, options: StatsRouteOptions =
             requestDetails,
             providerNames,
           })
-          : {
-            ...summaryRest,
-            scope: 'whole' as const,
-            sessionRows,
-            projectRows: projectRowsOf(allSessionRows),
-            currency,
-            usdExchangeRate,
-            ...(providerNames !== undefined ? { providerNames } : {}),
-          } satisfies StatsPayload
+          : filter.fields === 'chip'
+            // The whole-scope chip read is the sidebar badge's poll: totals
+            // only, no byModel / byDay / session rows. `from` / `to` still
+            // bound the fold above, so a one-day request answers today.
+            ? {
+              scope: 'whole' as const,
+              total: summary.total,
+              totalCost: summary.totalCost,
+              unpricedModels: summary.unpricedModels,
+              costState: summary.costState,
+              ...(summary.feedVersion !== undefined ? { feedVersion: summary.feedVersion } : {}),
+              currency,
+              usdExchangeRate,
+            } satisfies WholeChipSummary
+            : {
+              ...summaryRest,
+              scope: 'whole' as const,
+              sessionRows,
+              projectRows: projectRowsOf(allSessionRows),
+              currency,
+              usdExchangeRate,
+              ...(providerNames !== undefined ? { providerNames } : {}),
+            } satisfies StatsPayload
         res.writeHead(200, {
           'content-type': 'application/json; charset=utf-8',
           // Stats change with every request; the browser must not cache them.

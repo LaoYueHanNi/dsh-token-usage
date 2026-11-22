@@ -17,7 +17,7 @@
 | 4 | 移除已下线的 @deepseek-ai/dsh-client-ui-settings-plugins | 兼容与准确性修复 | P0 | ✅ 已完成 |
 | 5 | 补齐新错误码 CONTENT_REFUSED 本地化与计费处理 | 兼容与准确性修复 | P0 | ✅ 已完成 |
 | 6 | 升级辅助请求分类（LlmRequestPurposeMap） | 新增功能 | P0 | ✅ 已完成 |
-| 7 | 左侧栏入口尾部实时指标 | 新增功能 | P1 | ⏳ 待办 |
+| 7 | 左侧栏入口尾部实时指标 | 新增功能 | P1 | ✅ 已完成（需 0.2.3+ 宿主） |
 | 8 | 会话侧边面板用量速览分区 | 新增功能 | P1 | ⏳ 待办 |
 | 9 | 子会话表展示子代理语义名称与队友标识 | 新增功能 | P1 | ⏳ 待办 |
 | 10 | 侧栏会话行尾部费用微标 | 新增功能 | P2 | ⏳ 待办 |
@@ -135,11 +135,18 @@
 - `src/request-observe.ts` 的 `RequestObserver` 直接复用 `classifyAuxRequest(options)` 统一分类口径，`auto-review` 与 `timeline-report` 带 `sessionId` 时进入实时请求池并通过 `linkAuxAttempt()` 与持久行去重链接，同时在 `stats.ts` 计入对应会话总计；
 - 已更新 `README.md` / `README.zh.md` / `docs/DETAIL.md` / `docs/DETAIL.zh.md` 并补齐单测、客户端组件测试与端到端集成测试。
 
-### 7. 左侧栏入口尾部实时指标（sidebar.panellist.trailing）
+### 7. 左侧栏入口尾部实时指标（sidebar.panellist.trailing）✅ 已完成（需 0.2.3+ 宿主）
 
 **上游变更**：ui-sidebar 新增 `sidebar.panellist.trailing` 槽位（slots.ts），展开态平时贴合行尾显示计数/徽章，hover 时自动淡出让位给原生 unpin 按钮；折叠态显示在图标角标。
 
-**新增功能**：在侧栏 Token Usage 入口尾部直接展示今日费用（如 `¥12.4 / $1.8`）或今日 Token，无需切屏即可随时掌握当日消耗。
+**新增功能**：在侧栏 Token Usage 入口尾部直接展示今日总费用与今日总 Token，无需切屏即可随时掌握当日消耗。
+
+**落地情况**（决策记录：[2026-11-22-sidebar-trailing-today-badge.md](decisions/implemented/2026-11-22-sidebar-trailing-today-badge.md)）：
+
+- 以 `id: 'token-usage'` 注册 `sidebar.panellist.trailing`（本地 SlotMap 增强补齐 0.2.1 类型基线）；展开态渲染 `费用 · Token`（如 `12.40￥ · 1.2M`），折叠态只保留费用短格式（如 `12￥`），今日无请求时不渲染；
+- 今日总量复用 `/token-usage/stats` 的 `from`/`to` 过滤，并新增 whole-scope `fields=chip` 精简响应（只回 `total` / `totalCost` / `costState` / `currency` 等总量层），挂载即读 + 60s 轮询 + 页面可见时补拉，首读失败 15s 重试；
+- 宿主版本门槛：`0.2.2-rc.5` 的 ui-sidebar 尚未声明该槽位，实际声明出现在 master / `0.2.3-alpha.2`+；旧宿主上 `slots.inject` 不触发，入口保持原样，不报错；
+- 已补齐 whole-chip 路由测试、组件渲染/折叠/空数据/无定价/失败测试与注册降级测试。
 
 ### 8. 新增「会话侧边面板」用量速览分区（conversation.session.panel.section + indicator）
 
@@ -241,5 +248,6 @@
 - 已落地决策（#3）：[2026-11-22-summary-excluded-session-stats-timing-and-freshness.md](decisions/implemented/2026-11-22-summary-excluded-session-stats-timing-and-freshness.md)
 - 已落地决策（#5）：[2026-11-22-content-refused-billing-and-failure-codes.md](decisions/implemented/2026-11-22-content-refused-billing-and-failure-codes.md)
 - 已落地决策（#6）：[2026-11-22-llm-request-purpose-classification.md](decisions/implemented/2026-11-22-llm-request-purpose-classification.md)
+- 已落地决策（#7）：[2026-11-22-sidebar-trailing-today-badge.md](decisions/implemented/2026-11-22-sidebar-trailing-today-badge.md)
 - 已有提案：[docs/decisions/proposed/2026-10-27-web-search-call-records.md](decisions/proposed/2026-10-27-web-search-call-records.md)（#12 的落地基础）
 - 决策记录规范：[docs/decisions/README.md](decisions/README.md)（每项实施时逐项建 ADR）

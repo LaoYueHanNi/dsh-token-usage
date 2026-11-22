@@ -37,6 +37,18 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
      * A bundle's own configuration on the Plugins page, keyed by package name.
      */
     'plugins.bundle.config': { kind: 'keyed'; scope: 'root'; owner: { readonly view: 'summary' | 'page' } }
+    /**
+     * Inline content at the end of a pinned panel row (ui-sidebar 0.2.3+ /
+     * master). The plugin's compile-time shell baseline predates the seat, so
+     * the contract is merged here; drop this block once the devDependency
+     * baseline declares it itself.
+     */
+    'sidebar.panellist.trailing': {
+      kind: 'list'
+      scope: 'root'
+      inline: true
+      owner: { wide: boolean; active: boolean }
+    }
   }
 }
 // Type-only: pulls the ui-conversation SlotMap merge ('conversation.view')
@@ -71,6 +83,7 @@ import { CostPill } from './CostPill.tsx'
 import { PanellistMoreEntry } from './PanellistMoreEntry.tsx'
 import { PanellistPinEntry } from './PanellistPinEntry.tsx'
 import { QuotaButton, type ModelSelectionSource } from './QuotaButton.tsx'
+import { SidebarTrailing } from './SidebarTrailing.tsx'
 import { TokenUsageCard } from './TokenUsageCard.tsx'
 import { TokenUsageSection } from './TokenUsageSection.tsx'
 import { UsagePanelPage } from './UsagePanelPage.tsx'
@@ -210,6 +223,18 @@ export function apply(ctx: ClientContext): void {
     locale: NS,
     inject: () => ({ sessionListed, openSession, returnToConversation: () => selectMainPanel(null) }),
   }, UsagePanelPage))
+
+  // The pinned row's trailing badge: today's cost · token parked at the end
+  // of the Token Usage navigation row. `sidebar.panellist.trailing` is
+  // declared by ui-sidebar 0.2.3+ / master; an older shell never runs this
+  // inject callback, so the pinned row keeps its plain title-only look. The
+  // registration is independent of the pin setting — the shell only renders
+  // it while the row itself exists (i.e. while the entry is pinned).
+  ctx.slots.inject('sidebar.panellist.trailing', () => ctx.slots.register({
+    name: 'sidebar.panellist.trailing',
+    id: USAGE_PANEL_ID,
+    order: 50,
+  }, SidebarTrailing))
 
   // The Usage view tab: one entry of the conversation view ring (beside the
   // built-in Chat tab and the Trajectory tab from ui-trajectory, rendered
