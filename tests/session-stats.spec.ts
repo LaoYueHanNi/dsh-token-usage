@@ -108,6 +108,16 @@ describe('resolveHeaderTiming', () => {
       totalPerf: { perfStreamCount: 2, perfStreamFirstMsSum: 900, perfStreamTpsSum: 160 },
     })).toEqual({ ttftMs: 450, tokensPerSec: 80 })
   })
+
+  it('never mixes TTFT from one source with throughput from a fallback source', () => {
+    const ttftOnlyLive = { turns: 1, steps: 1, llmMs: 200, toolMs: 0, ttftMs: 120, ttftSteps: 1, decodeMs: 0, decodeTokens: 0 }
+    expect(resolveHeaderTiming({
+      isSoloActive: true,
+      liveStats: ttftOnlyLive,
+      mirrorAggregate: undefined,
+      serverTiming: server,
+    })).toEqual({ ttftMs: 120 })
+  })
 })
 
 describe('directSubagentIds', () => {

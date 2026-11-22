@@ -232,7 +232,7 @@ export const PERF_STREAM_MIN_GEN_MS = 500
  * optional figures keep a malformed row out of the means.
  */
 function addUsage(totals: UsageTotals, record: UsageRecord): void {
-  if (record.kind === 'failure') {
+  if (record.kind === 'failure' || record.failureCode !== undefined) {
     totals.failures = (totals.failures ?? 0) + 1
     const code = record.failureCode ?? 'UNKNOWN'
     const byCode = totals.failuresByCode ?? {}
@@ -574,7 +574,7 @@ export function requestSeriesOf(
   canonical?: ReadonlyMap<string, string>,
 ): RequestPoint[] {
   return filterRecordsByRange(records, undefined, dayRangeFilter(from, to, model, canonical))
-    .filter(record => record.kind !== 'failure' || record.usage !== undefined)
+    .filter(record => (record.kind !== 'failure' && record.failureCode === undefined) || record.usage !== undefined)
     .map(record => ({
       time: record.time,
       tokens: record.usage === undefined ? 0
@@ -902,7 +902,8 @@ export function attachCosts(
         const byModel = [...cell.byModel.entries()]
           .map(([model, value]) => ({ model, totals: value.totals, cost: value.cost }))
           .sort((left, right) =>
-            right.totals.requests - left.totals.requests || left.model.localeCompare(right.model))
+            (right.totals.requests + (right.totals.failures ?? 0)) - (left.totals.requests + (left.totals.failures ?? 0))
+              || left.model.localeCompare(right.model))
         return { auxKind: kind, totals: cell.totals, cost: cell.cost, byModel }
       }),
   }

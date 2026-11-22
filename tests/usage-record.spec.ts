@@ -701,4 +701,18 @@ describe('refusal failure billing (extractUsageFromStream & failure usage)', () 
     })
     expect(parseRecord(serializeRecord(row!))).toEqual(row)
   })
+
+  it('preserves failureCode on billed refused aux rows across JSONL round-trip', () => {
+    const auxRefused = {
+      requestId: 'aux:session-title:1:1',
+      time: 1000,
+      sessionId: 's1',
+      model: 'deepseek-chat',
+      kind: 'aux' as const,
+      auxKind: 'session-title' as const,
+      failureCode: 'CONTENT_REFUSED',
+      usage: { inputTokens: 80, outputTokens: 10 },
+    }
+    expect(parseRecord(serializeRecord(auxRefused))).toEqual(auxRefused)
+  })
 })

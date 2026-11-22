@@ -24,8 +24,8 @@ Status: implemented
   - `llm/retry`：每一次调度重试的失败尝试都记（插件在等待前写入，退避中取消仍算那一次已失败的尝试）。`llm/retry-started` 是等待完成标记，忽略。
   - `turn/end` 且 `reason.kind === 'error'`：终态失败。`aborted` / `max-tokens` / `blocked` / `interrupted` 全部跳过。
   - 耗尽：N 次 `llm/retry` + 1 次 `turn/end` error，合计 N+1。救回：N 次 `llm/retry` + 1 次成功 `assistant/message`，`failures` 与 `requests` 不重叠。
-- 无 usage。`model` 取会话最后已知路由（`modelOfEvent` 跟 `request/context` 与 `assistant/message`）；从未观察到路由时为 `''`——该行进总数、byDay、rateRows（日筛选不丢数），**不进 byModel / byHour**（空白表行会假装我们知道归属）。
-- `failureCode` 取 `LlmFailure.code`（开放集合：可重试五码 + 常见终态码 + `UNKNOWN`，`fail.*` 文案覆盖的码集合见 `src/client/format.ts` 的 `FAILURE_CODE_LABEL_KEYS`）。`coerceRecord` 只在 failure 行保留；非字符串/空串省略，聚合时缺码归 `UNKNOWN`。
+- 可选携带 refusal 前计费 `usage`（常规失败无 usage）。`model` 取会话最后已知路由（`modelOfEvent` 跟 `request/context` 与 `assistant/message`）；从未观察到路由时为 `''`——该行进总数、byDay、rateRows（日筛选不丢数），**不进 byModel / byHour**（空白表行会假装我们知道归属）。
+- `failureCode` 取 `LlmFailure.code`（开放集合：可重试五码 + 常见终态码 + `UNKNOWN`，`fail.*` 文案覆盖的码集合见 `src/client/format.ts` 的 `FAILURE_CODE_LABEL_KEYS`）。`coerceRecord` 在 `failure` 行及带 `failureCode` 的 `aux` 行保留该字段；非字符串/空串省略，聚合时缺码归 `UNKNOWN`。
 - `recordOfEvent` 是 live 监听与 `syncHistory` 共用的投影入口，避免新源只落一条路径。
 
 ### 2. 采集路径
@@ -34,16 +34,16 @@ Status: implemented
 
 ### 3. 统计口径（`wire.ts` / `stats.ts`）
 
-- `UsageTotals.failures` / `failuresByCode` 可选；`requests` 收紧为成功请求数。`addUsage` 对 failure 行直接 return，不进 token 桶。
+- `UsageTotals.failures` / `failuresByCode` 可选；`requests` 收紧为成功请求数。`addUsage` 对 `failure` 行及带 `failureCode` 的行计入 `failures`、不进 `requests` 与 timing，若带 `usage` 则累加四桶 token 进账本。
 - `emptyTotals()` 显式 `failures: 0`；`addTotals` 以 `?? 0` 合并，`failuresByCode` 键级合并、惰性创建。旧 rollup 无迁移。
-- `requestSeriesOf` 排除失败行（没有 token，画出来只是零点锯齿）。
+- `requestSeriesOf` 仅排除无 `usage` 的失败行，避免零点锯齿。
 - 空态判定：`requests === 0 && failures === 0`。全程失败的会话仍渲染统计带。
 
 ### 4. 客户端展示
 
 - `RequestsStatCard` 两处表面共用：标签 `stat.requests`（成功请求数），主数字是成功数，右侧胶囊 `stat.failuresPill`（`失败 {count}` / `Failed {count}`）。
 - 零失败不渲染胶囊（`FailurePill` 在 `failures === 0` 时返回 `null`）：多数会话/模型本来没有失败，灰「失败 0」占位把「没有失败」读成一个需要扫视的状态。有失败时可键盘聚焦。
-- Tooltip 包卡片胶囊，以及表里的红色 B。`failuresTooltip` 每行 `含义 ×count`，已知码走 `fail.{CODE}`（限流 / Rate limited 等十七对，2026-09-05 补 `INVALID_REQUEST`/`AUTH`/`MISSING_CREDENTIAL`/`ABORTED`/`REQUEST_EXTENSION`/`FILES_API`/`STREAM_CLOSED`/`MALFORMED_RESPONSE`），未知码原文兜底。排序：计数降序、码名字升序破平。
+- Tooltip 包卡片胶囊，以及表里的红色 B。`failuresTooltip` 每行 `含义 ×count`，已知码走 `fail.{CODE}`（现已覆盖 33 对内置码），未知码原文兜底。排序：计数降序、码名字升序破平。
 - `FailurePill` 只给成功请求卡。**两处按模型表**（用量 tab、设置页 Token 用量）该列不用胶囊，改三轨网格：左 `minmax(0,1fr)` 成功数右对齐、中 `/`、右失败数左对齐且错误色，斜杠落在列几何中线、行行对齐；`B === 0` 只打印成功数、不画 `/` 与 `0`（仍走左轨，与有失败的行对齐）；`B > 0` 可 hover / 聚焦。胶囊在密排数字列里与入/出/费用列不齐，hover 气泡还被单元格挤窄。表头同一套三轨 `成功 / 失败`（`stat.ok` / `stat.fail`），`aria-label` 仍是 `stat.successFail`。单元格仍读该行自己的 `totals.failures` / `failuresByCode`。子会话表不加失败列。
 
 > [!NOTE]

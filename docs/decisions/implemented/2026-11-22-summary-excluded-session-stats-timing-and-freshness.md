@@ -18,7 +18,7 @@ DSH `0.2.2-alpha.2`（`projection-snapshot-scope`）将 `sessionStats` 标记为
    - [wire.ts](../../../src/wire.ts) 在 `fields=session` 的 `StatsPayload`（与 `UsageSummary`）新增可选字段 `timing?: ChildTiming`；
    - [stats-route.ts](../../../src/stats-route.ts) 在 `fields !== 'chip'` 时复用已过滤好的 `scoped` 记录计算 `aggregateRequestTiming(scoped)`（零额外磁盘扫描，与 `children[id].timing` 同源同口径）；`fields=chip` 保持精简不下发。
 2. **前端分层解析与宿主统一**：
-   [session-stats.ts](../../../src/client/session-stats.ts) 新增 `resolveHeaderTiming` 与 `aggregateScopedProjections`（将遗留 `projectionValues?.sessionStats` 访问收口在内部结构切片中，兼容 `0.2.2+` 从类型中移除该键）：
+   [session-stats.ts](../../../src/client/session-stats.ts) 新增 `resolveHeaderTiming` 与 `aggregateScopedProjections`（将遗留 `projectionValues?.sessionStats` 访问收口在内部结构切片中，兼容 `0.2.2+` 从类型中移除该键）。`resolveHeaderTiming` 按候选来源**整块优先**（只要当前来源存在任意一项有效计时指标即锁定该来源，不跨来源混拼 TTFT 与吞吐）：
    - **当前单会话自身**（`scope === 'session' && focusId === sessionId`）：继续优先读 `liveStats`（`useProjection('sessionStats')`），缺失时回退服务端 `summary.timing`，完全不改变单会话既有行为。
    - **含子代理（`scope === 'tree'`）或钻取子会话（`focusId !== sessionId`）**：优先读服务端 `summary.timing`（与宿主公式及子会话表行保持一致）；仅当旧后端未下发 `summary.timing` 或 `history-incomplete` 降级时，依次回退旧宿主摘要投影与 `summary.total.perfStream*`。
    - 同步更新 [locales.ts](../../../src/client/locales.ts) 中 `view.note` 的中英文口径说明。

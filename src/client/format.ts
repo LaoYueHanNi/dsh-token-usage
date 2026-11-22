@@ -317,6 +317,20 @@ function failureCodeLabel(code: string, t: TranslateNS<'token-usage'>): string {
 
 /**
  * The overhead pill's hover tooltip text: one `label ×count` line per
+/**
+ * Total auxiliary (bypass) call count: completed requests plus recorded
+ * failures (for example `CONTENT_REFUSED` aux calls that billed before
+ * refusal). Kept shared so the overhead pill, card rows, tooltip and detail
+ * tab gate stay aligned.
+ * @param totals - the totals bucket (usually `aux.total` or a kind row's totals).
+ * @returns completed requests plus failures (treating absent failures as 0).
+ */
+export function auxCallCount(totals: Pick<UsageTotals, 'requests' | 'failures'>): number {
+  return totals.requests + (totals.failures ?? 0)
+}
+
+/**
+ * Multi-line tooltip text for the overview card's `OverheadPill`: one line per
  * auxiliary kind, count descending, newline-joined — the same shape as
  * {@link failuresTooltip}. An absent breakdown yields '' and the caller
  * suppresses the tooltip (the pill itself still shows its count).
@@ -331,8 +345,8 @@ export function overheadTooltip(
 ): string {
   if (byKind === undefined) return ''
   return byKind
-    .filter(row => row.totals.requests > 0)
-    .sort((left, right) => right.totals.requests - left.totals.requests)
-    .map(row => `${t(`aux.kind.${row.auxKind}`)} ×${row.totals.requests.toLocaleString()}`)
+    .filter(row => auxCallCount(row.totals) > 0)
+    .sort((left, right) => auxCallCount(right.totals) - auxCallCount(left.totals))
+    .map(row => `${t(`aux.kind.${row.auxKind}`)} ×${auxCallCount(row.totals).toLocaleString()}`)
     .join('\n')
 }

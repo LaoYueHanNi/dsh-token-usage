@@ -1324,6 +1324,48 @@ describe('MenuSelect', () => {
     expect(close).not.toHaveBeenCalled()
     expect(screen.getByRole('alert').textContent).toBe('该会话所属工作区已删除，无法跳转')
   })
+
+  it('keeps the detail panel and runtime-overhead tab visible when aux only has billed failures', async () => {
+    const refusedAuxTotals = {
+      requests: 0,
+      inputTokens: 120,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      failures: 1,
+      failuresByCode: { CONTENT_REFUSED: 1 },
+    }
+    const auxOnlyFailureSummary: UsageSummary = {
+      ...SUMMARY,
+      total: refusedAuxTotals,
+      totalCost: 0.01,
+      byModel: [],
+      byProvider: [],
+      sessionRows: [],
+      rateRows: [],
+      aux: {
+        total: refusedAuxTotals,
+        cost: 0.01,
+        byKind: [{
+          auxKind: 'auto-review',
+          totals: refusedAuxTotals,
+          cost: 0.01,
+          byModel: [{ model: 'deepseek-flash', totals: refusedAuxTotals, cost: 0.01 }],
+        }],
+      },
+    }
+    stubFetch(async () => Response.json(auxOnlyFailureSummary))
+    render(<TokenUsageSection close={() => {}} t={t} />)
+
+    const overheadTab = await screen.findByRole('button', { name: t('aux.tab') })
+    expect(screen.getByRole('button', { name: t('stat.overheadPill', { count: '1' }) })).toBeTruthy()
+    fireEvent.click(overheadTab)
+
+    const list = await screen.findByRole('list', { name: t('aux.tab') })
+    expect(within(list).getByText('自动审查')).toBeTruthy()
+    expect(within(list).getByText('deepseek-flash')).toBeTruthy()
+    expect(screen.getByText(t('aux.totalCount', { count: '1' }))).toBeTruthy()
+  })
 })
 
 /** Resolve once the stubbed fetch has been called `count` times. */

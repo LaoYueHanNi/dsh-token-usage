@@ -19,8 +19,8 @@ Status: implemented
 > 本决策中「顶部卡片仅用框架 `sessionStats` 投影、`freshnessKey` 依赖子会话 `sessionStats`」的部分，已于 2026-11-22 由 [DR: 适配 sessionStats 移出摘要：同口径服务端 timing 与 tokenUsage 刷新感知](../implemented/2026-11-22-summary-excluded-session-stats-timing-and-freshness.md) 部分取代：在 DSH 0.2.2+ 下，树模式与钻取子会话顶部计时改由服务端 `fields=session` 下发的同口径 `timing` 提供，`freshnessKey` 改由摘要 `tokenUsage` 感知子代理更新。
 
 - **计时数据源改为服务端**：`wire.ts` 的 `ChildUsageSummary` 新增 `timing?`（`ChildTiming`：ttftMs / ttftSteps / decodeMs / decodeTokens）。`stats.ts` 新增 `aggregateRequestTiming`：优先用 `attemptTiming.firstTokenAt → settledAt`，缺失时退回 `latencyMs - firstTokenLatencyMs`；只纳入有首 token、正输出 token、正 decode 窗口的记录（与请求池 `settledSpeedOf` 的护栏一致，避免非流式响应算出虚高 tok/s）。`childBreakdown` 在已有的一次遍历分桶里顺手折叠，不额外扫日志；`UsageView` 子会话行改读 `row.timing`，不再读镜像投影。
-- **口径显式分开**：顶部卡片的 TTFT / 速度仍用框架 `sessionStats` 投影（含安装前历史）；子会话表的这两项只覆盖插件安装后、有计时的记录。`view.note` 中英注脚同步改写，不再笼统声称两列都来自投影。
-- **去重挂载时的重复请求**：`UsageView` 与 `CostPill` 各持一个 `recentRef`，记录上次成功结果及其 `scopeKey` / `idsKey` / `retryToken` / `pollTick` / `associationTick`。**仅当 id 集合发生变化（镜像晚到）**，且范围、重试、轮询、定价关联变更等意图都未变、距上次成功不足两个防抖窗、且该范围尚未复用过时，第二次 effect 直接复用上次结果，不发 HTTP；每个范围最多复用一次。真实请求完成（`sessionStats` / `updatedAt` 变化但 id 集合不变）、切换范围、点重试、轮询、关联变更一律正常发请求。不改 `useAsyncResource`：去重是两个浏览器消费者的局部策略，通用 hook 的取消 / 静默语义保持不变。
+- **口径显式分开**：当前单会话顶部卡片的 TTFT / 速度优先用框架 `sessionStats` 投影（缺失时退回服务端 `summary.timing`），「含子会话」、钻取子会话与子会话表采用服务端从插件计时记录派生的同口径 `timing`。`view.note` 中英注脚同步改写，不再笼统声称全部来自投影。
+- **去重挂载时的重复请求**：`UsageView` 与 `CostPill` 各持一个 `recentRef`，记录上次成功结果及其 `scopeKey` / `idsKey` / `retryToken` / `pollTick` / `associationTick`。**仅当 id 集合发生变化（镜像晚到）**，且范围、重试、轮询、定价关联变更等意图都未变、距上次成功不足两个防抖窗、且该范围尚未复用过时，第二次 effect 直接复用上次结果，不发 HTTP；每个范围最多复用一次。真实请求完成（`tokenUsage` / `sessionStats` / `updatedAt` 变化但 id 集合不变）、切换范围、点重试、轮询、关联变更一律正常发请求。不改 `useAsyncResource`：去重是两个浏览器消费者的局部策略，通用 hook 的取消 / 静默语义保持不变。
 
 ## Alternatives considered
 

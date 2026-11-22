@@ -126,6 +126,25 @@ describe('providerLabel', () => {
 })
 
 describe('overheadTooltip', () => {
+  it('includes refused billed aux failures alongside successful calls', () => {
+    expect(overheadTooltip([
+      {
+        auxKind: 'session-title',
+        totals: { requests: 0, failures: 2, inputTokens: 20, outputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 0 },
+        cost: 0.01,
+        byModel: [],
+      },
+      {
+        auxKind: 'auto-review',
+        totals: { requests: 1, inputTokens: 10, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0 },
+        cost: 0.005,
+        byModel: [],
+      },
+    ], t)).toBe('标题生成 ×2\n自动审查 ×1')
+  })
+})
+
+describe('overheadTooltip', () => {
   it('localizes every AuxKind including timeline-report in zh and en', () => {
     const byKind = [
       { auxKind: 'auto-review' as const, totals: { requests: 2, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }, cost: 0, byModel: [] },

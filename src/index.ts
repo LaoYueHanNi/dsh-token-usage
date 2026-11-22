@@ -900,6 +900,7 @@ export function apply(ctx: Context, config: Config = {}) {
                 ...(sessionId !== undefined ? { sessionId } : {}),
                 ...(responseModel !== undefined ? { responseModel } : {}),
                 ...(usage !== undefined ? { usage } : {}),
+                ...(refusedBilled && failure !== undefined ? { failureCode: failure.code } : {}),
                 ...(options.provider !== undefined && options.provider !== '' ? { provider: options.provider } : {}),
               })
               if (row.provider !== undefined) rememberProviderNames([row.provider])

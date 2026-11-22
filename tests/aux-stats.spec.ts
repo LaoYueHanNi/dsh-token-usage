@@ -344,4 +344,42 @@ describe('rollup auxiliary dimension', () => {
       ['timeline-report', 2],
     ])
   })
+
+  it('counts refused billed aux rows under failures instead of requests across total, model, session, and aux', () => {
+    const at = day(1, 15, 10)
+    const records: UsageRecord[] = [
+      request(at, 'deepseek-chat', { input: 500_000, output: 100_000 }, 's1'),
+      {
+        requestId: 'aux:session-title:1:1',
+        time: at + 1_000,
+        sessionId: 's1',
+        model: 'deepseek-chat',
+        kind: 'aux',
+        auxKind: 'session-title',
+        failureCode: 'CONTENT_REFUSED',
+        usage: { inputTokens: 500_000, outputTokens: 100_000 },
+      },
+    ]
+    const pricing: PricingTable = {
+      'deepseek-chat': {
+        base: { inputPerMillion: 2, outputPerMillion: 3 },
+        contextTiers: [],
+        dailySlots: [],
+        timeRules: [],
+      },
+    }
+    const costed = attachCosts({ dataDir: '/tmp', ...summarizeRecords(records) }, pricing)
+    expect(costed.total.requests).toBe(1)
+    expect(costed.total.failures).toBe(1)
+    expect(costed.total.failuresByCode).toEqual({ CONTENT_REFUSED: 1 })
+    expect(costed.total.inputTokens).toBe(1_000_000)
+    expect(costed.total.outputTokens).toBe(200_000)
+    expect(costed.totalCost).toBeCloseTo(2.6, 6)
+    expect(costed.bySession[0]!.totals.requests).toBe(1)
+    expect(costed.bySession[0]!.totals.failures).toBe(1)
+    expect(costed.aux.total.requests).toBe(0)
+    expect(costed.aux.total.failures).toBe(1)
+    expect(costed.aux.byKind[0]!.totals.failuresByCode).toEqual({ CONTENT_REFUSED: 1 })
+    expect(costed.aux.cost).toBeCloseTo(1.3, 6)
+  })
 })

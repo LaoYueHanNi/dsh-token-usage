@@ -298,11 +298,13 @@ describe('auxiliary request recording', () => {
       kind: 'aux',
       auxKind: 'session-title',
       sessionId: 'session-refused',
+      failureCode: 'CONTENT_REFUSED',
       usage: { inputTokens: 88, outputTokens: 12, cacheReadTokens: 32 },
     })
     expect(rows[1]).toMatchObject({
       kind: 'aux',
       auxKind: 'auto-review',
+      failureCode: 'CONTENT_REFUSED',
       usage: { inputTokens: 55, outputTokens: 9 },
     })
   })

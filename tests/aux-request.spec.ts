@@ -153,6 +153,23 @@ describe('recordFromAuxRequest', () => {
       model: 'deepseek-flash', provider: '',
     })).toBe(false)
   })
+
+  it('retains optional failureCode for billed refused auxiliary calls', () => {
+    const row = recordFromAuxRequest({
+      auxKind: 'session-title',
+      requestId: 'aux:session-title:1:9',
+      time: 1,
+      model: 'deepseek-flash',
+      usage: { inputTokens: 20, outputTokens: 3 },
+      failureCode: 'CONTENT_REFUSED',
+    })
+    expect(row).toMatchObject({
+      kind: 'aux',
+      auxKind: 'session-title',
+      failureCode: 'CONTENT_REFUSED',
+      usage: { inputTokens: 20, outputTokens: 3 },
+    })
+  })
 })
 
 describe('aux row parsing', () => {

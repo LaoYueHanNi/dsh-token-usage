@@ -16,7 +16,7 @@ import type { AuxKind, AuxSummary, CostState } from '../wire.ts'
 import { costsAvailable } from './PricingStatus.tsx'
 import { totalTokens } from './day.ts'
 import type { CurrencyView } from './format.ts'
-import { formatCost, formatTokens } from './format.ts'
+import { auxCallCount, formatCost, formatTokens } from './format.ts'
 import list from './UsageRows.module.css'
 import styles from './OverheadRows.module.css'
 
@@ -48,7 +48,7 @@ export function OverheadRows({ aux, costState, view, t }: {
       return next
     })
   }
-  if (aux === undefined || aux.total.requests === 0) {
+  if (aux === undefined || auxCallCount(aux.total) === 0) {
     return <p className={styles['muted']}>{t('aux.empty')}</p>
   }
   const costText = (cost: number): string =>
@@ -87,7 +87,7 @@ export function OverheadRows({ aux, costState, view, t }: {
                   {t(`aux.kind.${kindRow.auxKind}`)}
                 </button>
                 <span className={styles['onums']}>
-                  {t('aux.requestCount', { count: kindRow.totals.requests.toLocaleString() })}
+                  {t('aux.requestCount', { count: auxCallCount(kindRow.totals).toLocaleString() })}
                   {' · '}
                   <span className={styles['onumsCost']}>{costText(kindRow.cost)}</span>
                   {' · '}
@@ -99,7 +99,7 @@ export function OverheadRows({ aux, costState, view, t }: {
                   <div className={styles['adetail']}>
                     {(kindRow.byModel ?? []).map(modelRow => (
                       <span key={`${kindRow.auxKind}:${modelRow.model}`}>
-                        {modelLine(modelRow.model, modelRow.totals.requests, modelRow.cost, totalTokens(modelRow.totals))}
+                        {modelLine(modelRow.model, auxCallCount(modelRow.totals), modelRow.cost, totalTokens(modelRow.totals))}
                       </span>
                     ))}
                   </div>
@@ -110,7 +110,7 @@ export function OverheadRows({ aux, costState, view, t }: {
         })}
       </div>
       <div className={styles['asum']}>
-        <span>{t('aux.totalCount', { count: aux.total.requests.toLocaleString() })}</span>
+        <span>{t('aux.totalCount', { count: auxCallCount(aux.total).toLocaleString() })}</span>
         <span>
           <span className={styles['onumsCost']}>{costText(aux.cost)}</span>
           {' · '}
