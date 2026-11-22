@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
-import { currencyViewOf, failuresTooltip, formatCost, formatRate, formatRateWithSymbol, providerLabel } from '../src/client/format.ts'
+import { currencyViewOf, failuresTooltip, formatCost, formatRate, formatRateWithSymbol, overheadTooltip, providerLabel } from '../src/client/format.ts'
 import { en, zh } from '../src/client/locales.ts'
 
 const t = ((key: string): string => (zh as Record<string, string>)[key] ?? key) as TranslateNS<'token-usage'>
@@ -122,5 +122,16 @@ describe('providerLabel', () => {
 
   it('treats an empty registry entry as no name', () => {
     expect(providerLabel('zai-coding-cn', { 'zai-coding-cn': '' })).toBe('zai-coding-cn')
+  })
+})
+
+describe('overheadTooltip', () => {
+  it('localizes every AuxKind including timeline-report in zh and en', () => {
+    const byKind = [
+      { auxKind: 'auto-review' as const, totals: { requests: 2, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }, cost: 0, byModel: [] },
+      { auxKind: 'timeline-report' as const, totals: { requests: 3, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }, cost: 0, byModel: [] },
+    ]
+    expect(overheadTooltip(byKind, t)).toBe('时间线报告 ×3\n自动审查 ×2')
+    expect(overheadTooltip(byKind, tEn)).toBe('Timeline reports ×3\nAuto review ×2')
   })
 })

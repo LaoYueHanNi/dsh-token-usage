@@ -123,4 +123,25 @@ describe('OverheadRows', () => {
     }
     expect(screen.queryByText(formatCost(0.1, VIEW))).toBeNull()
   })
+
+  it('renders timeline-report rows using its localized category label', () => {
+    const timelineAux: AuxSummary = {
+      total: totals(1, 40, 8),
+      cost: 0.05,
+      byKind: [
+        {
+          auxKind: 'timeline-report',
+          totals: totals(1, 40, 8),
+          cost: 0.05,
+          byModel: [
+            { model: 'deepseek-chat', totals: totals(1, 40, 8), cost: 0.05 },
+          ],
+        },
+      ],
+    }
+    render(<OverheadRows aux={timelineAux} costState="ready" view={VIEW} t={t} />)
+    const list = screen.getByRole('list', { name: zh['aux.tab'] })
+    expect(within(list).getByRole('button', { name: zh['aux.kind.timeline-report'] })).toBeTruthy()
+    expect(within(list).getByText('deepseek-chat')).toBeTruthy()
+  })
 })

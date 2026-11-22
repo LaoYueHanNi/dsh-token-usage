@@ -40,8 +40,8 @@ export interface UsageFields {
  * attempt that `dsh-llm-retry` scheduled a retry for — counted in its own
  * `failures` dimension, never in `requests`), or an auxiliary request (a
  * bypass model call that is not part of the conversation turn: the Auto
- * review authorization gate, session-title generation, or reasoning
- * translation).
+ * review authorization gate, session-title generation, timeline report
+ * generation, or reasoning translation).
  */
 export type UsageRecordKind = 'request' | 'compaction' | 'failure' | 'aux'
 
@@ -52,20 +52,22 @@ export type UsageRecordKind = 'request' | 'compaction' | 'failure' | 'aux'
  * on the `llm/stream` waterfall instead:
  *
  * - `auto-review` — the per-tool-call authorization reviewer of
- *   `@deepseek-ai/dsh-experimental-auto-review`.
+ *   `@deepseek-ai/dsh-experimental-auto-review` (`purpose: 'auto-review'` on
+ *   current hosts; `REVIEW_POLICY` prompt prefix fallback on older hosts).
  * - `session-title` — the logged `session/title-llm-request` generation
  *   (`purpose: 'session-title'` on the request).
+ * - `timeline-report` — timed progress report synthesis of
+ *   `@deepseek-ai/dsh-experimental-timeline` (`purpose: 'timeline-report'`).
  * - `translation` — the reasoning/CoT translator
  *   (`@deepseek-ai/dsh-experimental-translator`).
- * - `other` — any other unmarked bypass request. A defensive bucket: DSH
- *   gives Auto review and the translator no purpose marker, so their
- *   identification is prompt-text based and a host upgrade can move them
- *   here without dropping the usage data.
+ * - `other` — any other unmarked or unrecognized-purpose bypass request. A
+ *   defensive bucket: a host upgrade adding a new purpose or changing an
+ *   unmarked prompt lands here without dropping the usage data.
  */
-export type AuxKind = 'auto-review' | 'session-title' | 'translation' | 'other'
+export type AuxKind = 'auto-review' | 'session-title' | 'timeline-report' | 'translation' | 'other'
 
 /** Every auxiliary kind, in the fixed display order the tables use. */
-export const AUX_KINDS: readonly AuxKind[] = ['auto-review', 'session-title', 'translation', 'other']
+export const AUX_KINDS: readonly AuxKind[] = ['auto-review', 'session-title', 'timeline-report', 'translation', 'other']
 
 /**
  * Whether a raw JSONL row's `kind` field belongs to session-log-derived
@@ -85,7 +87,7 @@ export interface UsageRecord {
   /** Session-event wall time, epoch milliseconds. */
   time: number
   /** Owning session id; '' for an auxiliary row whose host call cannot be
-   * attributed safely (for example Auto review on older hosts). */
+   * attributed safely (for example translation or Auto review on older hosts). */
   sessionId: string
   /** Provider model id that produced the message; a failure row carries the
    * session's last-known route model ('' when none was ever observed). */

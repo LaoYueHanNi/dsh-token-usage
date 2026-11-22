@@ -569,7 +569,8 @@ export interface UsageRateRow {
 
 /**
  * One per-(kind, day, model, rate) aggregation row of the auxiliary (bypass)
- * model requests: Auto review, session-title generation, and translation.
+ * model requests: Auto review, session-title generation, timeline report
+ * synthesis, and translation.
  * These calls are not part of any conversation turn. The auxiliary dimension
  * intentionally stays keyed only by kind/day/model/rate even when a newer
  * host supplies an owning session id; that keeps the settings page's
@@ -701,10 +702,10 @@ export interface TokenSummary {
    * rereading files, and re-price history under the current table. */
   rateRows: UsageRateRow[]
   /** Per-(kind, day, model, rate) rows of the auxiliary bypass requests
-   * (Auto review / session title / translation / other). Their usage also
-   * folds into the totals, byDay, byHour, byModel, rateRows, and recent
-   * window; this dimension only backs the runtime-overhead breakdown.
-   * A summary read without raw history carries an empty list. */
+   * (Auto review / session title / timeline report / translation / other).
+   * Their usage also folds into the totals, byDay, byHour, byModel, rateRows,
+   * and recent window; this dimension only backs the runtime-overhead
+   * breakdown. A summary read without raw history carries an empty list. */
   auxRows: UsageAuxRow[]
   /** Per-session × per-day × per-model × per-rate rows, session then day
    * then model then rate ascending; the settings page's session table folds
@@ -908,7 +909,8 @@ export interface RequestDetailView {
   state: RequestDetailState
   kind: 'request' | 'compaction' | 'failure' | 'aux'
   /** Auxiliary subtype when the host proved this request belongs to the
-   * current session (for example `session-title`). */
+   * current session (for example `session-title`, `auto-review`, or
+   * `timeline-report`). */
   auxKind?: AuxKind
   /** Plain-request rows only: the compaction events (prune clusters and
    * summaries) that landed since the session's previous plain request — the

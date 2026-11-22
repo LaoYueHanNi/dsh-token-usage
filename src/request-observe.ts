@@ -38,16 +38,17 @@
  *   the window's compaction attempt is the summarized one). `turn/end`
  *   resolves whatever the stream never did.
  * - Compaction summarize calls carry `purpose: 'compaction'` and the owning
- *   session id but no step. Title calls carry their owning session id on
- *   current hosts and enter the pool as `aux`; unowned review/translation
- *   calls stay out because the stats route cannot safely attribute them.
+ *   session id but no step. Host-attributed auxiliary calls (session-title,
+ *   auto-review, timeline-report, or future purpose-marked bypass calls
+ *   carrying `sessionId`) enter the pool as `aux`; unowned bypass calls
+ *   stay out because the stats route cannot safely attribute them.
  *
  * @module token-usage/request-observe
  */
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
-import type { StreamChunk, TokenUsage } from '@deepseek-ai/dsh-llm'
+import type { GenerateOptions, StreamChunk, TokenUsage } from '@deepseek-ai/dsh-llm'
 // Type-only: pull the declaration-merged `llm/retry` and `compaction/*`
 // event payloads into this program, so the settlement-linking handlers below
 // can name `SessionEvent<'llm/retry'>` and the compaction types.
@@ -55,7 +56,7 @@ import type {} from '@deepseek-ai/dsh-llm-retry/types'
 import type {} from '@deepseek-ai/dsh-compaction/types'
 import type { AuxKind } from './usage-record.ts'
 import { isTokenDelta, type UsageFields, type UsageRecord } from './usage-record.ts'
-import { AUTO_REVIEW_PROMPT_PREFIX } from './aux-request.ts'
+import { classifyAuxRequest } from './aux-request.ts'
 import { isOwnSessionEvent } from './sync.ts'
 import type { ConversationStatus, RequestDetailState } from './wire.ts'
 
@@ -164,7 +165,7 @@ export class RequestObserver {
   attachLlm(llmCtx: Context): () => void {
     const dispose = llmCtx.on('llm/stream', (options, next) => {
       if (this.disposed) return next()
-      return this.observe(options as { sessionId?: string; purpose?: string; provider: string; model: string; signal?: AbortSignal }, next)
+      return this.observe(options, next)
     })
     this.disposers.push(dispose)
     return dispose
@@ -243,8 +244,9 @@ export class RequestObserver {
   }
 
   /** Link a successful, host-attributed auxiliary stream to the id used by
-   * the JSONL recorder. Title requests are observed by both listeners and
-   * have no session event to provide a durable id of their own. */
+   * the JSONL recorder. Attributed auxiliary requests (session-title,
+   * auto-review, timeline-report) are observed by both listeners and have no
+   * session event to provide a durable id of their own. */
   linkAuxAttempt(input: {
     sessionId: string
     auxKind: AuxKind
@@ -485,20 +487,20 @@ export class RequestObserver {
    * waterfall chain keeps its synchronous shape.
    */
   private observe(
-    options: { sessionId?: string; purpose?: string; system?: string; provider: string; model: string; signal?: AbortSignal },
+    options: GenerateOptions,
     next: () => AsyncIterable<StreamChunk>,
   ): AsyncIterable<StreamChunk> {
     const sessionId = options.sessionId
-    // No owning session → an auxiliary bypass call (review gate, translation)
-    // or an unattributed host call. It cannot safely appear in a session
-    // pool, so leave it to the global auxiliary recorder only.
+    // No owning session → an unattributed auxiliary bypass call (translation,
+    // global timeline report, or Auto review on legacy hosts). It cannot safely
+    // appear in a session pool, so leave it to the global auxiliary recorder only.
     if (sessionId === undefined || sessionId === '') return next()
-    const auxKind: AuxKind | undefined = options.purpose === 'session-title'
-      ? 'session-title'
-      : typeof options.system === 'string' && options.system.startsWith(AUTO_REVIEW_PROMPT_PREFIX)
-        ? 'auto-review'
-        : undefined
-    const kind = options.purpose === 'compaction' ? 'compaction' : auxKind !== undefined ? 'aux' : 'request'
+    const purpose: string | undefined = options.purpose
+    // Share `classifyAuxRequest` with the persistent auxiliary recorder so
+    // both waterfall listeners agree on kind/auxKind and `linkAuxAttempt`
+    // never misses its target attempt.
+    const auxKind = purpose === 'compaction' ? undefined : classifyAuxRequest(options)
+    const kind = purpose === 'compaction' ? 'compaction' : auxKind !== undefined ? 'aux' : 'request'
     const active = this.activeSteps.get(sessionId)
     const turn = active?.turn ?? -1
     const step = active?.step ?? -1
