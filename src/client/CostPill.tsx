@@ -140,8 +140,7 @@ export function CostPill({ sessionId, useSessions, useProjection, t }: CostPillP
     rows: byId,
     liveSessionStats: liveStats,
   })
-  const requestKey = `${sessionId}\t${freshnessKey}`
-  const debouncedKey = useDebouncedValue(requestKey, REFRESH_DEBOUNCE_MS)
+  const debouncedFreshnessKey = useDebouncedValue(freshnessKey, REFRESH_DEBOUNCE_MS, sessionId)
   const scopeResetKey = `${sessionId}:${scopeIds.length}`
   const { onSummary } = useCostInflate(scopeResetKey, costRef)
 
@@ -152,6 +151,7 @@ export function CostPill({ sessionId, useSessions, useProjection, t }: CostPillP
   // to the same batch of events as the mount read, not a new settled
   // request. A real pricing-association change is a new intent and refetches.
   const recentRef = useRef<{
+    sessionId: string
     scopeIdsKey: string
     associationTick: number
     at: number
@@ -163,10 +163,11 @@ export function CostPill({ sessionId, useSessions, useProjection, t }: CostPillP
       const recent = recentRef.current
       // Two debounce windows cover a mirror that arrives a little after
       // mount; `coalesced` allows it at most once. Only a changed id SET
-      // coalesces — projection / updatedAt churn is a real request and must
-      // refresh, as must a pricing-association change.
+      // within the SAME session coalesces — switching sessions, projection /
+      // updatedAt churn, and pricing-association changes must refetch.
       const canReuse = recent !== undefined
         && !recent.coalesced
+        && recent.sessionId === sessionId
         && recent.scopeIdsKey !== scopeIdsKey
         && recent.associationTick === associationTick
         && Date.now() - recent.at < REFRESH_DEBOUNCE_MS * 2
@@ -175,12 +176,12 @@ export function CostPill({ sessionId, useSessions, useProjection, t }: CostPillP
         return Promise.resolve(recent.value)
       }
       return fetchSummary(sessionId, 'subtree', 'chip', signal).then(value => {
-        if (value !== null) recentRef.current = { scopeIdsKey, associationTick, at: Date.now(), value, coalesced: false }
+        if (value !== null) recentRef.current = { sessionId, scopeIdsKey, associationTick, at: Date.now(), value, coalesced: false }
         return value
       })
     },
-    [debouncedKey, associationTick],
-    { silentAfterFirst: true, retryToken: 0 },
+    [debouncedFreshnessKey, associationTick],
+    { silentAfterFirst: true, retryToken: 0, scopeKey: sessionId },
   )
   const summary = treeRes.status === 'ready' ? treeRes.value : null
 
@@ -201,13 +202,13 @@ export function CostPill({ sessionId, useSessions, useProjection, t }: CostPillP
   // Both re-fire when request churn debounces through while open.
   const [detailRes] = useAsyncResource<UsageSummary | null>(
     signal => open ? fetchSummary(sessionId, 'subtree', 'session', signal) : Promise.resolve(null),
-    [open, debouncedKey, associationTick],
-    { silentAfterFirst: true, retryToken: 0 },
+    [open, debouncedFreshnessKey, associationTick],
+    { silentAfterFirst: true, retryToken: 0, scopeKey: sessionId },
   )
   const [selfRes] = useAsyncResource<UsageSummary | null>(
     signal => open && sessionId !== '' ? fetchSummary(sessionId, 'self', 'chip', signal) : Promise.resolve(null),
-    [open, sessionId, debouncedKey, associationTick],
-    { silentAfterFirst: true, retryToken: 0 },
+    [open, sessionId, debouncedFreshnessKey, associationTick],
+    { silentAfterFirst: true, retryToken: 0, scopeKey: sessionId },
   )
 
   // Session switches close the panel — the split it explains no longer holds.

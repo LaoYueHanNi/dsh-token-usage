@@ -290,7 +290,7 @@ function needsPrefixRouteForOwnEvents(ownEvents: readonly SessionEvent[]): boole
 async function readSessionForSync(
   persistence: SyncPersistence,
   id: SessionId,
-  options: { needMeta: boolean; signal?: AbortSignal },
+  options: { needMeta: boolean; needPrefixForReconcile?: boolean; signal?: AbortSignal },
 ): Promise<{
   prefixEvents: readonly SessionEvent[]
   ownEvents: readonly SessionEvent[]
@@ -324,7 +324,7 @@ async function readSessionForSync(
       const needsTitle = options.needMeta && !ownEvents.some(event => titleOfEvent(event) !== undefined)
       const needsRoute = needsPrefixRouteForOwnEvents(ownEvents)
       let prefixEvents: readonly SessionEvent[] = []
-      if (needsTitle || needsRoute) {
+      if (needsTitle || needsRoute || options.needPrefixForReconcile === true) {
         const prefixSlice = readOpts === undefined
           ? await handle.read(0, inheritedCount)
           : await handle.read(0, inheritedCount, readOpts)
@@ -409,6 +409,7 @@ export async function syncHistory(
     try {
       inspection = await readSessionForSync(deps.persistence, id, {
         needMeta: deps.meta !== undefined,
+        needPrefixForReconcile: deps.reconcile !== false && eligible.size > 0,
         ...(signal !== undefined ? { signal } : {}),
       })
     } catch (error) {
@@ -436,8 +437,13 @@ export async function syncHistory(
     // fallback all land as the same append, one fold covers every source.
     let title: string | undefined
     // Fold state-only context (route and title) across the fork-inherited
-    // prefix without persisting rows, reproducing ids, or carrying open steps
-    // and compaction windows across the fork boundary.
+    // prefix without persisting rows, claiming ownership, or carrying open
+    // steps and compaction windows across the fork boundary. Keep inherited
+    // assistant message ids (shared across parent and fork) in `reproduced`
+    // without adding `id` to `reproducedOwners`: a readable parent still
+    // reclaims misattributed rows, while a deleted/unreadable parent's rows
+    // are never dropped by reconcile. Session-scoped ids (`compaction:`,
+    // `failure:`, `web:`) stay excluded so fork duplicates are still pruned.
     for (const event of inspection.prefixEvents) {
       signal?.throwIfAborted()
       const revealed = modelOfEvent(event)
@@ -446,9 +452,14 @@ export async function syncHistory(
       if (revealedProvider !== undefined) provider = revealedProvider
       const revealedTitle = titleOfEvent(event)
       if (revealedTitle !== undefined) title = revealedTitle
+      if (event.type === 'assistant/message' && !isImportedHistoryEvent(event)) {
+        const prefixRecord = recordOfEvent(event, id, model, false, undefined, provider)
+        if (prefixRecord !== null) reproduced.add(prefixRecord.requestId)
+      }
     }
     let openStep: { turn: number; step: number; startTime: number } | null = null
     let pendingAttemptUsage: { turn: number; step: number; usage: UsageFields } | undefined
+    let importedStep = false
     // The compaction attribution window of this session — the SAME
     // implementation the live recorder drives, so a rescan attributes rows
     // exactly like a live observation would.
@@ -458,17 +469,22 @@ export async function syncHistory(
     const webCallTracker = new WebCallTracker(id)
     for (const event of inspection.ownEvents) {
       signal?.throwIfAborted()
-      const webRecord = webCallTracker.observe(event)
-      if (webRecord !== null) {
-        reproduced.add(webRecord.requestId)
-        let webOwners = reproducedOwners.get(webRecord.requestId)
-        if (webOwners === undefined) {
-          webOwners = new Set()
-          reproducedOwners.set(webRecord.requestId, webOwners)
+      if (event.type === 'step/start' || event.type === 'step/end' || event.type === 'turn/end') {
+        importedStep = false
+      }
+      if (!importedStep) {
+        const webRecord = webCallTracker.observe(event)
+        if (webRecord !== null) {
+          reproduced.add(webRecord.requestId)
+          let webOwners = reproducedOwners.get(webRecord.requestId)
+          if (webOwners === undefined) {
+            webOwners = new Set()
+            reproducedOwners.set(webRecord.requestId, webOwners)
+          }
+          webOwners.add(id)
+          if (await deps.log.record(webRecord)) added += 1
+          else skipped += 1
         }
-        webOwners.add(id)
-        if (await deps.log.record(webRecord)) added += 1
-        else skipped += 1
       }
       if (event.type === 'step/start') {
         openStep = {
@@ -533,6 +549,7 @@ export async function syncHistory(
       // scan summary and leave it out of `reproduced`, so the closing
       // reconcile drops rows an older build recorded for it.
       if (isImportedHistoryEvent(event)) {
+        if (event.type === 'assistant/message') importedStep = true
         ignoredImported += 1
         continue
       }

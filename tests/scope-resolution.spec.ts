@@ -61,15 +61,20 @@ describe('resolveSessionScope', () => {
       .toEqual({ sessionIds: ['root'], childGroups: [] })
   })
 
-  it('bounds a cyclic lineage instead of looping', () => {
+  it('bounds a cyclic lineage instead of looping and keeps root out of child groups', () => {
     const meta = metaOf({
       root: { origin: 'subagent', parentSession: 'c' },
       a: { origin: 'subagent', parentSession: 'root' },
       b: { origin: 'subagent', parentSession: 'a' },
       c: { origin: 'subagent', parentSession: 'b' },
+      sibling: { origin: 'subagent', parentSession: 'root' },
     })
-    expect(resolveSessionScope(meta, 'root', 'subtree', true).sessionIds)
-      .toEqual(['root', 'a', 'b', 'c'])
+    const resolved = resolveSessionScope(meta, 'root', 'subtree', true)
+    expect(resolved.sessionIds).toEqual(['root', 'a', 'b', 'c', 'sibling'])
+    expect(resolved.childGroups).toEqual([
+      { id: 'a', sessionIds: ['a', 'b', 'c'] },
+      { id: 'sibling', sessionIds: ['sibling'] },
+    ])
   })
 
   it('excludes historical ordinary forks carrying parentSession without origin subagent', () => {

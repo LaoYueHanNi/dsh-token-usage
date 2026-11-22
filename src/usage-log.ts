@@ -339,10 +339,16 @@ async function listDayFileNames(dir: string, logger: LoggerLike): Promise<string
   }
 }
 
-async function readDayLines(dir: string, name: string, logger: LoggerLike): Promise<DayLine[]> {
+async function readDayLines(
+  dir: string,
+  name: string,
+  logger: LoggerLike,
+  throwOnError = false,
+): Promise<DayLine[]> {
   const text = await readFile(join(dir, name), 'utf8').catch((error: unknown) => {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
       logger.error(`[token-usage] cannot read ${name}:`, error)
+      if (throwOnError) throw error
     }
     return ''
   })
@@ -405,7 +411,7 @@ async function refileDayFiles(dir: string, logger: LoggerLike): Promise<number> 
   const incomingByTarget = new Map<string, DayLine[]>()
   let moved = 0
   for (const source of names) {
-    const lines = await readDayLines(dir, source, logger)
+    const lines = await readDayLines(dir, source, logger, true)
     sourceLines.set(source, lines)
     const stay: DayLine[] = []
     let sourceChanged = false
@@ -438,7 +444,7 @@ async function refileDayFiles(dir: string, logger: LoggerLike): Promise<number> 
   for (const [target, incoming] of incomingByTarget) {
     const base = finalContents.get(target)
       ?? sourceLines.get(target)
-      ?? await readDayLines(dir, target, logger)
+      ?? await readDayLines(dir, target, logger, true)
     const seen = new Set<string>()
     for (const line of base) {
       if (line.record !== null) seen.add(line.record.requestId)

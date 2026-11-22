@@ -168,12 +168,13 @@ export function UsageView({ useSessions, useProjection, sessionId, t }: UsageVie
     scopedIds,
     { activeSessionId: sessionId, rows: byId, liveSessionStats: liveStats },
   )
-  // The debounce identity is root + scope + freshness, NOT the enumerated
-  // subtree: scopeIds still drive TTFT aggregation above (browser memory
-  // only), but joining hundreds of ids into a request key used to build a
-  // 17 KiB string on every render and, on the wire, HTTP 431.
-  const requestKey = `${focusId}\t${scope}\t${freshnessKey}`
-  const debouncedKey = useDebouncedValue(requestKey, REFRESH_DEBOUNCE_MS)
+  // Scope changes are immediate; only event freshness is debounced. The
+  // request and its cache identity must always describe the same range —
+  // a constant-size root + scope, never an enumerated id list. Passing
+  // `scopeKey` as the debounce reset key snaps freshness on a range switch
+  // instead of letting a stale timer fire a second fetch 250ms later.
+  const scopeKey = `${focusId}\t${scope}`
+  const debouncedFreshnessKey = useDebouncedValue(freshnessKey, REFRESH_DEBOUNCE_MS, scopeKey)
 
   // Visibility fallback polling for the request pool: the event-driven
   // freshness key already refreshes on settled requests, but a WAITING row
@@ -202,11 +203,6 @@ export function UsageView({ useSessions, useProjection, sessionId, t }: UsageVie
     value: UsageSummary
     coalesced: boolean
   } | undefined>(undefined)
-  // Scope changes are immediate; only event freshness is debounced. The
-  // request and its cache identity must always describe the same range —
-  // a constant-size root + scope, never an enumerated id list.
-  const scopeKey = `${focusId}\t${scope}`
-
   const [summaryState] = useAsyncResource<UsageSummary>(
     signal => {
       clearTimeout(pollTimerRef.current)
@@ -256,7 +252,7 @@ export function UsageView({ useSessions, useProjection, sessionId, t }: UsageVie
           }
         })
     },
-    [debouncedKey.split('\t')[2], retryToken, pollTick],
+    [debouncedFreshnessKey, retryToken, pollTick],
     { silentAfterFirst: true, retryToken, scopeKey },
   )
   // A range switch also drops the freshness stamp — it belonged to the

@@ -52,6 +52,14 @@ describe('aggregateRequestTiming', () => {
     ])).toBeUndefined()
   })
 
+  it('ignores failure and web records even when they carry timing fields', () => {
+    expect(aggregateRequestTiming([
+      record({ requestId: 'fail-kind', kind: 'failure', firstTokenLatencyMs: 100, latencyMs: 500 }),
+      record({ requestId: 'fail-code', failureCode: 'CONTENT_REFUSED', firstTokenLatencyMs: 100, latencyMs: 500 }),
+      record({ requestId: 'web-row', kind: 'web', firstTokenLatencyMs: 100, latencyMs: 500 }),
+    ])).toBeUndefined()
+  })
+
   it('returns undefined for an empty group', () => {
     expect(aggregateRequestTiming([])).toBeUndefined()
   })

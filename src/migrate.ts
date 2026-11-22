@@ -22,8 +22,8 @@
  */
 
 import { constants } from 'node:fs'
-import { access, copyFile, mkdir, readFile, readdir, rmdir, stat, unlink } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { access, copyFile, mkdir, readFile, readdir, realpath, rmdir, stat, unlink } from 'node:fs/promises'
+import { dirname, join, resolve } from 'node:path'
 import { BACKUPS_DIR, isBackupSnapshotName } from './backup.ts'
 import { consoleLogger, type LoggerLike } from './log.ts'
 import { ASSOCIATIONS_FILE } from './pricing-associations.ts'
@@ -114,6 +114,35 @@ async function listBackupFiles(dir: string): Promise<string[]> {
 }
 
 /**
+ * Whether two directory strings refer to the same physical directory.
+ * Protects migration from self-deleting owned files when a path differs only
+ * in casing, slash style, trailing separators, or symlinks (e.g. on Windows).
+ */
+export async function isSameDirectory(left: string, right: string): Promise<boolean> {
+  if (left === right) return true
+  const resolvedLeft = resolve(left)
+  const resolvedRight = resolve(right)
+  const samePath = (a: string, b: string): boolean =>
+    process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b
+  if (samePath(resolvedLeft, resolvedRight)) return true
+  const [realLeft, realRight] = await Promise.all([
+    realpath(left).catch(() => null),
+    realpath(right).catch(() => null),
+  ])
+  if (realLeft !== null && realRight !== null && samePath(realLeft, realRight)) return true
+  const [statLeft, statRight] = await Promise.all([
+    stat(left).catch(() => null),
+    stat(right).catch(() => null),
+  ])
+  return statLeft !== null
+    && statRight !== null
+    && statLeft.dev !== 0
+    && statLeft.ino !== 0
+    && statLeft.dev === statRight.dev
+    && statLeft.ino === statRight.ino
+}
+
+/**
  * Phase one: copy every owned file into the target, verbatim. A target file
  * with the same name is NOT overwritten: existing normal files win, while
  * associations must be byte-identical or migration aborts before copying.
@@ -130,6 +159,7 @@ export async function copyData(
   newDir: string,
   onProgress?: (progress: MigrationProgress) => void,
 ): Promise<string[]> {
+  if (await isSameDirectory(oldDir, newDir)) return []
   const [sourceChoices, targetChoices] = await Promise.all([associationBytes(oldDir), associationBytes(newDir)])
   if (sourceChoices !== null && targetChoices !== null && !sourceChoices.equals(targetChoices)) {
     throw new Error('pricing-associations.json migration conflict: source and target differ')
@@ -207,6 +237,7 @@ export async function cleanSource(
   onProgress?: (progress: MigrationProgress) => void,
   logger: LoggerLike = consoleLogger,
 ): Promise<MigrationResult> {
+  if (await isSameDirectory(oldDir, newDir)) return { copied: 0, cleaned: 0 }
   const names = await ownedFiles(oldDir)
   const backupRelPaths = await listBackupFiles(oldDir)
   const removable: string[] = []

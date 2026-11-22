@@ -463,4 +463,36 @@ describe('CostPill', () => {
     await waitFor(() => { expect(fetchMock.mock.calls.length).toBeGreaterThan(callsBefore) })
     await waitFor(() => { expect(screen.getByRole('button').textContent).toContain('20.00￥') })
   })
+
+  it('never reuses the previous session cache when switching sessions inside the coalesce window', async () => {
+    const fetchMock = stubTreeSequence([TREE_SUMMARY, UPDATED_SUMMARY])
+    const { rerender } = render(<CostPill {...propsOf('session-a', SOLO_BY_ID)} />)
+    await waitFor(() => { expect(screen.getByRole('button').textContent).toContain('12.34￥') })
+
+    const sessionBById = {
+      'session-b': { id: 'session-b', displayTitle: 'Session B', parentId: undefined, blank: false, running: false, updatedAt: 2 },
+    } as unknown as SessionListState['byId']
+    rerender(<CostPill {...propsOf('session-b', sessionBById)} />)
+    await waitFor(() => { expect(fetchMock).toHaveBeenCalledTimes(2) })
+    await waitFor(() => { expect(screen.getByRole('button').textContent).toContain('20.00￥') })
+  })
+
+  it('drops the previous session figure and retries when switching to a session whose first fetch fails', async () => {
+    const fetchMock = stubFetchSequence([TREE_SUMMARY, new Error('network down'), UPDATED_SUMMARY])
+    const { container, rerender } = render(<CostPill {...propsOf('session-a', SOLO_BY_ID)} />)
+    await waitFor(() => { expect(screen.getByRole('button').textContent).toContain('12.34￥') })
+
+    const sessionBById = {
+      'session-b': { id: 'session-b', displayTitle: 'Session B', parentId: undefined, blank: false, running: false, updatedAt: 2 },
+    } as unknown as SessionListState['byId']
+    rerender(<CostPill {...propsOf('session-b', sessionBById)} />)
+    await waitFor(() => { expect(fetchMock).toHaveBeenCalledTimes(2) })
+    expect(container.firstChild).toBeNull()
+
+    await waitFor(
+      () => { expect(fetchMock).toHaveBeenCalledTimes(3) },
+      { timeout: FETCH_FAILURE_RETRY_MS + 2_000 },
+    )
+    await waitFor(() => { expect(screen.getByRole('button').textContent).toContain('20.00￥') })
+  }, 10_000)
 })

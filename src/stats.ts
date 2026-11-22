@@ -512,6 +512,7 @@ export function aggregateRequestTiming(
   let decodeMs = 0
   let decodeTokens = 0
   for (const record of records) {
+    if (record.kind === 'failure' || record.kind === 'web' || record.failureCode !== undefined) continue
     const firstToken = record.firstTokenLatencyMs
     const output = record.usage?.outputTokens ?? 0
     if (firstToken === undefined || !Number.isFinite(firstToken) || firstToken < 0) continue
@@ -1107,10 +1108,16 @@ function childBucketsOf(parentOf: ReadonlyMap<string, string>): Map<string, stri
 }
 
 /** Depth-first walk of one subtree, root first, with a `seen` guard so a
- * cyclic or self-referential lineage can never loop. */
-function subtreeOf(root: string, childrenOf: ReadonlyMap<string, readonly string[]>): string[] {
+ * cyclic or self-referential lineage can never loop. Optional `exclude`
+ * prevents a child subtree from folding its enclosing parent back in if
+ * corrupt metadata forms a cycle through the parent. */
+function subtreeOf(
+  root: string,
+  childrenOf: ReadonlyMap<string, readonly string[]>,
+  exclude?: string,
+): string[] {
   const out = [root]
-  const seen = new Set<string>([root])
+  const seen = new Set<string>(exclude !== undefined ? [root, exclude] : [root])
   const stack: string[] = [...(childrenOf.get(root) ?? [])].reverse()
   while (stack.length > 0) {
     const current = stack.pop()!
@@ -1147,7 +1154,7 @@ export function resolveSessionScope(
   const childGroups: ChildGroup[] = includeChildren
     ? direct.map(id => ({
       id,
-      sessionIds: scope === 'subtree' ? subtreeOf(id, childrenOf) : [id],
+      sessionIds: scope === 'subtree' ? subtreeOf(id, childrenOf, root) : [id],
     }))
     : []
   return { sessionIds, childGroups }

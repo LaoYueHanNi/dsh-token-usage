@@ -1344,4 +1344,98 @@ describe('syncHistory web searches', () => {
 
     expect(log.rows.map(row => row.requestId)).toEqual(['web:child:5'])
   })
+
+  it('skips web_search/web_fetch calls synthesized inside DeepSeek chat imported steps while keeping later real calls', async () => {
+    const log = new FakeLog()
+    const importedMessage: SessionEvent = {
+      type: 'assistant/message',
+      seq: SessionSeq(2),
+      time: 1_000,
+      data: {
+        turn: 1,
+        step: 1,
+        message: {
+          id: 'imp-1' as MessageId,
+          role: 'assistant',
+          content: [],
+          source: { kind: 'model', provider: 'deepseek-chat-export', model: 'deepseek-chat' },
+        },
+        stream: [],
+      },
+    }
+    const persistence = fakePersistence([{
+      id: 'imported-session',
+      events: [
+        { type: 'step/start', seq: SessionSeq(1), time: 900, data: { turn: 1, step: 1 } } as SessionEvent,
+        importedMessage,
+        toolCallEvent({ seq: 3, time: 1_100, callId: 'imp-web-1', name: 'web_search', arguments: '{"queries":["old"]}' }),
+        toolResultEvent({ seq: 4, time: 1_200, callId: 'imp-web-1' }),
+        { type: 'step/end', seq: SessionSeq(5), time: 1_300, data: { turn: 1, step: 1 } } as SessionEvent,
+        { type: 'step/start', seq: SessionSeq(6), time: 2_000, data: { turn: 2, step: 1 } } as SessionEvent,
+        toolCallEvent({ seq: 7, time: 2_100, callId: 'real-web-1', name: 'web_search', arguments: '{"queries":["live"]}' }),
+        toolResultEvent({ seq: 8, time: 2_200, callId: 'real-web-1' }),
+      ],
+    }])
+    const result = await syncHistory({ persistence, log })
+    expect(result.ignoredImported).toBe(1)
+    expect(log.rows.map(row => row.requestId)).toEqual(['web:imported-session:8'])
+  })
+
+  it('preserves inherited parent rows previously attributed to a fork child when the parent session is deleted or unreadable', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'token-usage-fork-missing-parent-'))
+    try {
+      const dayTime = new Date(2026, 0, 15, 12).getTime()
+      const preExisting: UsageRecord[] = [
+        {
+          requestId: 'p-msg-1',
+          time: dayTime,
+          sessionId: 'fork-child',
+          model: 'deepseek-chat',
+          usage: { inputTokens: 100, outputTokens: 20 },
+        },
+        {
+          requestId: 'c-msg-1',
+          time: dayTime + 30,
+          sessionId: 'fork-child',
+          model: 'deepseek-chat',
+          usage: { inputTokens: 10, outputTokens: 5 },
+        },
+      ]
+      await writeFile(
+        join(dir, 'usage-2026-01-15.jsonl'),
+        preExisting.map(serializeRecord).join('\n') + '\n',
+        'utf8',
+      )
+      const parentEvents: SessionEvent[] = [
+        messageEvent({ messageId: 'p-msg-1', seq: 0, time: dayTime }),
+      ]
+      const childEvents: SessionEvent[] = [
+        ...parentEvents,
+        endSeedEvent(1, true),
+        messageEvent({ messageId: 'c-msg-1', seq: 2, time: dayTime + 30 }),
+      ]
+      const persistence: SyncPersistence = {
+        async list() {
+          return [{ header: { id: 'fork-child' as SessionId } }]
+        },
+        async open() {
+          return {
+            inheritedEventCount: 1,
+            read: (offset = 0, length = childEvents.length) => Promise.resolve({ events: childEvents.slice(offset, offset + length) }),
+            close: () => Promise.resolve(),
+          }
+        },
+      }
+      const log = new UsageLog(dir)
+      const result = await syncHistory({ persistence, log })
+      expect(result).toEqual({ added: 0, skipped: 1, removed: 0, failedSessions: 0 })
+      const dayFile = (await readFile(join(dir, 'usage-2026-01-15.jsonl'), 'utf8'))
+        .trim()
+        .split('\n')
+        .map(line => JSON.parse(line) as UsageRecord)
+      expect(dayFile.map(row => row.requestId)).toEqual(['p-msg-1', 'c-msg-1'])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
 })

@@ -246,4 +246,17 @@ describe('.backups migration compatibility', () => {
     expect(await readFile(join(oldDir, BACKUPS_DIR, 'user-notes.txt'), 'utf8')).toBe('keep me')
     expect(existsSync(oldDir)).toBe(true)
   })
+
+  it('treats equivalent paths pointing to the same physical directory as a no-op without deleting files', async () => {
+    const snap = '20261122-143000-001-00-reconcile'
+    await writeFile(join(oldDir, 'usage-2026-01-15.jsonl'), 'keep-me\n', 'utf8')
+    await mkdir(join(oldDir, BACKUPS_DIR, snap), { recursive: true })
+    await writeFile(join(oldDir, BACKUPS_DIR, snap, 'usage-2026-01-15.jsonl'), 'keep-backup\n', 'utf8')
+
+    const equivalent = join(oldDir, '.')
+    expect(await copyData(oldDir, equivalent)).toEqual([])
+    expect(await cleanSource(oldDir, equivalent)).toEqual({ copied: 0, cleaned: 0 })
+    expect(await readFile(join(oldDir, 'usage-2026-01-15.jsonl'), 'utf8')).toBe('keep-me\n')
+    expect(await readFile(join(oldDir, BACKUPS_DIR, snap, 'usage-2026-01-15.jsonl'), 'utf8')).toBe('keep-backup\n')
+  })
 })

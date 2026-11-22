@@ -44,7 +44,7 @@ import { UsageLog } from './usage-log.ts'
 import { SessionMetaStore } from './session-meta.ts'
 import { ProviderNameStore } from './provider-names.ts'
 import { FIELD_COMPLETERS } from './field-completion.ts'
-import { cleanSource, copyData, type MigrationProgress } from './migrate.ts'
+import { cleanSource, copyData, isSameDirectory, type MigrationProgress } from './migrate.ts'
 import { resolvePricingUrl, syncCloudPricing, type CloudSyncResult, type PricingSourceInput } from './pricing.ts'
 import { PricingAssociationService } from './pricing-association-service.ts'
 import { createPricingAssociationsRoute } from './pricing-associations-route.ts'
@@ -429,7 +429,7 @@ export function apply(ctx: Context, config: Config = {}) {
    */
   const relocateTo = async (nextDir: string): Promise<void> => {
     const previous = current
-    if (previous === undefined || previous.dir === nextDir) return
+    if (previous === undefined || previous.dir === nextDir || await isSameDirectory(previous.dir, nextDir)) return
 
     // A mid-conversation session's events append to the source while the copy
     // runs; a copied file would then be stale the moment it lands. Refuse the

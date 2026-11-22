@@ -102,17 +102,25 @@ export function useAsyncResource<T>(
  * Return a value that lags behind its source by `delayMs` — a debounced
  * snapshot. The initial render already holds `value` (no null sentinel), so
  * a consumer can fetch immediately on mount without a second shot when the
- * first debounce window closes on the same value.
+ * first debounce window closes on the same value. When `resetKey` changes,
+ * the snapshot snaps to the current `value` immediately so a scope switch
+ * fires one fetch instead of a second delayed one when the old timer lands.
  *
  * @param value - the source value to debounce.
  * @param delayMs - the lag window in milliseconds.
+ * @param resetKey - optional identity whose change bypasses the debounce lag.
  * @returns the debounced value.
  */
-export function useDebouncedValue<T>(value: T, delayMs: number): T {
-  const [debounced, setDebounced] = useState(value)
+export function useDebouncedValue<T>(value: T, delayMs: number, resetKey?: unknown): T {
+  const [state, setState] = useState<{ value: T; resetKey: unknown }>({ value, resetKey })
+  const effective = Object.is(state.resetKey, resetKey) ? state.value : value
   useEffect(() => {
-    const timer = setTimeout(() => { setDebounced(value) }, delayMs)
+    if (!Object.is(state.resetKey, resetKey)) {
+      setState({ value, resetKey })
+      return
+    }
+    const timer = setTimeout(() => { setState({ value, resetKey }) }, delayMs)
     return () => { clearTimeout(timer) }
-  }, [value, delayMs])
-  return debounced
+  }, [value, delayMs, resetKey, state.resetKey])
+  return effective
 }
