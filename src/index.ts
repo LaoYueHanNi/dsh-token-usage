@@ -120,6 +120,11 @@ export interface Config {
    * registers/unregisters the `sidebar.panellist` row without a reload; the
    * host only stores the field. */
   sidebarPinned?: Volatile<boolean | undefined> | boolean
+  /** Whether the Token Usage section is shown inside the Settings panel
+   * (default `true`). Volatile so a settings toggle commits live and the
+   * browser half registers/unregisters the `settings.section` entry without
+   * a reload; the host only stores the field. */
+  settingsSectionEnabled?: Volatile<boolean | undefined> | boolean
 }
 
 /** Composition knobs of the quota feature (cordis.yml level). */
@@ -154,6 +159,7 @@ export const Config: z<any> = z.object({
   recordCompaction: z.boolean(),
   recordAux: z.boolean(),
   sidebarPinned: z.boolean().volatile(),
+  settingsSectionEnabled: z.boolean().volatile(),
   quota: z.object({
     enabled: z.boolean(),
     intervalSec: z.number().min(15).max(3600),
@@ -166,7 +172,7 @@ export function validateConfig(config: Config): void {
     key !== 'path' && key !== 'pricingUrl' && key !== 'pricingUrlDomestic'
     && key !== 'pricingUrlOverseas' && key !== 'pricingRegion'
     && key !== 'recordCompaction' && key !== 'recordAux'
-    && key !== 'sidebarPinned'
+    && key !== 'sidebarPinned' && key !== 'settingsSectionEnabled'
     && key !== 'quota')
   if (unknown !== undefined) {
     throw new Error(`TokenUsageConfig: unknown key "${unknown}"`)
@@ -200,6 +206,10 @@ export function validateConfig(config: Config): void {
   const sidebarPinned = readVolatile(config.sidebarPinned)
   if (sidebarPinned !== undefined && typeof sidebarPinned !== 'boolean') {
     throw new Error('TokenUsageConfig: "sidebarPinned" must be a boolean')
+  }
+  const settingsSectionEnabled = readVolatile(config.settingsSectionEnabled)
+  if (settingsSectionEnabled !== undefined && typeof settingsSectionEnabled !== 'boolean') {
+    throw new Error('TokenUsageConfig: "settingsSectionEnabled" must be a boolean')
   }
   if (config.quota !== undefined) {
     if (typeof config.quota !== 'object' || config.quota === null) {

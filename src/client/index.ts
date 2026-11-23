@@ -181,26 +181,18 @@ export function apply(ctx: ClientContext): void {
     getUiWorkspace()?.openSession(id as SessionId)
     return { ok: true }
   }
-  ctx.slots.inject('settings.section', () => ctx.slots.register({
-    name: 'settings.section',
-    id: 'token-usage',
-    order: 50,
-    label: () => t('nav.label'),
-    locale: NS,
-    inject: () => ({ sessionListed, openSession }),
-  }, TokenUsageSection))
 
   // The main panel the sidebar entries open (the `main` keyed slot, an older
   // shell declaration than the sidebar regions). It rides ctx.slots.inject
   // WAITING on the shell's declaration — a shell without it never runs the
-  // callback, so the page degrades silently and the settings section above
+  // callback, so the page degrades silently and the settings section below
   // stays the only entry. The layout seat is resolved at click time (dynamic
   // like configForms below, never a top-level inject dependency): the sidebar
   // entries open this panel, and the page's session jump returns to the
-  // conversation. The two sidebar entries themselves (the More-menu row and
-  // the resident pinned row) register further down in syncEntries — the two
-  // are mutually exclusive, so their registrations come and go with the
-  // `sidebarPinned` setting.
+  // conversation. The settings section and the two sidebar entries (the
+  // More-menu row and the resident pinned row) register further down in
+  // syncEntries — their registrations come and go with the
+  // `settingsSectionEnabled` and `sidebarPinned` settings.
   const selectMainPanel = (id: MainPanelId | null): void => {
     ;(ctx.get?.('layout') as { selectPanel?: (id: MainPanelId | null) => void } | undefined)?.selectPanel?.(id)
   }
@@ -337,15 +329,37 @@ export function apply(ctx: ClientContext): void {
   // reads true the usage entry is a resident `sidebar.panellist` row, and the
   // More-menu row is gone; while it reads false the More-menu row is back and
   // the resident row is gone (the shell's pin store is in-memory, so
-  // registration alone IS the durable pin — no shell API is driven). Both
-  // registrations wait on their shell declarations via slots.inject (old
-  // shells never run those callbacks, so the entry degrades silently to the
-  // settings section); a rejected cell (a same-priority occupant) likewise
-  // just means that entry stays absent.
+  // registration alone IS the durable pin — no shell API is driven). The
+  // `settingsSectionEnabled` volatile setting (default true) likewise controls
+  // whether the `settings.section` entry inside the Settings panel is
+  // registered. All registrations wait on their shell declarations via
+  // slots.inject (old shells never run undeclared callbacks); a rejected cell
+  // (a same-priority occupant) likewise just means that entry stays absent.
+  let settingsSectionDisposer: (() => void) | undefined
   let residentDisposer: (() => void) | undefined
   let moreDisposer: (() => void) | undefined
   const syncEntries = (): void => {
-    const pinned = activeTarget.getSnapshot().value?.sidebarPinned === true
+    const snapshotValue = activeTarget.getSnapshot().value
+    const sectionEnabled = snapshotValue?.settingsSectionEnabled !== false
+    if (sectionEnabled && settingsSectionDisposer === undefined) {
+      try {
+        settingsSectionDisposer = ctx.slots.register({
+          name: 'settings.section',
+          id: 'token-usage',
+          order: 50,
+          label: () => t('nav.label'),
+          locale: NS,
+          inject: () => ({ sessionListed, openSession }),
+        }, TokenUsageSection)
+      } catch {
+        settingsSectionDisposer = undefined
+      }
+    } else if (!sectionEnabled && settingsSectionDisposer !== undefined) {
+      const dispose = settingsSectionDisposer
+      settingsSectionDisposer = undefined
+      dispose()
+    }
+    const pinned = snapshotValue?.sidebarPinned === true
     if (pinned && residentDisposer === undefined) {
       try {
         residentDisposer = ctx.slots.register({
@@ -381,6 +395,7 @@ export function apply(ctx: ClientContext): void {
       dispose()
     }
   }
+  ctx.slots.inject('settings.section', () => { syncEntries(); return () => {} })
   ctx.slots.inject('sidebar.panellist', () => { syncEntries(); return () => {} })
   ctx.slots.inject('sidebar.panellist.actions', () => { syncEntries(); return () => {} })
   ctx.effect(() => {
@@ -388,6 +403,11 @@ export function apply(ctx: ClientContext): void {
     syncEntries()
     return () => {
       targetListeners.delete(syncEntries)
+      if (settingsSectionDisposer !== undefined) {
+        const dispose = settingsSectionDisposer
+        settingsSectionDisposer = undefined
+        dispose()
+      }
       if (residentDisposer !== undefined) {
         const dispose = residentDisposer
         residentDisposer = undefined

@@ -288,6 +288,7 @@ describe('TokenUsageCard', () => {
       useTokenUsageCard: useSnapshot,
       editField: actions.editField,
       editPinned: actions.editPinned,
+      editSettingsSection: actions.editSettingsSection,
       clearField: actions.clearField,
       save: actions.save,
       discard: actions.discard,
@@ -413,6 +414,19 @@ describe('TokenUsageCard', () => {
     expect(button.disabled).toBe(false)
     fireEvent.click(button)
     expect(fetch.mock.calls.some(call => call[0] === PRICING_SYNC_PATH)).toBe(true)
+  })
+
+  it('stages the settings-section toggle without blocking a pricing sync', () => {
+    const fetch = vi.fn(async () => Response.json({ version: 12, updatedAt: 1, models: 3, aliasPatterns: 1, usdExchangeRate: 7 }))
+    vi.stubGlobal('fetch', fetch)
+    render(<TokenUsageCard {...propsOf(new FakeScope(ready({})))} view="page" />)
+    const checkbox = screen.getByLabelText('在设置中显示 Token 用量') as HTMLInputElement
+    expect(checkbox.checked).toBe(true)
+    fireEvent.click(checkbox)
+    expect(checkbox.checked).toBe(false)
+    expect(screen.getByText(t('card.unsaved'))).not.toBeNull()
+    const button = screen.getByRole('button', { name: '同步定价表' }) as HTMLButtonElement
+    expect(button.disabled).toBe(false)
   })
 
   it('shows the migration progress line and locks the controls while a move runs', () => {

@@ -256,6 +256,20 @@ export function TokenUsageCard(props: TokenUsageCardProps) {
               </label>
               <p className={css.hint}>{t('card.sidebarPinned.hint')}</p>
             </div>
+            <div className={css.field}>
+              <label className={css.pinRow} htmlFor="token-usage-card-settings-section">
+                <input
+                  id="token-usage-card-settings-section"
+                  type="checkbox"
+                  className={css.pinCheck}
+                  checked={state.settingsSectionDraft ?? state.settingsSectionEnabled}
+                  disabled={lockInput}
+                  onChange={event => { props.editSettingsSection(event.target.checked) }}
+                />
+                <span className={css.fieldLabel}>{t('card.settingsSectionEnabled.label')}</span>
+              </label>
+              <p className={css.hint}>{t('card.settingsSectionEnabled.hint')}</p>
+            </div>
             {state.migration !== undefined
               ? (
                 <div className={css.migration} role="status">

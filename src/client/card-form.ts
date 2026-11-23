@@ -77,6 +77,7 @@ export interface SectionValue {
   path?: string
   pricingRegion?: string
   sidebarPinned?: boolean
+  settingsSectionEnabled?: boolean
 }
 
 /** Live migration progress the card polls after saving a directory change. */
@@ -128,6 +129,12 @@ export interface CardState {
   /** Staged pin toggle; undefined while untouched. A staged edit shows in
    * the checkbox and commits only on save. */
   pinnedDraft: boolean | undefined
+  /** Whether the Token Usage section is shown inside the Settings panel: the
+   * effective (resolved) value the checkbox shows when untouched (default true). */
+  settingsSectionEnabled: boolean
+  /** Staged settings-section toggle; undefined while untouched. A staged edit
+   * shows in the checkbox and commits only on save. */
+  settingsSectionDraft: boolean | undefined
   /** Draft text per field ('' marks the inherited/default option). */
   fields: Record<CardField, string>
   /** Whether saving each field would leave a user-layer entry. */
@@ -155,6 +162,8 @@ export interface CardActions {
   editField: (field: CardField, text: string) => void
   /** Stage the sidebar-pin toggle; it commits only on save. */
   editPinned: (value: boolean) => void
+  /** Stage the settings-section toggle; it commits only on save. */
+  editSettingsSection: (value: boolean) => void
   /** Stage a clear for one field, so saving lets it re-inherit the composition layer. */
   clearField: (field: CardField) => void
   /** Write every staged edit, then re-seed from what the Host accepted. */
@@ -178,6 +187,8 @@ export class CardForm {
   private drafts: Partial<Record<CardField, string>> = {}
   /** Staged sidebar-pin toggle; undefined while untouched. */
   private draftPinned: boolean | undefined
+  /** Staged settings-section toggle; undefined while untouched. */
+  private draftSettingsSection: boolean | undefined
   private saving = false
   private failed = false
   private refusal: SaveRefusal | undefined
@@ -222,6 +233,12 @@ export class CardForm {
         this.refusal = undefined
         this.publish()
       },
+      editSettingsSection: (value) => {
+        this.draftSettingsSection = value
+        this.failed = false
+        this.refusal = undefined
+        this.publish()
+      },
       clearField: (field) => {
         this.drafts[field] = ''
         this.failed = false
@@ -230,9 +247,10 @@ export class CardForm {
       },
       save: () => { void this.save() },
       discard: () => {
-        if (Object.keys(this.drafts).length === 0 && this.draftPinned === undefined && !this.failed) return
+        if (Object.keys(this.drafts).length === 0 && this.draftPinned === undefined && this.draftSettingsSection === undefined && !this.failed) return
         this.drafts = {}
         this.draftPinned = undefined
+        this.draftSettingsSection = undefined
         this.failed = false
         this.refusal = undefined
         this.publish()
@@ -259,11 +277,12 @@ export class CardForm {
    */
   private async save(): Promise<void> {
     const edited = CARD_FIELDS.filter(field => this.drafts[field] !== undefined)
-    // The staged pin toggle rides the same save; it writes an explicit
-    // true/false (never unset) so a composition-layer `true` can still be
-    // switched off from the card.
+    // The staged pin and settings-section toggles ride the same save; each
+    // writes an explicit true/false (never unset) so a composition-layer value
+    // can still be switched from the card.
     const pinEdit = this.draftPinned
-    if ((edited.length === 0 && pinEdit === undefined) || this.saving) return
+    const sectionEdit = this.draftSettingsSection
+    if ((edited.length === 0 && pinEdit === undefined && sectionEdit === undefined) || this.saving) return
     // Snapshot the intended writes: a keystroke mid-await must not change what
     // this save commits.
     const intended = edited.map(field => [field, this.drafts[field]!.trim()] as const)
@@ -291,6 +310,7 @@ export class CardForm {
         else await this.target.set(field, text)
       }
       if (pinEdit !== undefined) await this.target.set('sidebarPinned', pinEdit)
+      if (sectionEdit !== undefined) await this.target.set('settingsSectionEnabled', sectionEdit)
       // Read back: the Host's validators own the constraints no schema
       // expresses, so acceptance is judged from the stored layers.
       for (const [field, text] of intended) {
@@ -300,6 +320,7 @@ export class CardForm {
         }
       }
       if (pinEdit !== undefined && this.storedValue('sidebarPinned') !== pinEdit) landed = false
+      if (sectionEdit !== undefined && this.storedValue('settingsSectionEnabled') !== sectionEdit) landed = false
     } catch (_settingsWriteFailure) {
       landed = false
     }
@@ -313,6 +334,7 @@ export class CardForm {
     if (landed) {
       for (const [field, _text] of intended) delete this.drafts[field]
       this.draftPinned = undefined
+      this.draftSettingsSection = undefined
     }
     this.saving = false
     this.failed = !landed
@@ -418,6 +440,7 @@ export class CardForm {
   private project(): CardState {
     const snapshot = this.snapshot()
     const pinnedEffective = snapshot.value?.sidebarPinned === true
+    const sectionEffective = snapshot.value?.settingsSectionEnabled !== false
     const fields = {} as Record<CardField, string>
     const overridden = {} as Record<CardField, boolean>
     let textDirty = false
@@ -437,9 +460,13 @@ export class CardForm {
       writable: snapshot.writable,
       sidebarPinned: pinnedEffective,
       pinnedDraft: this.draftPinned,
+      settingsSectionEnabled: sectionEffective,
+      settingsSectionDraft: this.draftSettingsSection,
       fields,
       overridden,
-      dirty: textDirty || (this.draftPinned !== undefined && this.draftPinned !== pinnedEffective),
+      dirty: textDirty
+        || (this.draftPinned !== undefined && this.draftPinned !== pinnedEffective)
+        || (this.draftSettingsSection !== undefined && this.draftSettingsSection !== sectionEffective),
       textDirty,
       saving: this.saving,
       failed: this.failed,

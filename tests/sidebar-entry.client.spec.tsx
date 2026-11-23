@@ -209,12 +209,12 @@ describe('sidebar pin row (sidebarPinned setting)', () => {
     ctx: Context
     slots: MockSlots
     target: {
-      getSnapshot(): { status: 'ready' | 'loading'; writable: boolean; value?: { sidebarPinned?: boolean }; user: Record<string, unknown> }
+      getSnapshot(): { status: 'ready' | 'loading'; writable: boolean; value?: { sidebarPinned?: boolean; settingsSectionEnabled?: boolean }; user: Record<string, unknown> }
       subscribe(listener: () => void): () => void
       set: ReturnType<typeof vi.fn>
       unset: ReturnType<typeof vi.fn>
     }
-    setSnapshot(next: { status: 'ready' | 'loading'; writable: boolean; value?: { sidebarPinned?: boolean } }): void
+    setSnapshot(next: { status: 'ready' | 'loading'; writable: boolean; value?: { sidebarPinned?: boolean; settingsSectionEnabled?: boolean } }): void
   }
 
   /**
@@ -224,10 +224,10 @@ describe('sidebar pin row (sidebarPinned setting)', () => {
    * in the user layer (kept across setSnapshot) so the form's read-back sees
    * what it wrote.
    */
-  function createAppWithConfig(initial: { status: 'ready' | 'loading'; writable?: boolean; value?: { sidebarPinned?: boolean } }): ConfigApp {
+  function createAppWithConfig(initial: { status: 'ready' | 'loading'; writable?: boolean; value?: { sidebarPinned?: boolean; settingsSectionEnabled?: boolean } }): ConfigApp {
     const app = createClientApp(PIN_DECLARATIONS)
     const listeners = new Set<() => void>()
-    let snapshot: { status: 'ready' | 'loading'; writable: boolean; value?: { sidebarPinned?: boolean }; user: Record<string, unknown> }
+    let snapshot: { status: 'ready' | 'loading'; writable: boolean; value?: { sidebarPinned?: boolean; settingsSectionEnabled?: boolean }; user: Record<string, unknown> }
       = { status: initial.status, writable: initial.writable ?? true, value: initial.value, user: {} }
     const commit = (): void => { for (const listener of [...listeners]) listener() }
     const target = {
@@ -347,6 +347,40 @@ describe('sidebar pin row (sidebarPinned setting)', () => {
     face.save()
     await vi.waitFor(() => { expect(store.getSnapshot().pinnedDraft).toBeUndefined() })
     expect(target.set).toHaveBeenCalledWith('sidebarPinned', true)
+    expect(store.getSnapshot().dirty).toBe(false)
+  })
+
+  it('registers settings.section by default and unregisters it when settingsSectionEnabled reads false', () => {
+    const { ctx, slots, setSnapshot } = createAppWithConfig({ status: 'ready', value: {} })
+    client.apply(ctx)
+    expect(slots.registered.filter(row => row.name === 'settings.section' && row.id === 'token-usage')).toHaveLength(1)
+    // Disabling disposes the settings.section registration while keeping sidebar entries intact.
+    setSnapshot({ status: 'ready', writable: true, value: { settingsSectionEnabled: false } })
+    expect(slots.disposals.filter(row => row.name === 'settings.section' && row.id === 'token-usage')).toHaveLength(1)
+    expect(slots.registered.some(row => row.name === 'sidebar.panellist.actions' && row.id === 'token-usage-more')).toBe(true)
+    // Re-enabling registers settings.section again.
+    setSnapshot({ status: 'ready', writable: true, value: { settingsSectionEnabled: true } })
+    expect(slots.registered.filter(row => row.name === 'settings.section' && row.id === 'token-usage')).toHaveLength(2)
+  })
+
+  it('stages the settings-section toggle and commits it only on save', async () => {
+    const { ctx, slots, target } = createAppWithConfig({ status: 'ready', value: { settingsSectionEnabled: true } })
+    client.apply(ctx)
+    const card = slots.registered.find(row => row.name === 'plugins.bundle.config')!
+    const face = card.inject!() as {
+      editSettingsSection: (value: boolean) => void
+      save: () => void
+      hooks: { tokenUsageCard: { getSnapshot(): { settingsSectionEnabled: boolean; settingsSectionDraft: boolean | undefined; dirty: boolean } } }
+    }
+    const store = face.hooks.tokenUsageCard
+    expect(store.getSnapshot().settingsSectionEnabled).toBe(true)
+    face.editSettingsSection(false)
+    expect(store.getSnapshot().settingsSectionDraft).toBe(false)
+    expect(store.getSnapshot().dirty).toBe(true)
+    expect(target.set).not.toHaveBeenCalled()
+    face.save()
+    await vi.waitFor(() => { expect(store.getSnapshot().settingsSectionDraft).toBeUndefined() })
+    expect(target.set).toHaveBeenCalledWith('settingsSectionEnabled', false)
     expect(store.getSnapshot().dirty).toBe(false)
   })
 })

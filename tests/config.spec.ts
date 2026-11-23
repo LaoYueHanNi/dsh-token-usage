@@ -58,6 +58,12 @@ describe('validateConfig', () => {
     expect(() => validateConfig({ sidebarPinned: 'yes' } as unknown as Config)).toThrow(/sidebarPinned/)
   })
 
+  it('accepts a settingsSectionEnabled boolean and rejects a non-boolean', () => {
+    expect(() => validateConfig({ settingsSectionEnabled: true })).not.toThrow()
+    expect(() => validateConfig({ settingsSectionEnabled: false })).not.toThrow()
+    expect(() => validateConfig({ settingsSectionEnabled: 'no' } as unknown as Config)).toThrow(/settingsSectionEnabled/)
+  })
+
   it('rejects a blank path', () => {
     expect(() => validateConfig({ path: '' })).toThrow(/non-empty string/)
   })
