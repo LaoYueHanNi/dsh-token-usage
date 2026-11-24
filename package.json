@@ -2,6 +2,7 @@
   "name": "@laoyuehanni/dsh-token-usage",
   "version": "0.4.17",
   "description": "dsh local plugin: persist per-request model token usage (live hook + first-run history backfill + web settings stats page)",
+  "icon": "./icon.svg",
   "keywords": [
     "dsh",
     "deepseek",
@@ -39,6 +40,7 @@
   "files": [
     "lib",
     "locale",
+    "icon.svg",
     "docs/pricing.md",
     "docs/DETAIL.md",
     "docs/DETAIL.zh.md",
@@ -74,7 +76,8 @@
     "prepublishOnly": "pnpm run typecheck && pnpm test && pnpm run build:all"
   },
   "engines": {
-    "node": ">=22.19"
+    "node": ">=22.19",
+    "dsh": ">=0.2.1-rc.3"
   },
   "packageManager": "pnpm@11.8.0",
   "peerDependencies": {

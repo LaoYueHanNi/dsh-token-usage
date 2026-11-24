@@ -21,6 +21,8 @@ const require = createRequire(join(repoRoot, 'smoke.cjs'))
 const pkg = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8')) as {
   name: string
   description: string
+  icon?: string
+  engines?: { node?: string; dsh?: string }
   exports: Record<string, string>
   files: string[]
 }
@@ -178,5 +180,26 @@ describe('plugin detail document contract', () => {
 
   it('files 逐文件收录两份文档（漏收则 npm pack 不带，宿主取不到正文）', () => {
     expect(pkg.files).toEqual(expect.arrayContaining(['docs/DETAIL.md', 'docs/DETAIL.zh.md']))
+  })
+})
+
+describe('插件图标与 DSH 引擎元数据', () => {
+  it('package.json 声明顶层 icon 与 engines.dsh，且 files 收录 icon.svg', () => {
+    expect(pkg.icon).toBe('./icon.svg')
+    expect(pkg.files).toContain('icon.svg')
+    expect(pkg.engines?.dsh).toBe('>=0.2.1-rc.3')
+  })
+
+  it('icon.svg 存在、在 256 KiB 上限内且符合自包含几何 SVG 规范', () => {
+    const iconPath = join(repoRoot, 'icon.svg')
+    const bytes = statSync(iconPath).size
+    expect(bytes).toBeGreaterThan(0)
+    expect(bytes).toBeLessThanOrEqual(256 * 1024)
+
+    const svg = readFileSync(iconPath, 'utf8')
+    expect(svg).toMatch(/viewBox="0 0 36 36"/)
+    // DSH 插件管理页以图片方式加载图标，禁止脚本、外链、样式块与文本节点。
+    expect(svg).not.toMatch(/<(?:script|style|text|image|foreignObject)\b/i)
+    expect(svg).not.toMatch(/\son[a-z]+\s*=/i)
   })
 })
