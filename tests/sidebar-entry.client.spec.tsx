@@ -383,4 +383,39 @@ describe('sidebar pin row (sidebarPinned setting)', () => {
     expect(target.set).toHaveBeenCalledWith('settingsSectionEnabled', false)
     expect(store.getSnapshot().dirty).toBe(false)
   })
+
+  it('prefers SyncedConfig refs when supplied by the host, without waiting for configForms', () => {
+    const { ctx, slots } = createAppWithConfig({ status: 'loading' })
+    const makeRef = <T,>(initial: T) => {
+      let current = initial
+      const listeners = new Set<() => void>()
+      return {
+        get: () => current,
+        subscribe: (listener: () => void) => {
+          listeners.add(listener)
+          return () => { listeners.delete(listener) }
+        },
+        set: (next: T) => {
+          current = next
+          for (const listener of listeners) listener()
+        },
+        listenerCount: () => listeners.size,
+      }
+    }
+    const sidebarPinned = makeRef<boolean | undefined>(true)
+    const settingsSectionEnabled = makeRef<boolean | undefined>(false)
+
+    client.apply(ctx, { sidebarPinned, settingsSectionEnabled })
+    // Even while configForms is still loading, SyncedConfig drives initial slots accurately.
+    expect(slots.registered.filter(row => row.name === 'sidebar.panellist')).toHaveLength(1)
+    expect(slots.registered.some(row => row.name === 'sidebar.panellist.actions')).toBe(false)
+    expect(slots.registered.some(row => row.name === 'settings.section')).toBe(false)
+
+    // Live updates through SyncedConfig swap slots immediately.
+    sidebarPinned.set(false)
+    settingsSectionEnabled.set(true)
+    expect(slots.disposals.filter(row => row.name === 'sidebar.panellist')).toHaveLength(1)
+    expect(slots.registered.filter(row => row.name === 'sidebar.panellist.actions')).toHaveLength(1)
+    expect(slots.registered.filter(row => row.name === 'settings.section')).toHaveLength(1)
+  })
 })

@@ -293,6 +293,11 @@ function sectionOf(config: Config): SectionConfig {
   }
 }
 
+/** Minimal `ctx.agents` face for O(1) open-turn projection reads (DSH 0.2.2+). */
+interface AgentsTurnBoundaryLike {
+  turnBoundaryOf?(session: Session): { readonly openTurnStartSeq: number | null }
+}
+
 /** Live facts a section write is vetted against. */
 export interface SectionGuard {
   /** Directory currently in force; undefined before the first start. */
@@ -351,6 +356,46 @@ export function apply(ctx: Context, config: Config = {}) {
   // The plugin's named logger: every diagnostic joins the framework's log
   // pipeline instead of raw console output (the Cordis logging service).
   const logger = ctx.logger('token-usage')
+
+  // Live open-turn tracking: avoids calling the deprecated `session.snapshotEvents()`
+  // on every directory-guard / relocation check. When `ctx.agents.turnBoundaryOf`
+  // is available (DSH 0.2.2+), read the projection in O(1); otherwise maintain an
+  // incremental Set from `turn/start` / `turn/end` events seeded once at startup.
+  const openTurns = new Set<string>()
+  const readTurnBoundaryOf = (): ((session: Session) => { readonly openTurnStartSeq: number | null }) | undefined => {
+    const agents = ctx.get?.('agents') as AgentsTurnBoundaryLike | undefined
+    return typeof agents?.turnBoundaryOf === 'function' ? agents.turnBoundaryOf.bind(agents) : undefined
+  }
+  {
+    const turnBoundaryOf = readTurnBoundaryOf()
+    for (const session of ctx.sessions.list()) {
+      if (typeof session.id !== 'string') continue
+      if (turnBoundaryOf !== undefined) {
+        if (turnBoundaryOf(session).openTurnStartSeq !== null) openTurns.add(session.id)
+      } else if (typeof session.snapshotEvents === 'function') {
+        if (countInteractingSessions([session.snapshotEvents()]) > 0) openTurns.add(session.id)
+      }
+    }
+  }
+  const countLiveInteractingSessions = (): number => {
+    const sessions = ctx.sessions.list()
+    const turnBoundaryOf = readTurnBoundaryOf()
+    if (turnBoundaryOf !== undefined) {
+      let interacting = 0
+      for (const session of sessions) {
+        if (turnBoundaryOf(session).openTurnStartSeq !== null) interacting++
+      }
+      return interacting
+    }
+    const liveIds = new Set<string>()
+    for (const session of sessions) {
+      if (typeof session.id === 'string') liveIds.add(session.id)
+    }
+    for (const id of openTurns) {
+      if (!liveIds.has(id)) openTurns.delete(id)
+    }
+    return openTurns.size
+  }
   // The live entry config: volatile commits swap the snapshot inside
   // ctx.fiber.config in place (no reload), so every read goes through the
   // fiber first and falls back to the apply argument only off-fiber.
@@ -445,7 +490,7 @@ export function apply(ctx: Context, config: Config = {}) {
     // runs; a copied file would then be stale the moment it lands. Refuse the
     // move and keep the current directory — the user lets the conversation
     // finish and retries.
-    const interacting = countInteractingSessions(ctx.sessions.list().map(session => session.snapshotEvents()))
+    const interacting = countLiveInteractingSessions()
     if (interacting > 0) {
       throw new Error(`cannot move the data directory while ${String(interacting)} session(s) are mid-conversation; let them finish and save again`)
     }
@@ -664,6 +709,14 @@ export function apply(ctx: Context, config: Config = {}) {
   const quotaTracker = new ProviderTracker()
   ctx.on('session/event', (session: Session, event: SessionEvent) => {
     if (!isOwnSessionEvent(session, event)) return
+    if (event.type === 'turn/start') {
+      openTurns.add(session.id)
+      return
+    }
+    if (event.type === 'turn/end') {
+      openTurns.delete(session.id)
+      return
+    }
     // request/context fires at dispatch — the provider is known before the
     // first token; assistant/message re-confirms it from the provenance.
     if (event.type === 'request/context') {
@@ -1297,7 +1350,7 @@ export function apply(ctx: Context, config: Config = {}) {
       webCtx.effect(() => webCtx.webServer.register(
         createDirectoryGuardRoute((proposed): DirectoryGuardView => directoryGuard(proposed, {
           runningDir: current?.dir,
-          interactingSessions: countInteractingSessions(ctx.sessions.list().map(session => session.snapshotEvents())),
+          interactingSessions: countLiveInteractingSessions(),
         })),
       ), 'token-usage: directory guard route')
       // The card's manual "scan again" affordance: `POST` kicks off a run,

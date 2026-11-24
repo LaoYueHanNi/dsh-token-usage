@@ -33,20 +33,29 @@ function persistenceService(sessions: Array<{ id: string; events: unknown[] }>) 
 }
 
 class MockSessions extends Service {
-  /** Mid-conversation sessions (an open turn) the migration precondition counts. */
+  /** Mid-conversation sessions (an open turn) present in the store. */
   interacting = 0
   /** Idle sessions present in the store — these must NOT block a save. */
   idle = 0
+  /** Explicit live sessions tracked by id (for event-driven turn tracking tests). */
+  liveIds: string[] = []
+  /** Spy recording any runtime calls to deprecated `snapshotEvents()`. */
+  snapshotCalls = 0
 
   constructor(ctx: Context) {
     super(ctx, 'sessions')
   }
 
-  list(): Array<{ snapshotEvents(): unknown[] }> {
+  list(): Array<{ id: string; snapshotEvents(): unknown[] }> {
+    const bump = <T,>(events: T[]): () => T[] => () => {
+      this.snapshotCalls++
+      return events
+    }
     return [
+      ...this.liveIds.map(id => ({ id, snapshotEvents: bump([]) })),
       // Idle first is immaterial; an open turn is the only thing that counts.
-      ...Array.from({ length: this.idle }, () => ({ snapshotEvents: () => [{ type: 'turn/end' }] })),
-      ...Array.from({ length: this.interacting }, () => ({ snapshotEvents: () => [{ type: 'turn/start' }] })),
+      ...Array.from({ length: this.idle }, (_, i) => ({ id: `idle-${String(i)}`, snapshotEvents: bump([{ type: 'turn/end' }]) })),
+      ...Array.from({ length: this.interacting }, (_, i) => ({ id: `interacting-${String(i)}`, snapshotEvents: bump([{ type: 'turn/start' }]) })),
     ]
   }
 }
@@ -714,10 +723,15 @@ describe('live data-directory relocation', { timeout: RELOCATION_TIMEOUT_MS }, (
     host!.emit('session/event', { id: 's1' }, messageEvent({ messageId: 'm1' }))
     await pollLogFile(dirA)
 
-    // A mid-conversation session vetoes the move: nothing copies, source stays intact.
-    sessionsService!.interacting = 2
+    // Runtime turn tracking uses live turn/start & turn/end events, never
+    // calling the deprecated session.snapshotEvents() on relocation checks.
+    const callsAfterBoot = sessionsService!.snapshotCalls
+    sessionsService!.liveIds = ['s-live-1', 's-live-2']
+    host!.emit('session/event', { id: 's-live-1' }, { type: 'turn/start', turn: 1 })
+    host!.emit('session/event', { id: 's-live-2' }, { type: 'turn/start', turn: 1 })
     updateVolatileConfig(host!, { path: dirB })
     await new Promise(resolve => setTimeout(resolve, 50))
+    expect(sessionsService!.snapshotCalls).toBe(callsAfterBoot)
     expect(existsSync(dirA)).toBe(true)
     expect(existsSync(join(dirB, 'usage-2026-08-17.jsonl'))).toBe(false)
     // Events keep landing in the unchanged directory.
@@ -725,19 +739,56 @@ describe('live data-directory relocation', { timeout: RELOCATION_TIMEOUT_MS }, (
     await new Promise(resolve => setTimeout(resolve, 50))
     expect((await allIds(dirA)).sort()).toEqual(['m1', 'm2'])
 
-    // The sessions idle but stay present: existence alone never blocks, and
-    // the same save goes through with the data following.
-    sessionsService!.interacting = 0
+    // One session closes its turn and the other disappears from the store
+    // without a closing turn/end: both stop blocking and the move goes through.
+    host!.emit('session/event', { id: 's-live-1' }, { type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } })
+    sessionsService!.liveIds = ['s-live-1']
     sessionsService!.idle = 2
     updateVolatileConfig(host!, { path: dirB })
     await pollGone(dirA)
+    expect(sessionsService!.snapshotCalls).toBe(callsAfterBoot)
     expect((await allIds(dirB)).sort()).toEqual(['m1', 'm2'])
+  })
+
+  it('prefers ctx.agents.turnBoundaryOf when available and never calls snapshotEvents', async () => {
+    const dirA = join(home, 'A')
+    const dirB = join(home, 'B')
+    let openTurn = true
+    const next = new Context()
+    await next.plugin(MockSessions)
+    sessionsService = next.get('sessions') as MockSessions
+    sessionsService.liveIds = ['s-agent']
+    await next.plugin(class extends Service {
+      constructor(ctx: Context) { super(ctx, 'agents') }
+      turnBoundaryOf(): { openTurnStartSeq: number | null } {
+        return { openTurnStartSeq: openTurn ? 3 : null }
+      }
+    })
+    await next.plugin(FakeSettingsForms)
+    await next.plugin(persistenceService([]))
+    await next.plugin(plugin, { path: dirA })
+    host = next
+
+    host.emit('session/event', { id: 's-agent' }, messageEvent({ messageId: 'm1' }))
+    await pollLogFile(dirA)
+
+    updateVolatileConfig(host, { path: dirB })
+    await new Promise(resolve => setTimeout(resolve, 50))
+    expect(existsSync(dirA)).toBe(true)
+    expect(sessionsService.snapshotCalls).toBe(0)
+
+    openTurn = false
+    updateVolatileConfig(host, { path: dirB })
+    await pollGone(dirA)
+    expect(sessionsService.snapshotCalls).toBe(0)
+    expect((await allIds(dirB)).sort()).toEqual(['m1'])
   })
 
   it('saves a region edit freely while conversations are active', async () => {
     const dirA = join(home, 'A')
     await mountWith({ path: dirA })
-    sessionsService!.interacting = 1
+    sessionsService!.liveIds = ['s-live-1']
+    host!.emit('session/event', { id: 's-live-1' }, { type: 'turn/start', turn: 1 })
     // A region-only write changes no directory: the veto must not fire.
     expect(() => updateVolatileConfig(host!, { pricingRegion: 'overseas' })).not.toThrow()
   })

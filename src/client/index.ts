@@ -130,6 +130,26 @@ const resolveConfigFormsTarget = (forms: ConfigFormsLike): CardFormTarget<Sectio
   return served === undefined ? undefined : forms.get<SectionValue>(served)
 }
 
+/** Minimal SyncedConfig reference face (DSH 0.2.2+ @deepseek-ai/dsh-client-config). */
+export interface SyncedConfigRefLike<T = unknown> {
+  get(): T
+  subscribe(listener: () => void): () => void
+}
+
+/**
+ * Minimal SyncedConfig map passed as the second argument of `apply(ctx, config)`
+ * on hosts that project Host `.volatile()` fields to the browser. Absent
+ * (`undefined`) on DSH 0.2.1-rc.3 ~ 0.2.2-rc.5, where `configForms` remains
+ * the fallback read source.
+ */
+export interface SyncedConfigLike {
+  readonly sidebarPinned?: SyncedConfigRefLike<boolean | undefined>
+  readonly settingsSectionEnabled?: SyncedConfigRefLike<boolean | undefined>
+}
+
+const hasSyncedRef = <T>(ref: SyncedConfigRefLike<T> | undefined): ref is SyncedConfigRefLike<T> =>
+  ref !== undefined && typeof ref.get === 'function' && typeof ref.subscribe === 'function'
+
 /** Required services: the slot registry, the locale dictionaries, the
  * workspace navigation service (its native directory picker backs the card's
  * browse button), and the session controller (the stats page's Ctrl+click
@@ -141,8 +161,9 @@ export const inject = ['slots', 'locale', 'connection', 'remote', 'uiWorkspace',
  * Register the dictionary pair, then the settings page and the plugin
  * configuration card once the shell's declarations are on the ledger.
  * @param ctx - client root context.
+ * @param config - optional SyncedConfig map projected from Host `.volatile()` fields.
  */
-export function apply(ctx: ClientContext): void {
+export function apply(ctx: ClientContext, config?: SyncedConfigLike): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'token-usage: dictionaries')
   // Stable per-namespace translate reading the active locale at call time;
   // the label thunk re-evaluates it per read, so the nav row follows switches.
@@ -335,12 +356,17 @@ export function apply(ctx: ClientContext): void {
   // registered. All registrations wait on their shell declarations via
   // slots.inject (old shells never run undeclared callbacks); a rejected cell
   // (a same-priority occupant) likewise just means that entry stays absent.
+  const pinnedRef = hasSyncedRef(config?.sidebarPinned) ? config.sidebarPinned : undefined
+  const sectionRef = hasSyncedRef(config?.settingsSectionEnabled) ? config.settingsSectionEnabled : undefined
+
   let settingsSectionDisposer: (() => void) | undefined
   let residentDisposer: (() => void) | undefined
   let moreDisposer: (() => void) | undefined
   const syncEntries = (): void => {
-    const snapshotValue = activeTarget.getSnapshot().value
-    const sectionEnabled = snapshotValue?.settingsSectionEnabled !== false
+    const snapshotValue = (pinnedRef === undefined || sectionRef === undefined)
+      ? activeTarget.getSnapshot().value
+      : undefined
+    const sectionEnabled = (sectionRef !== undefined ? sectionRef.get() : snapshotValue?.settingsSectionEnabled) !== false
     if (sectionEnabled && settingsSectionDisposer === undefined) {
       try {
         settingsSectionDisposer = ctx.slots.register({
@@ -359,7 +385,7 @@ export function apply(ctx: ClientContext): void {
       settingsSectionDisposer = undefined
       dispose()
     }
-    const pinned = snapshotValue?.sidebarPinned === true
+    const pinned = (pinnedRef !== undefined ? pinnedRef.get() : snapshotValue?.sidebarPinned) === true
     if (pinned && residentDisposer === undefined) {
       try {
         residentDisposer = ctx.slots.register({
@@ -399,10 +425,15 @@ export function apply(ctx: ClientContext): void {
   ctx.slots.inject('sidebar.panellist', () => { syncEntries(); return () => {} })
   ctx.slots.inject('sidebar.panellist.actions', () => { syncEntries(); return () => {} })
   ctx.effect(() => {
-    targetListeners.add(syncEntries)
+    const unsubPinned = pinnedRef?.subscribe(syncEntries)
+    const unsubSection = sectionRef?.subscribe(syncEntries)
+    const fallbackToTarget = pinnedRef === undefined || sectionRef === undefined
+    if (fallbackToTarget) targetListeners.add(syncEntries)
     syncEntries()
     return () => {
-      targetListeners.delete(syncEntries)
+      unsubPinned?.()
+      unsubSection?.()
+      if (fallbackToTarget) targetListeners.delete(syncEntries)
       if (settingsSectionDisposer !== undefined) {
         const dispose = settingsSectionDisposer
         settingsSectionDisposer = undefined
