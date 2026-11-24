@@ -1,8 +1,18 @@
-import { mkdtemp, readFile, readdir, stat, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, rename, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { SessionMetaStore } from '../src/session-meta.ts'
+
+// Writes land as temp file + rename, so the rename count IS the write count:
+// the one observable that tells a batched upsert (one rewrite) from a
+// per-row one. Behaviour is unchanged — this only counts.
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>()
+  return { ...actual, rename: vi.fn(actual.rename) }
+})
+
+const renameMock = vi.mocked(rename)
 
 function newDir(): Promise<string> {
   return mkdtemp(join(tmpdir(), 'token-usage-meta-'))
@@ -94,5 +104,121 @@ describe('SessionMetaStore', () => {
     expect(['One', 'Two']).toContain(index.s1!.title)
     expect(index.s2).toEqual({ cwd: '/a' })
     expect(index.s3).toEqual({ cwd: '/b', title: 'Three' })
+  })
+})
+
+describe('SessionMetaStore subagent identity', () => {
+  it('reads the subagent identity and team-mode fields and drops unusable ones', async () => {
+    const dir = await newDir()
+    await writeFile(join(dir, 'sessions.json'), JSON.stringify({
+      root: { title: 'Root', teamMode: true },
+      'off-root': { teamMode: false },
+      researcher: {
+        parentSession: 'root', origin: 'subagent', subagentName: 'researcher', subagentLabel: '调研定价', subagentMode: 'continuable',
+      },
+      'ext-1': { parentSession: 'root', subagentName: 'codex-helper', subagentMode: 'external' },
+      bad: { subagentName: '', subagentLabel: 7, subagentMode: 'unknown', teamMode: 'yes' },
+    }))
+    const store = new SessionMetaStore(dir)
+    await expect(store.read()).resolves.toEqual({
+      root: { title: 'Root', teamMode: true },
+      'off-root': { teamMode: false },
+      researcher: {
+        parentSession: 'root', origin: 'subagent', subagentName: 'researcher', subagentLabel: '调研定价', subagentMode: 'continuable',
+      },
+      'ext-1': { parentSession: 'root', subagentName: 'codex-helper', subagentMode: 'external' },
+    })
+  })
+
+  it('lands an external child under its catalog parent with no origin (never in the lineage)', async () => {
+    const store = new SessionMetaStore(await newDir())
+    await store.upsert('ext-1', { parentSession: 'root', subagentName: 'codex-helper', subagentMode: 'external' })
+    await expect(store.read()).resolves.toEqual({
+      'ext-1': { parentSession: 'root', subagentName: 'codex-helper', subagentMode: 'external' },
+    })
+  })
+
+  it('lands a whole batch with ONE rewrite and leaves unchanged rows alone', async () => {
+    const dir = await newDir()
+    const store = new SessionMetaStore(dir)
+    await store.upsert('root', { title: 'Root', teamMode: true })
+    const first = {
+      id: 'a', patch: { parentSession: 'root', subagentName: 'agent-1', subagentMode: 'continuable' as const, subagentLabel: 'one' },
+    }
+    const second = {
+      id: 'b', patch: { parentSession: 'root', subagentName: 'reviewer', subagentMode: 'continuable' as const, subagentLabel: 'two' },
+    }
+    const external = { id: 'ext', patch: { parentSession: 'root', subagentName: 'codex', subagentMode: 'external' as const } }
+    renameMock.mockClear()
+    await store.upsertMany([first, second, external])
+    // Three children of one parent: a single temp file + rename, not three.
+    expect(renameMock).toHaveBeenCalledTimes(1)
+    const index = await store.read()
+    expect(index.a).toEqual({ parentSession: 'root', subagentName: 'agent-1', subagentMode: 'continuable', subagentLabel: 'one' })
+    expect(index.b).toEqual({ parentSession: 'root', subagentName: 'reviewer', subagentMode: 'continuable', subagentLabel: 'two' })
+    expect(index.ext).toEqual({ parentSession: 'root', subagentName: 'codex', subagentMode: 'external' })
+    // The batch touched neither the root's title nor its team mode.
+    expect(index.root).toEqual({ title: 'Root', teamMode: true })
+    // Re-landing the identical batch rewrites nothing.
+    renameMock.mockClear()
+    await store.upsertMany([first, second, external])
+    expect(renameMock).not.toHaveBeenCalled()
+    await expect(readdir(dir)).resolves.not.toContain('sessions.json.tmp')
+  })
+
+  it('applies a repeated id inside one batch in order', async () => {
+    const store = new SessionMetaStore(await newDir())
+    await store.upsertMany([
+      { id: 'a', patch: { subagentLabel: 'from descriptor' }, fillOnly: true },
+      { id: 'a', patch: { subagentLabel: 'from catalog' } },
+      { id: 'a', patch: { subagentLabel: 'from a later descriptor' }, fillOnly: true },
+    ])
+    // The weak entry first fills the gap, the catalog then overrides, and
+    // the trailing weak entry no longer gets past the catalog's value.
+    await expect(store.read()).resolves.toEqual({ a: { subagentLabel: 'from catalog' } })
+  })
+
+  it('fill-only keeps what the index holds and fills only the gaps', async () => {
+    const store = new SessionMetaStore(await newDir())
+    // Walk order 1: the parent's catalog landed first.
+    await store.upsert('a', { parentSession: 'root', subagentName: 'researcher', subagentLabel: 'from catalog', subagentMode: 'continuable' })
+    await store.upsert('a', { subagentLabel: 'from descriptor', subagentMode: 'one-shot' }, { fillOnly: true })
+    await expect(store.read()).resolves.toEqual({
+      a: { parentSession: 'root', subagentName: 'researcher', subagentLabel: 'from catalog', subagentMode: 'continuable' },
+    })
+    // Walk order 2: the child's descriptor first, the catalog after. Either
+    // way the catalog's statement is the one that survives…
+    await store.upsert('b', { subagentLabel: 'from descriptor', subagentMode: 'one-shot' }, { fillOnly: true })
+    await store.upsert('b', { parentSession: 'root', subagentLabel: 'from catalog', subagentMode: 'continuable' })
+    expect((await store.read()).b).toEqual({ parentSession: 'root', subagentLabel: 'from catalog', subagentMode: 'continuable' })
+    // …and a descriptor arriving later cannot unseat it.
+    await store.upsert('b', { subagentLabel: 'from descriptor' }, { fillOnly: true })
+    expect((await store.read()).b?.subagentLabel).toBe('from catalog')
+  })
+
+  it('a fill-only entry with no catalogue counterpart still lands', async () => {
+    // A child whose parent's log is unreadable: the descriptor is all the
+    // index will ever hold for it, and that is still worth stating.
+    const store = new SessionMetaStore(await newDir())
+    await store.upsert('orphan', { subagentLabel: 'from descriptor', subagentMode: 'one-shot' }, { fillOnly: true })
+    await expect(store.read()).resolves.toEqual({ orphan: { subagentLabel: 'from descriptor', subagentMode: 'one-shot' } })
+  })
+
+  it('treats teamMode false as a recorded value, not as "unset"', async () => {
+    const store = new SessionMetaStore(await newDir())
+    await store.upsert('root', { teamMode: true })
+    await store.upsert('root', { teamMode: false })
+    await expect(store.read()).resolves.toEqual({ root: { teamMode: false } })
+    // A later patch that does not mention the field leaves it alone.
+    await store.upsert('root', { title: 'Renamed' })
+    await expect(store.read()).resolves.toEqual({ root: { teamMode: false, title: 'Renamed' } })
+  })
+
+  it('does not create a row for a batch entry that states nothing', async () => {
+    const store = new SessionMetaStore(await newDir())
+    renameMock.mockClear()
+    await store.upsertMany([{ id: 'a', patch: {} }, { id: '', patch: { title: 'no id' } }])
+    await expect(store.read()).resolves.toEqual({})
+    expect(renameMock).not.toHaveBeenCalled()
   })
 })

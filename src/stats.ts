@@ -22,6 +22,7 @@ import type { AuxKind, UsageRecord, WebTool } from './usage-record.ts'
 import { AUX_KINDS, effectiveModelOf, isWebTool, WEB_SEARCH_TOOL, WEB_TOOLS } from './usage-record.ts'
 import { readRollup, writeRollup, ROLLUP_FILE_NAME, ROLLUP_TMP_FILE_NAME, ROLLUP_AGGREGATE_FORMAT } from './rollup.ts'
 import type { RollupFile } from './rollup.ts'
+import type { SessionMeta } from './session-meta.ts'
 import type {
   AuxSummary,
   ChildGroup,
@@ -38,6 +39,8 @@ import type {
   RateKey,
   RequestPoint,
   SessionUsageRow,
+  SubagentIdentity,
+  SubagentRoster,
   TokenSummary,
   UsageAuxRow,
   UsageDayRow,
@@ -1067,14 +1070,9 @@ export function attachCosts(
  * truncation that makes folding a server-side concern in the first place. */
 export const SESSION_ROW_LIMIT = 1000
 
-/** One entry of the session-metadata index the fold reads identities from
- * (the duck-typed projection of `session-meta.ts`'s store). */
-export interface SessionMetaEntry {
-  title?: string
-  cwd?: string
-  origin?: 'subagent'
-  parentSession?: string
-}
+/** One entry of the session-metadata index the fold reads identities from:
+ * the store's own row type, so the two can never drift apart. */
+export type SessionMetaEntry = SessionMeta
 
 /**
  * Build the child → parent lineage index from the session-metadata index.
@@ -1082,6 +1080,8 @@ export interface SessionMetaEntry {
  * (including historical forks retaining `parentSession`) never collapse into a
  * parent. Shared by the session-table fold and the scope-rule expansion so
  * both see exactly the same ancestry (a parent the index never saw is a root).
+ * An external subagent never joins either: its row carries the listing
+ * parent but no `origin`.
  */
 export function buildLineageIndex(
   meta: ReadonlyMap<string, SessionMetaEntry>,
@@ -1093,6 +1093,59 @@ export function buildLineageIndex(
     }
   }
   return parentOf
+}
+
+/**
+ * The topmost ancestor of `id` along the lineage index — `id` itself for a
+ * root. A `seen` guard stops a cyclic or self-referential lineage at the
+ * first repeated node instead of looping. Only the strict subagent lineage
+ * counts, so an ordinary fork is its own root.
+ */
+export function lineageRootOf(parentOf: ReadonlyMap<string, string>, id: string): string {
+  let current = id
+  const seen = new Set<string>([id])
+  for (;;) {
+    const parent = parentOf.get(current)
+    if (parent === undefined || seen.has(parent)) return current
+    seen.add(parent)
+    current = parent
+  }
+}
+
+/**
+ * The subagent-table identity block of one session: every direct child the
+ * metadata index knows (local subagents AND external ones, in index order)
+ * plus the team-mode selection of the lineage root. The browser's session
+ * mirror carries neither — it skips external children entirely and never
+ * carries a child's semantic name — so the server states them here, once
+ * per `fields=session` read, from the catalog facts the sync folded.
+ *
+ * A row joins the roster when it names `id` as its parent and is either a
+ * tagged subagent or an external entry; a historical ordinary fork that
+ * merely retains `parentSession` does not. The root's team mode is omitted
+ * when its log never recorded one (sessions older than the team package).
+ */
+export function buildSubagentRoster(
+  meta: ReadonlyMap<string, SessionMetaEntry>,
+  id: string,
+): SubagentRoster {
+  const children: SubagentIdentity[] = []
+  for (const [childId, entry] of meta) {
+    if (childId === id || entry.parentSession !== id) continue
+    if (entry.origin !== 'subagent' && entry.subagentMode !== 'external') continue
+    children.push({
+      id: childId,
+      ...(entry.subagentName !== undefined ? { name: entry.subagentName } : {}),
+      ...(entry.subagentLabel !== undefined ? { label: entry.subagentLabel } : {}),
+      ...(entry.subagentMode !== undefined ? { mode: entry.subagentMode } : {}),
+      ...(entry.title !== undefined ? { title: entry.title } : {}),
+    })
+  }
+  const teamMode = meta.get(lineageRootOf(buildLineageIndex(meta), id))?.teamMode
+  return {
+    ...(teamMode !== undefined ? { teamMode } : {}),
+    children,
+  }
 }
 
 /** Invert a child → parent index into parent → direct-children buckets,

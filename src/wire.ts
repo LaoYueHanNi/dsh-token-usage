@@ -50,6 +50,21 @@ export const ROOT_PARAM = 'root'
 /** Query key carrying the scope kind; omitted means `self`. */
 export const SCOPE_PARAM = 'scope'
 
+/** Lifecycle modes the host's `subagent/catalog` (v0–v3) and
+ * `subagent/descriptor` state for a child. `external` only ever comes from a
+ * catalog entry: an external child runs elsewhere and has no local session,
+ * hence no descriptor of its own. */
+export const SUBAGENT_MODES = ['one-shot', 'continuable', 'external'] as const
+
+/** One of {@link SUBAGENT_MODES}. */
+export type SubagentMode = typeof SUBAGENT_MODES[number]
+
+/** Whether a value is one of {@link SUBAGENT_MODES} (the tolerant read every
+ * duck-typed catalog / descriptor field goes through). */
+export function isSubagentMode(value: unknown): value is SubagentMode {
+  return (SUBAGENT_MODES as readonly unknown[]).includes(value)
+}
+
 /** Encode one repeated query key (`sessionId=a&sessionId=b`). Empty list yields ''. */
 export function encodeRepeatedParam(key: string, values: readonly string[]): string {
   return values.map(value => `${key}=${encodeURIComponent(value)}`).join('&')
@@ -344,6 +359,42 @@ export interface ChildTiming {
   decodeMs: number
   /** Summed provider output tokens over the same steps. */
   decodeTokens: number
+}
+
+/** One direct child's identity as the usage tab's subagent table renders
+ * its name column. Every field but `id` is absent when the session logs
+ * never stated it (children created before DSH 0.2.2 have no name). */
+export interface SubagentIdentity {
+  /** The child's id — a local session id, or the provider-assigned id of an
+   * external child (which owns no local session and no usage). */
+  id: string
+  /** Semantic name (`researcher`, `agent-1`, …) from the parent's
+   * `subagent/catalog`; the row's name badge. */
+  name?: string
+  /** Delegation label: the short description the child was created with. */
+  label?: string
+  /** Lifecycle mode; `external` rows are listed but never drilled into and
+   * contribute nothing to the ledger. */
+  mode?: SubagentMode
+  /** The child's latest `session/title` text, when its log carried one. */
+  title?: string
+}
+
+/**
+ * The subagent table's identity block of one `fields=session` read. The
+ * browser's session mirror cannot supply it: that mirror skips external
+ * children outright and carries neither a child's name nor its label as
+ * separate fields, so the host states the roster from its folded catalog
+ * facts. The table still lists LOCAL rows from the mirror (that is what
+ * makes them drillable) and reads this block for their name / label; rows
+ * marked external exist only here.
+ */
+export interface SubagentRoster {
+  /** Whether the lineage root's `team/mode` selection is on. Omitted when
+   * the root's log never recorded a selection. */
+  teamMode?: boolean
+  /** Every direct child the metadata index knows, in index order. */
+  children: readonly SubagentIdentity[]
 }
 
 /** One per-hour × per-model aggregation row, keyed by local `YYYY-MM-DDTHH`. */
@@ -895,6 +946,10 @@ export type StatsPayload = (CostedSummaryWire & {
   /** Scope-wide timing buckets aggregated over `scoped` records on
    * `fields=session` reads, matching DSH's `SessionStatsProjection` formula. */
   timing?: ChildTiming
+  /** The subagent table's identity block on `fields=session` reads only:
+   * each direct child's name / label / mode (external children included)
+   * and the lineage root's team-mode selection. Absent on chip / whole. */
+  subagents?: SubagentRoster
 })
 
 /**
@@ -1083,6 +1138,9 @@ export interface UsageSummary extends Omit<CostedSummary, 'bySession'> {
    * (最新请求 / 实时请求). Absent on `chip` and whole-log `full` reads —
    * the pool is the usage tab's view, never a settings-page concern. */
   requestDetails?: SessionRequestDetails
+  /** Session-scoped `fields=session` reads only: the subagent table's
+   * identity block (see {@link SubagentRoster}). Absent on older hosts. */
+  subagents?: SubagentRoster
 }
 
 /** One normalized quota window tier, mirroring the tier vocabulary the

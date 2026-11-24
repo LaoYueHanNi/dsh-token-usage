@@ -17,6 +17,12 @@
  * host from recorded requests (post-install, timed requests only). A
  * footnote states both scopes so the difference is not a surprise.
  *
+ * The subagent table's rows come from two sources: the session mirror lists
+ * the LOCAL children (which is what makes a row drillable) and the host's
+ * `subagents` roster supplies each child's semantic name and delegation
+ * label — and is the only place an external child appears, as a dimmed,
+ * non-drillable row that states it holds no local usage.
+ *
  * The root declares `data-conversation-composer-overlay` — the same host
  * opt-in Trajectory uses. ConversationRoot hides the chat-column width
  * handles when that attribute is present, and the view owns its own
@@ -43,7 +49,8 @@ import { ModelAssociationBadge, PricingAssociationProvider, UnpricedModelTag } f
 import { usePricingAssociationRefresh } from './pricing-associations.ts'
 import { HitRateText } from './HitRateText.tsx'
 import { RequestPoolSections } from './RequestPool.tsx'
-import { aggregateScopedProjections, buildChildIndex, directSubagentIds, resolveHeaderTiming, subagentParentOf, subtreeIds, buildStatsFreshnessKey } from './session-stats.ts'
+import { aggregateScopedProjections, buildChildIndex, buildStatsFreshnessKey, buildSubagentRows, directSubagentIds, resolveHeaderTiming, subagentParentOf, subagentRowText, subtreeIds } from './session-stats.ts'
+import type { SubagentRow } from './session-stats.ts'
 import { RequestsCell, RequestsStatCard, StatCard } from './StatCard.tsx'
 import { TrendChart } from './TrendChart.tsx'
 import type { TrendChartMode } from './TrendChart.tsx'
@@ -98,6 +105,52 @@ function fetchSessionSummary(
       }
       return value as UsageSummary
     })
+}
+
+/**
+ * The subagent row's hover: the semantic name (when recorded and distinct
+ * from the session id), followed by the session id and lifecycle mode.
+ * Never shows the session title, which on older subagents is merely a
+ * truncated prompt prefix.
+ */
+function subagentHover(row: SubagentRow, t: TranslateNS<'token-usage'>): string {
+  const name = row.name !== undefined && row.name !== row.id ? row.name : undefined
+  if (row.external) {
+    const ext = t('view.subagents.tip.external', { id: row.id })
+    return name !== undefined ? `${name} · ${ext}` : ext
+  }
+  const session = t('view.subagents.tip.session', { id: row.id })
+  const mode = row.mode === 'one-shot' || row.mode === 'continuable'
+    ? t(row.mode === 'one-shot' ? 'view.subagents.mode.one-shot' : 'view.subagents.mode.continuable')
+    : undefined
+  return [name, session, mode].filter((part): part is string => part !== undefined).join(' · ')
+}
+
+/**
+ * The subagent table's name column: single-line description text (semantic
+ * name lives in the hover so it never duplicates or crowds the concise
+ * delegation label). A local row is the drill-in button; an external row is
+ * plain text, because there is no session behind it to drill into.
+ */
+function SubagentNameCell(props: {
+  text: string
+  title: string
+  onDrill: (() => void) | undefined
+}): ReactNode {
+  const { text, title, onDrill } = props
+  const desc = <span className={styles['childDesc']}>{text}</span>
+  return onDrill === undefined
+    ? <span className={styles['childIdentity']} title={title}>{desc}</span>
+    : (
+      <button
+        type="button"
+        className={`${styles['childIdentity']} ${styles['childLink']}`}
+        title={title}
+        onClick={onDrill}
+      >
+        {desc}
+      </button>
+    )
 }
 
 /**
@@ -264,6 +317,12 @@ export function UsageView({ useSessions, useProjection, sessionId, t }: UsageVie
 
   const activeCount = summaryState.status === 'ready' ? summaryState.value.requestDetails?.activeCount ?? 0 : 0
   const hasActive = activeCount > 0
+  // The subagent table's rows: the mirror's local children (drillable) with
+  // the host roster's names / labels merged in, then the roster's external
+  // children. The roster rides the same read as the figures, so a settled
+  // refresh repaints names and numbers together.
+  const roster = summaryState.status === 'ready' ? summaryState.value.subagents : undefined
+  const subagentRows = useMemo(() => buildSubagentRows(children, byId, roster), [children, byId, roster])
   useEffect(() => {
     if (document.visibilityState !== 'visible' || fetchingRef.current) return
     const timer = setTimeout(() => {
@@ -486,8 +545,21 @@ export function UsageView({ useSessions, useProjection, sessionId, t }: UsageVie
       <section className={styles['subagents']}>
         <div className={styles['subagentsHead']}>
           <h3 className={styles['subtitle']}>
-            {t('view.subagents.title', { count: String(children.length) })}
+            {/* The count is the number of rows below: local children AND
+                external ones, which the mirror never lists. */}
+            {t('view.subagents.title', { count: String(subagentRows.length) })}
           </h3>
+          {/* One badge for the whole block, never a per-row mark: when the
+              lineage root runs the agent team, every continuable child in it
+              is a teammate, so the block heading is the one place the fact
+              is worth stating. */}
+          {roster?.teamMode === true
+            ? (
+              <span className={styles['teamBadge']} title={t('view.subagents.teamHint')}>
+                {t('view.subagents.team')}
+              </span>
+            )
+            : null}
           {(() => {
             // The up-navigation control sits with the subagent section it
             // returns from: the drill-in entry point is the row below.
@@ -506,7 +578,7 @@ export function UsageView({ useSessions, useProjection, sessionId, t }: UsageVie
             )
           })()}
         </div>
-        {children.length === 0
+        {subagentRows.length === 0
           ? <p className={styles['muted']}>{t('view.subagents.none')}</p>
           : (
             <div
@@ -517,7 +589,7 @@ export function UsageView({ useSessions, useProjection, sessionId, t }: UsageVie
               role="region"
               aria-label={t('view.subagents.scroll')}
             >
-              <table className={styles['table']} aria-label={t('view.subagents.title', { count: String(children.length) })}>
+              <table className={styles['table']} aria-label={t('view.subagents.title', { count: String(subagentRows.length) })}>
                 <thead>
                   <tr>
                     <th className={styles['modelHead']}>{t('view.subagents.titleCol')}</th>
@@ -530,27 +602,41 @@ export function UsageView({ useSessions, useProjection, sessionId, t }: UsageVie
                   </tr>
                 </thead>
                 <tbody>
-                  {children.map(id => {
-                    const child = byId[id as SessionId]
-                    const row = summary.children?.[id]
+                  {subagentRows.map(row => {
+                    const rowSummary = byId[row.id as SessionId]
+                    const text = subagentRowText(row, rowSummary)
+                    const identity = (
+                      <SubagentNameCell
+                        text={text}
+                        title={subagentHover(row, t)}
+                        onDrill={row.external ? undefined : () => setFocusId(row.id as SessionId)}
+                      />
+                    )
+                    // An external child runs elsewhere: no local session, so
+                    // no usage to show. Its figure cells merge into the one
+                    // sentence that says so — a row of dashes would read as
+                    // "measured, and zero".
+                    if (row.external) {
+                      return (
+                        <tr key={row.id} className={styles['extRow']}>
+                          <td className={styles['childCell']}>{identity}</td>
+                          <td className={styles['extNote']} colSpan={6}>{t('view.subagents.externalNote')}</td>
+                        </tr>
+                      )
+                    }
+                    const usage = summary.children?.[row.id]
                     // TTFT / throughput come from the host's record-derived
                     // breakdown, NOT the runtime mirror: finished subagents
                     // do not retain a sessionStats projection.
-                    const timing = row?.timing
+                    const timing = usage?.timing
                     // A nested-subagent marker: the count of THIS child's own
                     // direct subagents, so the table signals before the
                     // drill-in that the row has a subtree of its own.
-                    const nestedCount = directSubagentIds(byId, id, childIndex).length
+                    const nestedCount = directSubagentIds(byId, row.id, childIndex).length
                     return (
-                      <tr key={id}>
-                        <td className={styles['modelCell']}>
-                          <button
-                            type="button"
-                            className={styles['childLink']}
-                            onClick={() => setFocusId(id as SessionId)}
-                          >
-                            {child?.displayTitle ?? id}
-                          </button>
+                      <tr key={row.id}>
+                        <td className={styles['childCell']}>
+                          {identity}
                           {nestedCount > 0
                             ? (
                               <span
@@ -562,12 +648,12 @@ export function UsageView({ useSessions, useProjection, sessionId, t }: UsageVie
                             )
                             : null}
                         </td>
-                        <td>{row?.total.requests.toLocaleString() ?? '—'}</td>
-                        <td>{row !== undefined ? formatTokens(totalTokens(row.total)) : '—'}</td>
+                        <td>{usage?.total.requests.toLocaleString() ?? '—'}</td>
+                        <td>{usage !== undefined ? formatTokens(totalTokens(usage.total)) : '—'}</td>
                         <td className={styles['costCol']}>
-                          {row !== undefined && costsAvailable(summary.costState) && costsAvailable(row.costState) ? formatCost(row.totalCost, view) : '—'}
+                          {usage !== undefined && costsAvailable(summary.costState) && costsAvailable(usage.costState) ? formatCost(usage.totalCost, view) : '—'}
                         </td>
-                        <td>{row !== undefined ? <HitRateText totals={row.total} /> : '—'}</td>
+                        <td>{usage !== undefined ? <HitRateText totals={usage.total} /> : '—'}</td>
                         <td>{timing !== undefined && timing.ttftSteps > 0 ? formatTtft(timing.ttftMs / timing.ttftSteps) : '—'}</td>
                         <td>{timing !== undefined && timing.decodeMs > 0 ? `${formatSpeed(timing.decodeTokens / (timing.decodeMs / 1_000))} tok/s` : '—'}</td>
                       </tr>

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Context, Service } from '@deepseek-ai/cordis'
-import { SessionSeq } from '@deepseek-ai/dsh-session'
+import { SessionSeq, type SessionEvent } from '@deepseek-ai/dsh-session'
 import * as plugin from '../src/index.ts'
 import { DEFAULT_PRICING_URL_OVERSEAS } from '../src/pricing.ts'
 import { ASSOCIATIONS_FILE } from '../src/pricing-associations.ts'
@@ -460,6 +460,66 @@ describe('plugin integration', () => {
       kind: 'failure',
       failureCode: 'TIMEOUT',
     })
+  })
+
+  it('folds subagent identity and team mode from live OWN events, never from an inherited prefix', async () => {
+    const mounted = await mount()
+    await waitForState(mounted.dir)
+    const stamp = (seq: number): number => 1_700_000_000_000 + seq
+    const catalog = (seq: number, data: Record<string, unknown>): SessionEvent =>
+      ({ type: 'subagent/catalog', seq: SessionSeq(seq), time: stamp(seq), data }) as unknown as SessionEvent
+    const descriptor = (seq: number, data: Record<string, unknown>): SessionEvent =>
+      ({ type: 'subagent/descriptor', seq: SessionSeq(seq), time: stamp(seq), data }) as unknown as SessionEvent
+    const teamMode = (seq: number, enabled: boolean): SessionEvent =>
+      ({ type: 'team/mode', seq: SessionSeq(seq), time: stamp(seq), data: { enabled } }) as unknown as SessionEvent
+
+    // The root turns the agent team on and catalogues two children: a named
+    // local one and an external one.
+    ctx!.emit('session/event', { id: 'root' }, teamMode(1, true))
+    ctx!.emit('session/event', { id: 'root' }, catalog(2, {
+      version: 3, childId: 'researcher', childCreatedAt: 1, mode: 'continuable', label: '调研竞品定价', name: 'researcher',
+    }))
+    ctx!.emit('session/event', { id: 'root' }, catalog(3, {
+      version: 3, childId: 'codex-helper', childCreatedAt: 2, mode: 'external', label: '用 Codex 写脚本', name: 'codex-helper',
+    }))
+    // The local child's own events: its header, then its descriptor (which
+    // agrees with the catalog, as the host writes them from one source).
+    ctx!.emit('session/event', { id: 'researcher', header: { cwd: '/work/app', origin: 'subagent', parentSession: 'root' } },
+      descriptor(1, { version: 3, mode: 'continuable', provider: 'task', label: '调研竞品定价' }))
+    // A fork copy replays its inherited prefix on session/event: the
+    // ancestor's team mode and catalog entry are NOT the copy's own facts.
+    const fork = { id: 'fork-copy', inheritedEventCount: 2, isOwnSeq: (seq: number) => seq >= 2 }
+    ctx!.emit('session/event', fork, teamMode(0, true))
+    ctx!.emit('session/event', fork, catalog(1, {
+      version: 3, childId: 'ancestor-child', childCreatedAt: 1, mode: 'continuable', label: '祖先的委派', name: 'old',
+    }))
+    // Its own toggle lands.
+    ctx!.emit('session/event', fork, teamMode(2, false))
+
+    // Every write is fire-and-forget: wait until each one has landed.
+    const path = join(mounted.dir, 'sessions.json')
+    const deadline = Date.now() + 2_000
+    for (;;) {
+      const index = await readFile(path, 'utf8').then(text => JSON.parse(text) as Record<string, Record<string, unknown>>).catch(() => ({}))
+      if (index.root?.teamMode === true
+        && typeof index.researcher?.subagentLabel === 'string'
+        && index['codex-helper']?.subagentMode === 'external'
+        && index['fork-copy']?.teamMode === false) {
+        expect(index).toEqual({
+          root: { teamMode: true },
+          researcher: {
+            cwd: '/work/app', origin: 'subagent', parentSession: 'root',
+            subagentName: 'researcher', subagentLabel: '调研竞品定价', subagentMode: 'continuable',
+          },
+          // No session, no origin: listed under the root, outside the lineage.
+          'codex-helper': { parentSession: 'root', subagentName: 'codex-helper', subagentLabel: '用 Codex 写脚本', subagentMode: 'external' },
+          'fork-copy': { teamMode: false },
+        })
+        break
+      }
+      if (Date.now() > deadline) throw new Error(`identity never landed: ${JSON.stringify(index)}`)
+      await new Promise(resolve => setTimeout(resolve, 20))
+    }
   })
 
   it('ignores non-assistant/message events', async () => {

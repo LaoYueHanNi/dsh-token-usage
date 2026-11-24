@@ -4,7 +4,8 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { SessionSeq, type SessionEvent, type SessionId } from '@deepseek-ai/dsh-session'
 import { BACKUPS_DIR, isBackupSnapshotName } from '../src/backup.ts'
-import { autoSyncIfNeeded, syncHistory, type SyncLog, type SyncPersistence } from '../src/sync.ts'
+import { SessionMetaStore, type SessionMeta, type SessionMetaPatch } from '../src/session-meta.ts'
+import { autoSyncIfNeeded, syncHistory, type SyncLog, type SyncMetaSink, type SyncPersistence } from '../src/sync.ts'
 import { isInitialized } from '../src/sync-state.ts'
 import { UsageLog } from '../src/usage-log.ts'
 import { serializeRecord, type UsageRecord } from '../src/usage-record.ts'
@@ -1434,6 +1435,277 @@ describe('syncHistory web searches', () => {
         .split('\n')
         .map(line => JSON.parse(line) as UsageRecord)
       expect(dayFile.map(row => row.requestId)).toEqual(['p-msg-1', 'c-msg-1'])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+/** A parent's `subagent/catalog` entry (host-merged payload, read duck-typed). */
+function catalogEvent(seq: number, data: Record<string, unknown>): SessionEvent {
+  return { type: 'subagent/catalog', seq: SessionSeq(seq), time: 1_700_000_000_000 + seq, data } as unknown as SessionEvent
+}
+
+/** A child's own `subagent/descriptor` (same duck-typed reading). */
+function descriptorEvent(seq: number, data: Record<string, unknown>): SessionEvent {
+  return { type: 'subagent/descriptor', seq: SessionSeq(seq), time: 1_700_000_000_000 + seq, data } as unknown as SessionEvent
+}
+
+/** A runtime root's `team/mode` selection. */
+function teamModeEvent(seq: number, enabled: unknown): SessionEvent {
+  return { type: 'team/mode', seq: SessionSeq(seq), time: 1_700_000_000_000 + seq, data: { enabled } } as unknown as SessionEvent
+}
+
+/** The v3 catalog entry the host appends for a named local child. */
+function namedCatalog(seq: number, childId: string, name: string, label: string): SessionEvent {
+  return catalogEvent(seq, { version: 3, childId, childCreatedAt: 1, mode: 'continuable', label, name })
+}
+
+interface RecordedEntry {
+  id: string
+  patch: SessionMeta
+  fillOnly?: boolean
+}
+
+/** A metadata sink that records what the sync handed it: whole batches when
+ * `batched`, single upserts otherwise. */
+function recordingSink(batched = true): {
+  sink: SyncMetaSink
+  batches: RecordedEntry[][]
+  singles: Array<{ id: string; patch: SessionMeta; fillOnly?: boolean }>
+} {
+  const batches: RecordedEntry[][] = []
+  const singles: Array<{ id: string; patch: SessionMeta; fillOnly?: boolean }> = []
+  const copy = ({ id, patch, fillOnly }: SessionMetaPatch): RecordedEntry =>
+    ({ id, patch: { ...patch }, ...(fillOnly === true ? { fillOnly: true } : {}) })
+  return {
+    batches,
+    singles,
+    sink: {
+      async upsert(id, patch, options) {
+        singles.push({ id, patch: { ...patch }, ...(options?.fillOnly === true ? { fillOnly: true } : {}) })
+      },
+      ...(batched
+        ? { async upsertMany(entries) { batches.push(entries.map(copy)) } }
+        : {}),
+    },
+  }
+}
+
+describe('syncHistory subagent identity', () => {
+  it('folds catalog, descriptor and team/mode into ONE batch per session, landing catalog entries on the child rows', async () => {
+    const log = new FakeLog()
+    const persistence = fakePersistence([
+      {
+        id: 'root',
+        events: [
+          teamModeEvent(1, true),
+          // A named local child (v3), an external one (v3), and two entries
+          // from before names existed: v0 one-shot with no label, v2 external.
+          namedCatalog(2, 'researcher', 'researcher', '调研竞品定价策略'),
+          catalogEvent(3, { version: 3, childId: 'codex-helper', childCreatedAt: 3, mode: 'external', label: '用 Codex 写迁移脚本', name: 'codex-helper' }),
+          catalogEvent(4, { version: 0, childId: 'legacy', childCreatedAt: 4, mode: 'one-shot' }),
+          catalogEvent(5, { version: 2, childId: 'ext-old', childCreatedAt: 5, mode: 'external', label: '旧的外部执行' }),
+          messageEventWith('m-root', 6),
+        ] as SessionEvent[],
+      },
+      {
+        id: 'researcher',
+        header: { cwd: '/work/app', origin: 'subagent', parentSession: 'root' },
+        events: [
+          descriptorEvent(1, { version: 3, mode: 'continuable', provider: 'task', label: '调研竞品定价策略', agentModel: 'deepseek-chat' }),
+          messageEventWith('m-child', 2),
+        ] as SessionEvent[],
+      },
+      // A session stating none of these facts hands the sink nothing at all.
+      { id: 'plain', events: [messageEventWith('m-plain', 1)] },
+    ])
+    const { sink, batches } = recordingSink()
+    await syncHistory({ persistence, log, meta: sink })
+    // One batch per session that has something to state; `plain` has not.
+    expect(batches).toHaveLength(2)
+    expect(batches[0]).toEqual([
+      { id: 'root', patch: { teamMode: true } },
+      { id: 'researcher', patch: { parentSession: 'root', subagentName: 'researcher', subagentLabel: '调研竞品定价策略', subagentMode: 'continuable' } },
+      { id: 'codex-helper', patch: { parentSession: 'root', subagentName: 'codex-helper', subagentLabel: '用 Codex 写迁移脚本', subagentMode: 'external' } },
+      // v0–v2 entries carry no name: nothing is invented for them.
+      { id: 'legacy', patch: { parentSession: 'root', subagentMode: 'one-shot' } },
+      { id: 'ext-old', patch: { parentSession: 'root', subagentLabel: '旧的外部执行', subagentMode: 'external' } },
+    ])
+    // The child's own row: header facts, then its descriptor as the weaker
+    // (fill-only) source of the label the catalog already states.
+    expect(batches[1]).toEqual([
+      { id: 'researcher', patch: { cwd: '/work/app', origin: 'subagent', parentSession: 'root' } },
+      { id: 'researcher', patch: { subagentLabel: '调研竞品定价策略', subagentMode: 'continuable' }, fillOnly: true },
+    ])
+  })
+
+  it('takes the FIRST own descriptor as authoritative, like the host does', async () => {
+    const persistence = fakePersistence([{
+      id: 'child',
+      events: [
+        descriptorEvent(1, { version: 3, mode: 'one-shot', provider: 'a', label: 'first' }),
+        descriptorEvent(2, { version: 3, mode: 'continuable', provider: 'b', label: 'second' }),
+      ] as SessionEvent[],
+    }])
+    const { sink, batches } = recordingSink()
+    await syncHistory({ persistence, log: new FakeLog(), meta: sink })
+    expect(batches).toEqual([[
+      { id: 'child', patch: { subagentLabel: 'first', subagentMode: 'one-shot' }, fillOnly: true },
+    ]])
+  })
+
+  it('lets a later catalog entry win field by field without erasing what it omits', async () => {
+    const persistence = fakePersistence([
+      { id: 'p1', events: [
+        catalogEvent(1, { version: 1, childId: 'c', childCreatedAt: 1, mode: 'one-shot' }),
+        catalogEvent(2, { version: 3, childId: 'c', childCreatedAt: 1, mode: 'continuable', label: 'L', name: 'reviewer' }),
+      ] as SessionEvent[] },
+      { id: 'p2', events: [
+        namedCatalog(1, 'd', 'writer', 'draft'),
+        // An entry that states nothing but the mode leaves name and label alone.
+        catalogEvent(2, { version: 1, childId: 'd', childCreatedAt: 1, mode: 'one-shot' }),
+      ] as SessionEvent[] },
+    ])
+    const { sink, batches } = recordingSink()
+    await syncHistory({ persistence, log: new FakeLog(), meta: sink })
+    expect(batches).toEqual([
+      [{ id: 'c', patch: { parentSession: 'p1', subagentName: 'reviewer', subagentLabel: 'L', subagentMode: 'continuable' } }],
+      [{ id: 'd', patch: { parentSession: 'p2', subagentName: 'writer', subagentLabel: 'draft', subagentMode: 'one-shot' } }],
+    ])
+  })
+
+  it('skips unusable payloads instead of fabricating identity', async () => {
+    const persistence = fakePersistence([
+      { id: 'root', events: [
+        catalogEvent(1, { version: 3, childId: '', mode: 'continuable', label: 'x', name: 'noname' }),
+        catalogEvent(2, { version: 3, childId: 'c', mode: 'mystery', label: 42, name: 7 }),
+        catalogEvent(3, { version: 3, childId: 'strange', mode: 'whatever', name: 'strange' }),
+        // Names no child at all: not a catalog fact.
+        catalogEvent(4, { version: 3, mode: 'continuable', label: 'orphan' }),
+        teamModeEvent(5, 'yes'),
+        teamModeEvent(6, false),
+        messageEventWith('m', 7),
+      ] as SessionEvent[] },
+      { id: 'c', events: [
+        descriptorEvent(1, { version: 99, mode: 'mystery' }),
+        messageEventWith('m-c', 2),
+      ] as SessionEvent[] },
+    ])
+    const { sink, batches } = recordingSink()
+    await syncHistory({ persistence, log: new FakeLog(), meta: sink })
+    // `c`'s entry has a child id but not one usable field → dropped; the
+    // odd-mode child keeps its name; the latest team/mode wins.
+    expect(batches).toEqual([
+      [
+        { id: 'root', patch: { teamMode: false } },
+        { id: 'strange', patch: { parentSession: 'root', subagentName: 'strange' } },
+      ],
+    ])
+  })
+
+  it.each([
+    // An own title: the prefix is never read, so none of its facts can leak.
+    ['an own title', [titleEvent('Fork title', 5), messageEventWith('own-msg', 6)], [{ offset: 4, length: 7 }], 'Fork title'],
+    // No own title: the prefix IS read back for the title alone (the fork
+    // rule of the tests above) — and still folds no identity event.
+    ['no own title', [messageEventWith('own-msg', 5)], [{ offset: 4, length: 6 }, { offset: 0, length: 4 }], 'Ancestor title'],
+  ])('never folds a fork-inherited prefix (sliced handle) with %s', async (_label, own, reads, expectedTitle) => {
+    const log = new FakeLog()
+    const readCalls: Array<{ offset: number | undefined; length: number | undefined }> = []
+    const inherited: SessionEvent[] = [
+      teamModeEvent(0, true),
+      namedCatalog(1, 'ancestor-child', 'researcher', 'ancestor delegation'),
+      descriptorEvent(2, { version: 3, mode: 'continuable', provider: 'task', label: 'ancestor descriptor' }),
+      titleEvent('Ancestor title', 3),
+    ]
+    const all: SessionEvent[] = [endSeedEvent(4, true), ...own]
+    const logSeq: SessionEvent[] = [...inherited, ...all]
+    const persistence: SyncPersistence = {
+      async list() { return [{ header: { id: 'fork-copy' as SessionId } }] },
+      async open() {
+        return {
+          inheritedEventCount: inherited.length,
+          // Offsets are seq-based: the inherited prefix is seq 0–3.
+          async read(offset = 0, length = logSeq.length) {
+            readCalls.push({ offset, length })
+            return { events: logSeq.slice(offset, offset + length) }
+          },
+          async close() {},
+        }
+      },
+    }
+    const { sink, batches } = recordingSink()
+    await syncHistory({ persistence, log, meta: sink })
+    expect(readCalls).toEqual(reads)
+    // The inherited team mode, catalog entry and descriptor all belong to
+    // the ancestor: none lands on the copy or on a "child" of the copy.
+    // Only the title follows the inherited-prefix rule.
+    expect(batches).toEqual([[{ id: 'fork-copy', patch: { title: expectedTitle } }]])
+  })
+
+  it('never folds a fork-inherited prefix (handle ignoring offsets): only events after the seed marker count', async () => {
+    const events: SessionEvent[] = [
+      teamModeEvent(0, true),
+      namedCatalog(1, 'ancestor-child', 'researcher', 'ancestor delegation'),
+      descriptorEvent(2, { version: 3, mode: 'continuable', provider: 'task', label: 'ancestor descriptor' }),
+      endSeedEvent(3, true),
+      teamModeEvent(4, false),
+      namedCatalog(5, 'own-child', 'writer', 'own delegation'),
+      messageEventWith('own-msg', 6),
+    ]
+    const { sink, batches } = recordingSink()
+    await syncHistory({ persistence: fakePersistence([{ id: 'fork-copy', events }]), log: new FakeLog(), meta: sink })
+    expect(batches).toEqual([
+      [
+        // The copy's own toggle, and its own catalogued child.
+        { id: 'fork-copy', patch: { teamMode: false } },
+        { id: 'own-child', patch: { parentSession: 'fork-copy', subagentName: 'writer', subagentLabel: 'own delegation', subagentMode: 'continuable' } },
+      ],
+    ])
+  })
+
+  it('lands the same facts through a sink without the batched interface, one upsert per entry', async () => {
+    const persistence = fakePersistence([
+      { id: 'root', events: [teamModeEvent(1, true), namedCatalog(2, 'c', 'reviewer', 'review')] as SessionEvent[] },
+      { id: 'c', events: [descriptorEvent(1, { version: 3, mode: 'continuable', provider: 'task', label: 'review' })] as SessionEvent[] },
+    ])
+    const { sink, batches, singles } = recordingSink(false)
+    await syncHistory({ persistence, log: new FakeLog(), meta: sink })
+    expect(batches).toEqual([])
+    expect(singles).toEqual([
+      { id: 'root', patch: { teamMode: true } },
+      { id: 'c', patch: { parentSession: 'root', subagentName: 'reviewer', subagentLabel: 'review', subagentMode: 'continuable' } },
+      { id: 'c', patch: { subagentLabel: 'review', subagentMode: 'continuable' }, fillOnly: true },
+    ])
+  })
+
+  it.each([
+    ['child first, parent after', ['researcher', 'root']],
+    ['parent first, child after', ['root', 'researcher']],
+  ])('keeps the catalog label whichever session the walk reads first (%s)', async (_label, order) => {
+    const dir = await mkdtemp(join(tmpdir(), 'token-usage-sync-meta-'))
+    try {
+      const sessions = [
+        {
+          id: 'root',
+          events: [namedCatalog(1, 'researcher', 'researcher', 'from catalog')] as SessionEvent[],
+        },
+        {
+          id: 'researcher',
+          header: { origin: 'subagent' as const, parentSession: 'root' },
+          events: [descriptorEvent(1, { version: 3, mode: 'continuable', provider: 'task', label: 'from descriptor' })] as SessionEvent[],
+        },
+      ]
+      const listed = order.map(id => sessions.find(session => session.id === id)!)
+      const meta = new SessionMetaStore(dir)
+      await syncHistory({ persistence: fakePersistence(listed), log: new FakeLog(), meta })
+      await meta.flush()
+      // The descriptor's differing label never wins: the parent's catalog
+      // is the source, the child's own descriptor only fills a gap.
+      await expect(meta.read()).resolves.toEqual({
+        researcher: { parentSession: 'root', origin: 'subagent', subagentName: 'researcher', subagentLabel: 'from catalog', subagentMode: 'continuable' },
+      })
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

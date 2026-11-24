@@ -7,9 +7,10 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
-  aggregateProjections, buildChildIndex, buildStatsFreshnessKey, directSubagentIds, resolveHeaderTiming, sessionStatsFingerprint, subagentParentOf, subtreeIds, tokenUsageFingerprint,
+  aggregateProjections, buildChildIndex, buildStatsFreshnessKey, buildSubagentRows, directSubagentIds, resolveHeaderTiming, sessionStatsFingerprint, subagentParentOf, subagentRowText, subtreeIds, tokenUsageFingerprint,
 } from '../src/client/session-stats.ts'
 import type { SessionRows } from '../src/client/session-stats.ts'
+import type { SubagentRoster } from '../src/wire.ts'
 import { decodeChildGroups, decodeStatsScope, encodeSessionScope, encodeStatsQuery } from '../src/wire.ts'
 
 /** A session mirror with a root, one subagent child, one nested grandchild,
@@ -177,6 +178,118 @@ describe('subagentParentOf', () => {
     // A corrupted or test fixture that sets parentId == id would loop; the
     // check refuses to answer rather than produce a 1-node cycle.
     expect(subagentParentOf(mirror(), 'selfParent')).toBeUndefined()
+  })
+})
+
+/** The mirror rows of a root with two local children, in mirror order. */
+const IDENTITY_MIRROR: SessionRows = {
+  root: { displayTitle: 'Refactor billing' },
+  researcher: { parentId: 'root', origin: 'subagent', displayTitle: '调研竞品定价策略' },
+  writer: { parentId: 'root', origin: 'subagent', displayTitle: '撰写迁移指南', title: '撰写迁移指南' },
+  legacy: { parentId: 'root', origin: 'subagent', displayTitle: 'legacy' },
+}
+
+describe('buildSubagentRows', () => {
+  const roster: SubagentRoster = {
+    teamMode: true,
+    children: [
+      { id: 'researcher', name: 'researcher', label: '调研竞品定价策略', mode: 'continuable' },
+      { id: 'writer', name: 'writer', label: '撰写迁移指南初稿', mode: 'continuable', title: '撰写迁移指南' },
+      // Created before named subagents: identity without a name.
+      { id: 'legacy', label: '旧任务', mode: 'one-shot', title: 'Legacy child' },
+      { id: 'codex-helper', name: 'codex-helper', label: '用 Codex 写迁移脚本', mode: 'external' },
+    ],
+  }
+
+  it('keeps the mirror order of local rows, merges the roster identity in, and appends the external ones', () => {
+    const rows = buildSubagentRows(['researcher', 'writer', 'legacy'], IDENTITY_MIRROR, roster)
+    expect(rows).toEqual([
+      { id: 'researcher', name: 'researcher', label: '调研竞品定价策略', mode: 'continuable', external: false },
+      // The mirror's own title outranks the index's for the same session.
+      { id: 'writer', name: 'writer', label: '撰写迁移指南初稿', mode: 'continuable', title: '撰写迁移指南', external: false },
+      { id: 'legacy', label: '旧任务', mode: 'one-shot', title: 'Legacy child', external: false },
+      { id: 'codex-helper', name: 'codex-helper', label: '用 Codex 写迁移脚本', mode: 'external', external: true },
+    ])
+  })
+
+  it('appends external children after the local rows, in roster order', () => {
+    const rows = buildSubagentRows(['researcher'], IDENTITY_MIRROR, roster)
+    expect(rows.slice(1)).toEqual([
+      { id: 'codex-helper', name: 'codex-helper', label: '用 Codex 写迁移脚本', mode: 'external', external: true },
+    ])
+  })
+
+  it('lists an external child even when the mirror has no local row at all', () => {
+    expect(buildSubagentRows([], {}, roster)).toEqual([
+      { id: 'codex-helper', name: 'codex-helper', label: '用 Codex 写迁移脚本', mode: 'external', external: true },
+    ])
+  })
+
+  it('drops a roster entry that is neither in the mirror nor external', () => {
+    // A local child the mirror stopped listing (archived, deleted) was
+    // never a row here; it still must not become an undrillable one.
+    const rows = buildSubagentRows(['researcher'], IDENTITY_MIRROR, roster)
+    expect(rows.map(row => row.id)).toEqual(['researcher', 'codex-helper'])
+  })
+
+  it('never duplicates a child the mirror lists under an external entry', () => {
+    const odd: SubagentRoster = { children: [{ id: 'researcher', name: 'twice', mode: 'external' }] }
+    expect(buildSubagentRows(['researcher'], IDENTITY_MIRROR, odd).map(row => row.id)).toEqual(['researcher'])
+  })
+
+  it('draws local rows from the mirror alone on an older host (no roster)', () => {
+    expect(buildSubagentRows(['researcher', 'legacy'], IDENTITY_MIRROR, undefined)).toEqual([
+      { id: 'researcher', external: false },
+      { id: 'legacy', external: false },
+    ])
+    expect(buildSubagentRows(['legacy'], IDENTITY_MIRROR, { children: [] })).toEqual([{ id: 'legacy', external: false }])
+  })
+})
+
+describe('subagentRowText', () => {
+  const rowText = (id: string, row: Parameters<typeof subagentRowText>[0], mirror = IDENTITY_MIRROR[id]) => subagentRowText(row, mirror)
+
+  it('prefers the delegation label even when a title is present', () => {
+    expect(rowText('writer', {
+      id: 'writer', name: 'writer', label: '撰写迁移指南初稿', title: '撰写迁移指南', external: false,
+    })).toBe('撰写迁移指南初稿')
+  })
+
+  it('shows the delegation label when there is no title', () => {
+    expect(rowText('researcher', {
+      id: 'researcher', name: 'researcher', label: '调研竞品定价策略', mode: 'continuable', external: false,
+    })).toBe('调研竞品定价策略')
+  })
+
+  it('falls back to the mirror displayTitle when no delegation label is recorded', () => {
+    const renamed = { parentId: 'root', origin: 'subagent' as const, displayTitle: '手动重命名标题', title: '手动重命名标题' }
+    expect(rowText('writer', {
+      id: 'writer', name: 'writer', title: '旧索引标题', external: false,
+    }, renamed)).toBe('手动重命名标题')
+  })
+
+  it('falls back to the index title when the mirror only echoes the id and no label exists', () => {
+    const stale = { parentId: 'root', origin: 'subagent' as const, displayTitle: 'legacy' }
+    expect(rowText('legacy', { id: 'legacy', title: 'Legacy child', external: false }, stale))
+      .toBe('Legacy child')
+  })
+
+  it('falls back to the semantic name, then bare id when neither label nor title exists', () => {
+    expect(subagentRowText({ id: 'sess-poet', name: 'poet', external: false }, {
+      parentId: 'root', origin: 'subagent', displayTitle: 'sess-poet',
+    })).toBe('poet')
+    expect(rowText('legacy', { id: 'legacy', external: false })).toBe('legacy')
+  })
+
+  it('reads an external row off the roster alone: it has no mirror row', () => {
+    expect(subagentRowText(
+      { id: 'codex-helper', name: 'codex-helper', label: '用 Codex 写迁移脚本', mode: 'external', external: true },
+      undefined,
+    )).toBe('用 Codex 写迁移脚本')
+    expect(subagentRowText(
+      { id: 'ext-1', name: 'codex-helper', mode: 'external', external: true },
+      undefined,
+    )).toBe('codex-helper')
   })
 })
 

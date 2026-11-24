@@ -26,9 +26,11 @@ import type {} from '@deepseek-ai/dsh-compaction/types'
 import type {} from '@deepseek-ai/dsh-llm-retry/types'
 import { markInitialized, markMetaSynced, readSyncState } from './sync-state.ts'
 import { CompactionAttributionWindow } from './compaction-attribution.ts'
+import type { SessionMeta, SessionMetaPatch } from './session-meta.ts'
 import { WebCallTracker } from './web-call.ts'
 import { extractFirstTokenTimeFromStream, extractUsageFromStream, isImportedHistoryEvent, modelOfEvent, providerOfEvent, recordOfEvent, type RequestTiming, type UsageFields } from './usage-record.ts'
 import type { UsageLog } from './usage-log.ts'
+import { isSubagentMode } from './wire.ts'
 
 /** Outcome of one sync run. */
 export interface SyncResult {
@@ -96,7 +98,24 @@ export interface SessionHeaderFacts {
 /** The metadata sink the sync folds identity facts into (duck-typed for
  * tests; the host passes a {@link SessionMetaStore}). */
 export interface SyncMetaSink {
-  upsert(id: string, patch: SessionHeaderFacts & { title?: string }): Promise<void>
+  /** Merge one session's fields (latest-wins per key, or fill-only). */
+  upsert(id: string, patch: SessionMeta, options?: { fillOnly?: boolean }): Promise<void>
+  /** Merge many sessions' fields in one read-merge-write. Optional: a sink
+   * without it receives a batch one `upsert` at a time, with each entry's
+   * fill-only flag preserved. */
+  upsertMany?(entries: readonly SessionMetaPatch[]): Promise<void>
+}
+
+/** Land one session's metadata batch through whatever the sink offers. */
+async function writeMeta(sink: SyncMetaSink, entries: readonly SessionMetaPatch[]): Promise<void> {
+  if (entries.length === 0) return
+  if (sink.upsertMany !== undefined) {
+    await sink.upsertMany(entries)
+    return
+  }
+  for (const { id, patch, fillOnly } of entries) {
+    await sink.upsert(id, patch, fillOnly === true ? { fillOnly: true } : undefined)
+  }
 }
 
 /** One stored session as the host's `list` reports it: the id rides the
@@ -150,9 +169,10 @@ export interface SyncDeps {
    * mirroring the `recordCompaction` config). */
   recordCompaction?: boolean
   /** Metadata sink for the session table's identity fields: the walk folds
-   * each session's latest-wins `session/title` text and its immutable
-   * header facts (cwd, lineage) into it. Absent → no metadata capture
-   * (the usage walk still runs). */
+   * each session's latest-wins `session/title` text, its immutable header
+   * facts (cwd, lineage), and the subagent identity / team-mode selection
+   * its own `subagent/catalog`, `subagent/descriptor` and `team/mode`
+   * events state. Absent → no metadata capture (the usage walk still runs). */
   meta?: SyncMetaSink
   /** Called once per session whose stored log failed to load or validate
    * (the session is then skipped). The host uses this to log which session
@@ -215,6 +235,81 @@ export function titleOfEvent(event: SessionEvent): string | undefined {
   if ((event as { type: string }).type !== 'session/title') return undefined
   const title = (event as { data?: { title?: unknown } }).data?.title
   return typeof title === 'string' && title !== '' ? title : undefined
+}
+
+/** A non-empty string field, or undefined. */
+function textOf(value: unknown): string | undefined {
+  return typeof value === 'string' && value !== '' ? value : undefined
+}
+
+/** The `data` object of an event, or undefined when it carries none. */
+function dataOf(event: SessionEvent): Record<string, unknown> | undefined {
+  const data = (event as { data?: unknown }).data
+  return typeof data === 'object' && data !== null ? data as Record<string, unknown> : undefined
+}
+
+/** The identity one parent's `subagent/catalog` entry states for a direct
+ * child, already in the metadata row's own field names (so a caller merges
+ * it as-is). Every field but `childId` is optional: `subagentName` exists
+ * only on version-3 entries, and the label is optional on one-shot and
+ * external ones. */
+export type SubagentCatalogFact = Pick<SessionMeta, 'subagentName' | 'subagentLabel' | 'subagentMode'> & {
+  childId: string
+}
+
+/**
+ * Read a parent's `subagent/catalog` event duck-typed, or undefined when
+ * the event is none or names no child. The payload `version` is
+ * deliberately not checked — the plugin takes whatever recognizable fields
+ * an entry carries, so a future version that keeps these field names needs
+ * no change here, and an unfamiliar `mode` simply reads as "none stated".
+ * Exported for the live recorder, which folds the same event into the same
+ * index.
+ */
+export function subagentCatalogOfEvent(event: SessionEvent): SubagentCatalogFact | undefined {
+  if ((event as { type: string }).type !== 'subagent/catalog') return undefined
+  const data = dataOf(event)
+  if (data === undefined) return undefined
+  const childId = textOf(data.childId)
+  if (childId === undefined) return undefined
+  const fact: SubagentCatalogFact = { childId }
+  const name = textOf(data.name)
+  if (name !== undefined) fact.subagentName = name
+  const label = textOf(data.label)
+  if (label !== undefined) fact.subagentLabel = label
+  if (isSubagentMode(data.mode)) fact.subagentMode = data.mode
+  return fact
+}
+
+/** The identity a child's own `subagent/descriptor` states, in the metadata
+ * row's field names. It never carries a name (only the parent's catalog
+ * does) and never `external` (an external child has no session to write a
+ * descriptor into). */
+export type SubagentDescriptorFact = Pick<SessionMeta, 'subagentLabel' | 'subagentMode'>
+
+/**
+ * Read a child's `subagent/descriptor` event duck-typed, or undefined when
+ * the event is none or states no field this build recognizes. Same
+ * version-agnostic tolerance as {@link subagentCatalogOfEvent}.
+ */
+export function subagentDescriptorOfEvent(event: SessionEvent): SubagentDescriptorFact | undefined {
+  if ((event as { type: string }).type !== 'subagent/descriptor') return undefined
+  const data = dataOf(event)
+  const fact: SubagentDescriptorFact = {}
+  const label = data === undefined ? undefined : textOf(data.label)
+  if (label !== undefined) fact.subagentLabel = label
+  if (data !== undefined && isSubagentMode(data.mode) && data.mode !== 'external') fact.subagentMode = data.mode
+  return Object.keys(fact).length === 0 ? undefined : fact
+}
+
+/**
+ * The team-mode selection a runtime root's `team/mode` event states, or
+ * undefined when the event is none or carries no boolean.
+ */
+export function teamModeOfEvent(event: SessionEvent): boolean | undefined {
+  if ((event as { type: string }).type !== 'team/mode') return undefined
+  const enabled = dataOf(event)?.enabled
+  return typeof enabled === 'boolean' ? enabled : undefined
 }
 
 /**
@@ -436,6 +531,22 @@ export async function syncHistory(
     // seen is the current title — a rename, an auto-generated title, and a
     // fallback all land as the same append, one fold covers every source.
     let title: string | undefined
+    // Subagent identity, folded from this session's OWN events only. The
+    // host's own projections skip a fork's inherited prefix for these
+    // events (`event.seq < inheritedEventCount`), and so does this fold: a
+    // fork copy does not own the children its inherited catalog lists, and
+    // an inherited ancestor descriptor is not the copy's identity. Unlike
+    // the title, an inherited value is never borrowed either.
+    /** Catalog entries for direct children, in catalog order. The host
+     * appends one entry per child, so a repeated childId is unexpected;
+     * later fields win over earlier ones, field by field. */
+    const catalogChildren = new Map<string, SubagentCatalogFact>()
+    /** The FIRST own descriptor is authoritative (the establishing provider
+     * appends exactly one; a later same-type event cannot rewrite it). */
+    let descriptor: SubagentDescriptorFact | undefined
+    let descriptorSeen = false
+    /** Latest-wins team-mode selection (a root may toggle it any time). */
+    let teamMode: boolean | undefined
     // Fold state-only context (route and title) across the fork-inherited
     // prefix without persisting rows, claiming ownership, or carrying open
     // steps and compaction windows across the fork boundary. Keep inherited
@@ -505,6 +616,25 @@ export async function syncHistory(
       if (revealedProvider !== undefined) provider = revealedProvider
       const revealedTitle = titleOfEvent(event)
       if (revealedTitle !== undefined) title = revealedTitle
+      // Identity capture rides the same pass, ahead of every `continue`
+      // below (an importer-synthesized step still owns its events' types).
+      if (deps.meta !== undefined) {
+        const eventType: string = event.type
+        if (eventType === 'subagent/catalog') {
+          const fact = subagentCatalogOfEvent(event)
+          if (fact !== undefined) {
+            catalogChildren.set(fact.childId, { ...catalogChildren.get(fact.childId), ...fact })
+          }
+        } else if (eventType === 'subagent/descriptor') {
+          if (!descriptorSeen) {
+            descriptorSeen = true
+            descriptor = subagentDescriptorOfEvent(event)
+          }
+        } else if (eventType === 'team/mode') {
+          const revealedTeamMode = teamModeOfEvent(event)
+          if (revealedTeamMode !== undefined) teamMode = revealedTeamMode
+        }
+      }
       let timing: RequestTiming | undefined
       let failureUsage: UsageFields | undefined
       if (event.type === 'assistant/message') {
@@ -579,18 +709,33 @@ export async function syncHistory(
     // Drafts without a durable result (a torn log, or a call interrupted
     // without the host's synthetic result) stay out of the ledger.
     webCallTracker.clear()
-    // One metadata upsert per session: the title fold above plus the
-    // immutable header facts. The upsert is a no-op when nothing changed,
-    // so repeat syncs never rewrite the index.
+    // One metadata batch per session: the title fold above, the immutable
+    // header facts, this session's own subagent identity and team-mode
+    // selection, plus — for a parent — one entry per catalogued child. The
+    // catalog entry lands on the CHILD's row, so a parent with dozens of
+    // subagents writes them all in one serialized read-merge-write instead
+    // of rewriting the index once per child. Every entry is a no-op when
+    // nothing changed, so repeat syncs never rewrite the index.
     if (deps.meta !== undefined) {
       const header = inspection.meta
-      const patch = {
+      const patch: SessionMeta = {
         ...(title !== undefined ? { title } : {}),
         ...(header?.cwd !== undefined && header.cwd !== '' ? { cwd: header.cwd } : {}),
         ...(header?.origin === 'subagent' ? { origin: header.origin } : {}),
         ...(header?.parentSession !== undefined && header.parentSession !== '' ? { parentSession: header.parentSession } : {}),
+        ...(teamMode !== undefined ? { teamMode } : {}),
       }
-      if (Object.keys(patch).length > 0) await deps.meta.upsert(id, patch)
+      const entries: SessionMetaPatch[] = []
+      if (Object.keys(patch).length > 0) entries.push({ id, patch })
+      // The child's own descriptor is the weaker source: it fills the
+      // label / mode in only where the parent's catalog stated none.
+      if (descriptor !== undefined) entries.push({ id, patch: descriptor, fillOnly: true })
+      for (const { childId, ...identity } of catalogChildren.values()) {
+        // An entry that states nothing but the child's id carries no fact.
+        if (Object.keys(identity).length === 0) continue
+        entries.push({ id: childId, patch: { parentSession: id, ...identity } })
+      }
+      await writeMeta(deps.meta, entries)
     }
     processed += 1
     onTick?.(progress())

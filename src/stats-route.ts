@@ -13,7 +13,7 @@ import type { MigrationProgress } from './migrate.ts'
 import { consoleLogger, type LoggerLike } from './log.ts'
 import { readPricingContext, resolveRate } from './pricing.ts'
 import type { PricingContext } from './pricing.ts'
-import { aggregateRequestTiming, attachCosts, buildSessionRows, buildSummary, filterRecordsBySessions, filterSummary, requestSeriesOf, resolveSessionScope, SESSION_ROW_LIMIT, summarizeRecords, summaryForSessions } from './stats.ts'
+import { aggregateRequestTiming, attachCosts, buildSessionRows, buildSubagentRoster, buildSummary, filterRecordsBySessions, filterSummary, requestSeriesOf, resolveSessionScope, SESSION_ROW_LIMIT, summarizeRecords, summaryForSessions } from './stats.ts'
 import type { RateResolver, SessionMetaEntry } from './stats.ts'
 import { buildSessionRequestDetails } from './session-request-details.ts'
 import type { LiveSnapshot } from './request-observe.ts'
@@ -22,7 +22,7 @@ import { SessionMetaStore } from './session-meta.ts'
 import { projectRowsOf } from './project-rows.ts'
 import { bucketSeries, pointsOfBuckets } from './trend-bucket.ts'
 import { decodeChildGroups, decodeSessionScope, decodeStatsScope, DIR_GUARD_PATH, FULL_SYNC_PATH, MIGRATION_PATH, PRICING_PATH, STATS_PATH, UNPRICED_KEY } from './wire.ts'
-import type { ChildGroup, ChildTiming, ChildUsageSummary, CostedSummary, DirectoryGuardView, DisplayCurrency, FullSyncView, PricingOverviewPayload, PricingTable, RequestPoint, SessionRequestDetails, SessionUsageRow, StatsFields, StatsPayload, StatsScope, TokenSummary } from './wire.ts'
+import type { ChildGroup, ChildTiming, ChildUsageSummary, CostedSummary, DirectoryGuardView, DisplayCurrency, FullSyncView, PricingOverviewPayload, PricingTable, RequestPoint, SessionRequestDetails, SessionUsageRow, StatsFields, StatsPayload, StatsScope, SubagentRoster, TokenSummary } from './wire.ts'
 import { effectiveModelOf, type UsageRecord } from './usage-record.ts'
 import { AssociationError } from './pricing-associations.ts'
 import { PRICING_SYNC_PATH, type PricingSyncResult } from './wire.ts'
@@ -414,8 +414,9 @@ function slimSessionPayload(input: {
   timing: ChildTiming | undefined
   requestDetails: SessionRequestDetails | undefined
   providerNames: Readonly<Record<string, string>> | undefined
+  subagents: SubagentRoster | undefined
 }): unknown {
-  const { summary, sessionIds, series, currency, usdExchangeRate, fields, children, timing, requestDetails, providerNames } = input
+  const { summary, sessionIds, series, currency, usdExchangeRate, fields, children, timing, requestDetails, providerNames, subagents } = input
   // The granular per-session cells stay behind the route: session-scoped
   // consumers read totals / byModel / requestSeries, never the cells.
   const { bySession: _cells, ...summaryRest } = summary
@@ -459,6 +460,9 @@ function slimSessionPayload(input: {
     // The request pool rides ONLY the `session` read: chip stays slim, and
     // the whole-log `full` read never grows runtime-state payloads.
     ...(requestDetails !== undefined ? { requestDetails } : {}),
+    // The subagent table's identity block rides `session` only: the name
+    // badge, the external rows and the team-mode badge are that table's.
+    ...(subagents !== undefined ? { subagents } : {}),
   }
 }
 
@@ -613,6 +617,15 @@ export function createStatsRoute(dir: () => string, options: StatsRouteOptions =
         const timing = scoped !== undefined && filter.fields !== 'chip'
           ? aggregateRequestTiming(scoped)
           : undefined
+        // The subagent table's identity block: direct children's names /
+        // labels / modes (external ones included) and the lineage root's
+        // team mode, read off the already-loaded metadata index. A scope
+        // that was not expressed as a `root` rule (the legacy explicit-id
+        // form) has no root to state it for, and chip / full reads never
+        // render the table.
+        const subagents = filter.root !== undefined && filter.fields === 'session'
+          ? buildSubagentRoster(meta, filter.root)
+          : undefined
         const payload = scoped !== undefined
           ? slimSessionPayload({
             summary,
@@ -625,6 +638,7 @@ export function createStatsRoute(dir: () => string, options: StatsRouteOptions =
             timing,
             requestDetails,
             providerNames,
+            subagents,
           })
           : {
             ...summaryRest,

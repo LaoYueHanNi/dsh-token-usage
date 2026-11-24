@@ -15,7 +15,7 @@ import { bandClassOf } from '../src/client/HitRateText.tsx'
 import { buildSessionRequestDetails } from '../src/session-request-details.ts'
 import { zh } from '../src/client/locales.ts'
 import { ASSOCIATIONS_PATH, PRICING_PATH } from '../src/wire.ts'
-import type { ConversationStatus, ModelResolution, PricingAssociationsPayload, UsageSummary } from '../src/wire.ts'
+import type { ConversationStatus, ModelResolution, PricingAssociationsPayload, SubagentRoster, UsageSummary } from '../src/wire.ts'
 import {
   makeSessionStateHook, makeUseProjection,
 } from './test-kit.ts'
@@ -623,6 +623,146 @@ describe('UsageView', () => {
     // The response lands: figures update in place.
     resolveSecond({ ok: true, status: 200, json: async () => ({ ...TREE_SUMMARY, totalCost: 99.99 }) })
     await waitFor(() => expectText('99.99￥'))
+  })
+})
+
+describe('UsageView subagent table identity', () => {
+  /** One child's figures from the host breakdown. */
+  const usage = (requests: number, cost: number): NonNullable<UsageSummary['children']>[string] => ({
+    total: { requests, inputTokens: 30_000, outputTokens: 2_000, cacheReadTokens: 10_000, cacheWriteTokens: 500 },
+    totalCost: cost,
+    unpricedModels: [],
+  })
+
+  /** The mirror of a root with four local children: an explicitly named
+   * one, an auto-named one, a titled one, and one from before names. */
+  const NAMED_BY_ID: SessionListState['byId'] = {
+    root: BY_ID.root!,
+    researcher: { id: 'researcher', displayTitle: '调研竞品定价策略', parentId: 'root', origin: 'subagent', blank: false, running: false, updatedAt: 2 },
+    'agent-1': { id: 'agent-1', displayTitle: '整理回归测试用例', parentId: 'root', origin: 'subagent', blank: false, running: false, updatedAt: 3 },
+    'sess-writer': { id: 'sess-writer', displayTitle: '撰写迁移指南', parentId: 'root', origin: 'subagent', blank: false, running: false, updatedAt: 4 },
+    legacy: { id: 'legacy', displayTitle: 'legacy', parentId: 'root', origin: 'subagent', blank: false, running: false, updatedAt: 5 },
+  }
+
+  /** What the host states for the same root, plus the external child the
+   * mirror never lists. */
+  const ROSTER: SubagentRoster = {
+    teamMode: true,
+    children: [
+      { id: 'researcher', name: 'researcher', label: '调研竞品定价策略', mode: 'continuable' },
+      { id: 'agent-1', name: 'agent-1', label: '整理回归测试用例', mode: 'continuable' },
+      { id: 'sess-writer', name: 'writer', label: '撰写迁移指南初稿', mode: 'continuable', title: '撰写迁移指南' },
+      { id: 'legacy', mode: 'one-shot' },
+      { id: 'ext-codex', name: 'codex-helper', label: '用 Codex 写迁移脚本', mode: 'external' },
+    ],
+  }
+
+  function summaryWith(subagents?: SubagentRoster): UsageSummary {
+    return {
+      ...ROOT_SUMMARY,
+      children: { researcher: usage(3, 3.21), 'agent-1': usage(8, 0.86), 'sess-writer': usage(6, 0.31), legacy: usage(3, 0.18) },
+      ...(subagents !== undefined ? { subagents } : {}),
+    }
+  }
+
+  async function renderNamed(subagents: SubagentRoster = ROSTER): Promise<HTMLElement> {
+    stubFetch({ root: summaryWith(subagents) })
+    renderView({ byId: NAMED_BY_ID, liveStats: LIVE_STATS })
+    return screen.findByRole('table', { name: /^子会话（\d+）$/ })
+  }
+
+  /** The drill-in button of the local row whose description reads `desc`. */
+  function rowButton(desc: string): HTMLElement {
+    const button = screen.getByText(desc, { selector: 'span' }).closest('button')
+    expect(button).not.toBeNull()
+    return button!
+  }
+
+  it('renders clean description text inline with no semantic-name badge, keeping figures intact', async () => {
+    const table = await renderNamed()
+    expect(table.querySelector('[class*="agentName"]')).toBeNull()
+    expect(screen.getByRole('button', { name: '撰写迁移指南初稿' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '整理回归测试用例' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'legacy' })).toBeTruthy()
+    expect(rowButton('撰写迁移指南初稿').closest('tr')?.textContent).toContain('0.31￥')
+  })
+
+  it('counts the external child in the heading so the number matches the rows', async () => {
+    const table = await renderNamed()
+    // One head row + four local rows + one external row.
+    expect(within(table).getAllByRole('row')).toHaveLength(6)
+    expect(screen.getByRole('heading', { name: '子会话（5）' })).toBeTruthy()
+  })
+
+  it('lists the external child last: dimmed, not drillable, its figures merged into one sentence', async () => {
+    const table = await renderNamed()
+    const rows = within(table).getAllByRole('row')
+    const last = rows.at(-1)!
+    expect(last.className).toMatch(/extRow/)
+    expect(last.textContent).toContain('外部执行，不计入本地账本')
+    // One name cell + one merged cell standing in for all six figure cells.
+    const cells = last.querySelectorAll('td')
+    expect(cells).toHaveLength(2)
+    expect(cells[1]!.getAttribute('colspan')).toBe('6')
+    // Nothing to drill into: no session exists behind the row.
+    expect(within(last).queryByRole('button')).toBeNull()
+    // Every local row is still a drill-in button — and no local row carries
+    // the external styling.
+    expect(within(table).getAllByRole('button')).toHaveLength(4)
+    expect(rows.slice(1, -1).some(row => /extRow/.test(row.className))).toBe(false)
+    // The table lists it ahead of the sentence as its description.
+    expect(last.textContent).toContain('用 Codex 写迁移脚本')
+  })
+
+  it('prefers the delegation label inline and places the semantic name, id, and mode in the hover', async () => {
+    await renderNamed()
+    // sess-writer: distinct semantic name + delegation label → clean label
+    // inline, semantic name leads the hover, truncated title excluded.
+    expect(rowButton('撰写迁移指南初稿').getAttribute('title'))
+      .toBe('writer · 子会话 sess-writer · 可持续')
+    expect(screen.queryByText('撰写迁移指南')).toBeNull()
+    // When id matches name, do not repeat the name twice.
+    expect(rowButton('调研竞品定价策略').getAttribute('title'))
+      .toBe('子会话 researcher · 可持续')
+    // legacy: no name, no label — the hover still names the session.
+    expect(rowButton('legacy').getAttribute('title')).toBe('子会话 legacy · 一次性')
+  })
+
+  it('hovers the external row with its semantic name, kind, and id', async () => {
+    await renderNamed()
+    const last = screen.getByText('外部执行，不计入本地账本').closest('tr')!
+    expect(last.querySelector('[class*="childIdentity"]')?.getAttribute('title')).toBe('codex-helper · 外部子代理 ext-codex')
+  })
+
+  it('shows ONE team-mode badge beside the block heading, and no per-row teammate mark', async () => {
+    await renderNamed()
+    const badge = screen.getByText('团队模式')
+    expect(badge.getAttribute('title')).toBe('根会话启用了「智能体团队协作」，其中的子代理互为队友')
+    expect(screen.getAllByText('团队模式')).toHaveLength(1)
+    const table = screen.getByRole('table', { name: '子会话（5）' })
+    expect(within(table).queryByText('队友')).toBeNull()
+    expect(within(table).queryByText('团队模式')).toBeNull()
+  })
+
+  it.each([
+    ['explicitly off', { teamMode: false, children: ROSTER.children } as SubagentRoster],
+    ['never recorded', { children: ROSTER.children } as SubagentRoster],
+  ])('draws no team badge when the root is %s', async (_label, roster) => {
+    await renderNamed(roster)
+    expect(screen.queryByText('团队模式')).toBeNull()
+  })
+
+  it('falls back to the mirror alone on an older host: rows, order and count, no badges', async () => {
+    // No roster on the payload at all (a host running an older build).
+    stubFetch({ root: summaryWith(undefined) })
+    renderView({ byId: NAMED_BY_ID, liveStats: LIVE_STATS })
+    const table = await screen.findByRole('table', { name: '子会话（4）' })
+    expect(within(table).getAllByRole('row')).toHaveLength(5)
+    expect(within(table).queryByText('外部执行，不计入本地账本')).toBeNull()
+    expect(table.querySelector('[class*="agentName"]')).toBeNull()
+    expect(screen.queryByText('团队模式')).toBeNull()
+    // Plain rows keep the hover's identity line, with no mode to state.
+    expect(rowButton('legacy').getAttribute('title')).toBe('子会话 legacy')
   })
 })
 

@@ -55,7 +55,7 @@ import { CompactionAttributionWindow } from './compaction-attribution.ts'
 import { WebCallTracker } from './web-call.ts'
 import { classifyAuxRequest, recordFromAuxRequest } from './aux-request.ts'
 import { markFieldCompletionOutcome, markTimingSynced, pendingCompleterIds, readSyncState } from './sync-state.ts'
-import { autoSyncIfNeeded, isOwnSessionEvent, syncHistory, titleOfEvent } from './sync.ts'
+import { autoSyncIfNeeded, isOwnSessionEvent, subagentCatalogOfEvent, subagentDescriptorOfEvent, syncHistory, teamModeOfEvent, titleOfEvent } from './sync.ts'
 import { clearRecordCache, warmRecordCache } from './record-cache.ts'
 import { invalidateSummary } from './stats.ts'
 import { createDirectoryGuardRoute, createFullSyncRoute, createMigrationRoute, createPricingRoute, createPricingSyncRoute, createStatsRoute, type FullSyncTrigger } from './stats-route.ts'
@@ -1073,6 +1073,36 @@ export function apply(ctx: Context, config: Config = {}) {
       // Inherited prefix events never persist rows, never move active step
       // timings, and never feed compaction attribution into the child.
       if (!ownEvent) return
+      // Subagent identity capture, same own-events-only rule as the usage
+      // rows (the host's own projections skip an inherited prefix for these
+      // events too): a parent's catalog entry lands on the CHILD's row, a
+      // child's own descriptor fills its row in without overriding what the
+      // catalog already stated, and a root's team-mode toggle lands on the
+      // root itself. One small upsert each — a burst of spawns costs one
+      // write per child, the order a title fold costs.
+      const eventType: string = event.type
+      if (eventType === 'subagent/catalog') {
+        const fact = subagentCatalogOfEvent(event)
+        if (fact !== undefined) {
+          const { childId, ...identity } = fact
+          if (Object.keys(identity).length > 0) {
+            void meta.upsert(childId, { parentSession: session.id, ...identity })
+              .catch(error => logger.warn('[token-usage] subagent catalog upsert failed:', error))
+          }
+        }
+      } else if (eventType === 'subagent/descriptor') {
+        const fact = subagentDescriptorOfEvent(event)
+        if (fact !== undefined) {
+          void meta.upsert(session.id, fact, { fillOnly: true })
+            .catch(error => logger.warn('[token-usage] subagent descriptor upsert failed:', error))
+        }
+      } else if (eventType === 'team/mode') {
+        const enabled = teamModeOfEvent(event)
+        if (enabled !== undefined) {
+          void meta.upsert(session.id, { teamMode: enabled })
+            .catch(error => logger.warn('[token-usage] team mode upsert failed:', error))
+        }
+      }
       // Web searches settle outside the model-call fold: the tracker pairs
       // `tool/call` + the recorded search rounds + `tool/result` and emits at
       // most one row per settled call. Record it directly — the request

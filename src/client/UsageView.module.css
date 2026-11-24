@@ -254,6 +254,10 @@
  * non-auto standard value disables the ::-webkit-* rules below.) */
 .subagentsWrap {
   --subagents-row-height: 26px;
+  /* The one text line of a subagent row's name column — the host's 12px
+   * type step (12px/18px). The name badge is exactly this tall, so badge
+   * and description share one line box and neither grows the row. */
+  --child-line: 18px;
   /* 16 = one head row + the 15 listed data rows. */
   max-height: calc(var(--subagents-row-height) * 16);
   /* Not activated yet: the wheel belongs to the page. */
@@ -308,11 +312,16 @@
 
 /* The head stays up while the rows scroll underneath: scrolled rows pass
  * behind it, so the background must be opaque (same token as the request
- * pool's sticky head). */
+ * pool's sticky head). Match the body row's 18px line box and 3px block
+ * padding so the header and every data row lock to 26px. */
 .subagentsWrap .table th {
   position: sticky;
   top: 0;
   z-index: 1;
+  box-sizing: border-box;
+  height: var(--subagents-row-height);
+  padding-block: 3px;
+  line-height: var(--child-line);
   background: var(--dsw-alias-bg-base, var(--dsw-alias-bg-layer-1));
 }
 
@@ -344,23 +353,76 @@
 .modelIdentity { display: inline-flex; align-items: center; gap: 4px; max-width: 180px; }
 .modelName { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 
+/* The subagent table's name column. Wider than the model table's
+ * `.modelCell`: descriptions fit cleanly on one line and ellipsis when they
+ * exceed the column width. `.table td` sets `padding: 4px 6px` at
+ * specificity (0,1,1), so qualify `.childCell` with `.table td` to keep
+ * `padding-block: 3px` (`18px line + 6px pad + 1px collapsed border <= 26px`),
+ * locking `tbody tr` to `--subagents-row-height`. */
+.table td.childCell {
+  font-variant-numeric: normal;
+  max-width: 250px;
+  overflow: hidden;
+  padding-block: 3px;
+  line-height: var(--child-line);
+}
+
+/* Single-line description wrapper inside `.childCell`. Aligned to the top
+ * of the line box rather than its baseline so it fills `--child-line`
+ * without growing the row. */
+.childIdentity {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  min-width: 0;
+  vertical-align: top;
+  white-space: nowrap;
+}
+
+.childDesc {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* Subagent rows are drill-in links. */
 .childLink {
   border: none;
   background: transparent;
   padding: 0;
+  font-family: inherit;
   font-size: 12px;
+  line-height: inherit;
   color: var(--dsw-alias-link-primary, var(--dsw-alias-label-primary));
   cursor: pointer;
   text-align: left;
-  max-width: 220px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .childLink:hover {
   text-decoration: underline;
+}
+
+/* An external child has no local session and no usage: the whole row
+ * recedes, and its figure cells merge into one sentence. */
+.subagentsWrap .table tbody tr.extRow > td {
+  color: var(--dsw-alias-label-secondary);
+}
+
+.extNote {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* The 「团队模式」 badge beside the block heading: the lineage root runs
+ * the agent team. One badge for the whole block — never a per-row mark. */
+.teamBadge {
+  flex: none;
+  font-size: 11px;
+  line-height: 16px;
+  padding: 0 7px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 5px;
+  color: var(--dsw-alias-label-secondary);
+  cursor: help;
 }
 
 /* The nested-subagent count beside a row title: signals that the child

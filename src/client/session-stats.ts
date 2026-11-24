@@ -10,7 +10,7 @@
  */
 
 import type { SessionStatsProjection } from '@deepseek-ai/dsh-session-stats/client'
-import type { ChildTiming, UsageTotals } from '../wire.ts'
+import type { ChildTiming, SubagentMode, SubagentRoster, UsageTotals } from '../wire.ts'
 
 /** Structural mirror of DSH `TokenUsageProjection` (retained on `session.list`
  * summary rows in DSH 0.2.2+, unlike the summary-excluded `sessionStats`). */
@@ -28,6 +28,10 @@ export interface SessionRowLike {
   parentId?: string | undefined
   origin?: 'subagent' | undefined
   updatedAt?: number | undefined
+  /** The mirror's retained `title` projection, when the session has one. */
+  title?: string | undefined
+  /** The host's `displayTitle` fallback chain: `title ?? label ?? id`. */
+  displayTitle?: string | undefined
   projectionValues?: Readonly<Partial<{
     sessionStats?: SessionStatsProjection | undefined
     tokenUsage?: TokenUsageProjectionLike | undefined
@@ -120,6 +124,85 @@ export function subagentParentOf(rows: SessionRows, id: string): string | undefi
   if (row?.origin !== 'subagent') return undefined
   const parent = row.parentId
   return parent === undefined || parent === id ? undefined : parent
+}
+
+/** One row of the usage tab's subagent table. */
+export interface SubagentRow {
+  /** A local session id, or the provider-assigned id of an external child. */
+  id: string
+  /** The semantic name the parent's catalog gave the child — the row's
+   * name badge. Absent for children created before named subagents. */
+  name?: string
+  /** The delegation label: the short description it was created with. */
+  label?: string
+  /** The child's latest `session/title` text, when the logs carried one. */
+  title?: string
+  /** The lifecycle mode the logs stated; read by the row's hover only. */
+  mode?: SubagentMode
+  /** An external child runs elsewhere: it is listed, dimmed, and never
+   * drilled into, and it holds no usage. */
+  external: boolean
+}
+
+/**
+ * Merge the two sources the subagent table reads: the session mirror, which
+ * lists the LOCAL children (and is what makes them drillable), and the
+ * host's identity roster, which carries each child's name / label and is
+ * the only place an external child appears at all (the mirror skips those).
+ *
+ * Local rows keep the mirror's order; external rows follow them, in roster
+ * order. A roster entry that is neither external nor in the mirror is not a
+ * row: a local child the mirror no longer lists (archived, deleted) was
+ * never listed here, and a row without a mirror entry could not be drilled
+ * into or navigated back from.
+ */
+export function buildSubagentRows(
+  localIds: readonly string[],
+  rows: SessionRows,
+  roster: SubagentRoster | undefined,
+): SubagentRow[] {
+  const byId = new Map((roster?.children ?? []).map(child => [child.id, child]))
+  const out: SubagentRow[] = []
+  for (const id of localIds) {
+    const identity = byId.get(id)
+    const title = rows[id]?.title ?? identity?.title
+    out.push({
+      id,
+      ...(identity?.name !== undefined ? { name: identity.name } : {}),
+      ...(identity?.label !== undefined ? { label: identity.label } : {}),
+      ...(identity?.mode !== undefined ? { mode: identity.mode } : {}),
+      ...(title !== undefined ? { title } : {}),
+      external: false,
+    })
+  }
+  const local = new Set(localIds)
+  for (const child of roster?.children ?? []) {
+    if (child.mode !== 'external' || local.has(child.id)) continue
+    out.push({
+      id: child.id,
+      ...(child.name !== undefined ? { name: child.name } : {}),
+      ...(child.label !== undefined ? { label: child.label } : {}),
+      ...(child.mode !== undefined ? { mode: child.mode } : {}),
+      ...(child.title !== undefined ? { title: child.title } : {}),
+      external: true,
+    })
+  }
+  return out
+}
+
+/**
+ * Resolve a subagent row's description text, delegation label first
+ * (`label ?? title ?? name ?? id`). Pre-0.2.2-rc.3 subagent logs often hold
+ * a fallback `session/title` truncated from the opening of the task prompt,
+ * which obscures the concise delegation label written by the parent;
+ * preferring the label avoids showing half a prompt when a label exists,
+ * falling back to the mirror/index title, then the semantic name, and
+ * finally the bare id.
+ */
+export function subagentRowText(row: SubagentRow, mirror: SessionRowLike | undefined): string {
+  if (row.label !== undefined) return row.label
+  if (mirror?.displayTitle !== undefined && mirror.displayTitle !== row.id) return mirror.displayTitle
+  return mirror?.title ?? row.title ?? row.name ?? row.id
 }
 
 /** The session-stats fold the view renders (summed wall-time buckets). */

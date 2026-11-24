@@ -2,8 +2,10 @@
  * Session-metadata index of the token-usage plugin: `sessions.json` in the
  * data directory, mapping sessionId → the identity fields the settings
  * page's session table renders — the log-backed latest-wins `session/title`
- * text (folded by this plugin, not by the host's title package) and the
- * immutable `SessionHeader` facts (cwd, subagent origin, parent session).
+ * text (folded by this plugin, not by the host's title package), the
+ * immutable `SessionHeader` facts (cwd, subagent origin, parent session),
+ * the subagent identity (semantic name, delegation label, lifecycle mode)
+ * and the root session's team-mode selection.
  *
  * The index is a derived cache: every field is recoverable from the session
  * logs, so a missing or malformed file reads as empty and the next manual
@@ -19,6 +21,7 @@
 import { readFile, rename, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { consoleLogger, type LoggerLike } from './log.ts'
+import { isSubagentMode, type SubagentMode } from './wire.ts'
 
 const SESSIONS_FILE = 'sessions.json'
 const TMP_FILE = 'sessions.json.tmp'
@@ -33,9 +36,32 @@ export interface SessionMeta {
   /** Coarse subagent classification from the header; omitted for
    * top-level sessions (the only value today is `'subagent'`). */
   origin?: 'subagent'
-  /** The parent session of a subagent child, from the header. */
+  /** The parent session of a subagent child. For a local child it is the
+   * header's fact; for an external child (which has no session, so no
+   * header) it is the session whose `subagent/catalog` lists it. An
+   * external entry deliberately carries no `origin`, which is what keeps it
+   * out of the lineage index and every subtree scope. */
   parentSession?: string
+  /** Semantic name (`researcher`, `agent-1`, …) the PARENT's
+   * `subagent/catalog` v3 gave this child; omitted for children created
+   * before named subagents existed (catalog v0–v2 carry no name). */
+  subagentName?: string
+  /** Delegation label — the short description the child was created with.
+   * The parent's catalog entry is the source; the child's own
+   * `subagent/descriptor` fills it in when the catalog states none. */
+  subagentLabel?: string
+  /** Lifecycle mode from the catalog / descriptor; omitted when neither
+   * stated a mode this build recognizes. */
+  subagentMode?: SubagentMode
+  /** The session's own `team/mode` selection (written only by a runtime
+   * root; children inherit it by walking up to their root). Omitted when
+   * the log never recorded one. */
+  teamMode?: boolean
 }
+
+/** Every mergeable field, in file order. */
+const META_TEXT_KEYS = ['title', 'cwd', 'parentSession', 'subagentName', 'subagentLabel'] as const
+const META_KEYS = [...META_TEXT_KEYS, 'origin', 'subagentMode', 'teamMode'] as const
 
 /** The on-disk shape: one entry per known session id. */
 export type SessionMetaIndex = Record<string, SessionMeta>
@@ -43,15 +69,14 @@ export type SessionMetaIndex = Record<string, SessionMeta>
 function isMeta(value: unknown): SessionMeta | null {
   if (typeof value !== 'object' || value === null) return null
   const raw = value as Record<string, unknown>
-  const title = raw.title
-  const cwd = raw.cwd
-  const parent = raw.parentSession
-  const origin = raw.origin
   const meta: SessionMeta = {}
-  if (typeof title === 'string' && title !== '') meta.title = title
-  if (typeof cwd === 'string' && cwd !== '') meta.cwd = cwd
-  if (typeof parent === 'string' && parent !== '') meta.parentSession = parent
-  if (origin === 'subagent') meta.origin = origin
+  for (const key of META_TEXT_KEYS) {
+    const field = raw[key]
+    if (typeof field === 'string' && field !== '') meta[key] = field
+  }
+  if (raw.origin === 'subagent') meta.origin = raw.origin
+  if (isSubagentMode(raw.subagentMode)) meta.subagentMode = raw.subagentMode
+  if (typeof raw.teamMode === 'boolean') meta.teamMode = raw.teamMode
   // A row with no usable field is dropped: it carries nothing the table
   // or the fold reads, and skipping it keeps a hand-edited file honest.
   return Object.keys(meta).length === 0 ? null : meta
@@ -72,6 +97,42 @@ function coerceIndex(value: unknown): SessionMetaIndex {
     if (meta !== null) out[id] = meta
   }
   return out
+}
+
+/** One row of a batched upsert. */
+export interface SessionMetaPatch {
+  /** The session the patch applies to. */
+  id: string
+  /** Fields to merge in; every present field is latest-wins per key. */
+  patch: SessionMeta
+  /**
+   * Fill-only merge: a field the index already holds is kept. For facts a
+   * weaker source states — a child's own `subagent/descriptor` label — that
+   * a stronger source, the parent's `subagent/catalog`, may already have
+   * supplied in an earlier batch or an earlier run. Without this the merge
+   * would depend on which session the sync walk happened to read first.
+   */
+  fillOnly?: boolean
+}
+
+/** Merge `patch` onto `current` (latest-wins per key, or fill-only). */
+function mergeMeta(current: SessionMeta | undefined, patch: SessionMeta, fillOnly: boolean): SessionMeta {
+  const merged: SessionMeta = { ...current }
+  for (const key of META_KEYS) {
+    const value = patch[key]
+    if (value === undefined) continue
+    if (fillOnly && merged[key] !== undefined) continue
+    // Every key of META_KEYS exists on SessionMeta with patch's own type.
+    (merged as Record<string, unknown>)[key] = value
+  }
+  return merged
+}
+
+/** Whether two entries agree on every field (an absent one reads as equal
+ * to an absent one). */
+function sameMeta(left: SessionMeta | undefined, right: SessionMeta | undefined): boolean {
+  if (left === undefined || right === undefined) return left === right
+  return META_KEYS.every(key => left[key] === right[key])
 }
 
 /** Cached parse keyed by the on-disk stamp that produced it. */
@@ -147,25 +208,43 @@ export class SessionMetaStore {
    * whose values all match the current index is a no-op, so repeated syncs
    * and live ticks do not rewrite the file. Serialized: a second upsert
    * waits for the first's read-merge-write to settle.
+   * @param id - the session the patch applies to.
+   * @param patch - the fields to merge.
+   * @param options - `fillOnly` keeps every field the index already holds
+   *   (see {@link SessionMetaPatch.fillOnly}).
    */
-  upsert(id: string, patch: SessionMeta): Promise<void> {
+  upsert(id: string, patch: SessionMeta, options?: { fillOnly?: boolean }): Promise<void> {
     if (id === '') return Promise.resolve()
+    return this.upsertMany([{ id, patch, ...(options?.fillOnly === true ? { fillOnly: true } : {}) }])
+  }
+
+  /**
+   * Merge many sessions' fields in ONE read-merge-write. A parent session
+   * with dozens of subagents folds one catalog entry per child, so the
+   * history sync lands them together instead of rewriting (and re-serializing
+   * the whole index) once per child. Entries apply in order; a repeated id
+   * merges onto what the earlier entry in this batch already produced.
+   * The batch is a no-op when nothing changed.
+   */
+  upsertMany(entries: readonly SessionMetaPatch[]): Promise<void> {
     const task = this.queue.then(async () => {
       // Shallow-copy: `read` may hand back the cache's own object, and a
       // failed write below must not leave the cache mutated past the disk.
       const index = { ...await this.read() }
-      const current = index[id]
-      const merged: SessionMeta = { ...current }
-      if (patch.title !== undefined) merged.title = patch.title
-      if (patch.cwd !== undefined) merged.cwd = patch.cwd
-      if (patch.origin !== undefined) merged.origin = patch.origin
-      if (patch.parentSession !== undefined) merged.parentSession = patch.parentSession
-      if (current !== undefined
-        && current.title === merged.title
-        && current.cwd === merged.cwd
-        && current.origin === merged.origin
-        && current.parentSession === merged.parentSession) return
-      index[id] = merged
+      const batch = new Map<string, SessionMeta | undefined>()
+      for (const { id, patch, fillOnly } of entries) {
+        if (id === '') continue
+        const merged = mergeMeta(batch.has(id) ? batch.get(id) : index[id], patch, fillOnly === true)
+        batch.set(id, Object.keys(merged).length === 0 ? undefined : merged)
+      }
+      let changed = false
+      for (const [id, merged] of batch) {
+        if (sameMeta(index[id], merged)) continue
+        if (merged === undefined) continue
+        index[id] = merged
+        changed = true
+      }
+      if (!changed) return
       await this.write(index)
       this.cache = undefined
     })

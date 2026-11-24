@@ -1323,5 +1323,60 @@ describe('createStatsRoute session table', () => {
     expect(body.sessionIds).toEqual(['alpha'])
     expect(body.total.requests).toBe(1)
     expect(body.children).toBeUndefined()
+    // No index at all: an empty roster with no team-mode statement, never
+    // an error and never an absent block on a `session` read.
+    expect(body.subagents).toEqual({ children: [] })
+  })
+
+  it('states the subagent identity roster on fields=session reads, and only there', async () => {
+    const dir = await scopeDataDir()
+    await writeFile(join(dir, 'sessions.json'), JSON.stringify({
+      alpha: { title: 'Parent', teamMode: true },
+      child: { parentSession: 'alpha', origin: 'subagent', subagentName: 'researcher', subagentLabel: 'Research pricing', subagentMode: 'continuable' },
+      grandchild: { parentSession: 'child', origin: 'subagent', subagentName: 'checker', subagentLabel: 'Check' },
+      outsider: { parentSession: 'elsewhere', origin: 'subagent' },
+      'ext-1': { parentSession: 'alpha', subagentName: 'codex-helper', subagentLabel: 'Codex migration', subagentMode: 'external' },
+    }))
+    const route = createStatsRoute(() => dir)
+    interface Body {
+      subagents?: unknown
+      sessionIds?: string[]
+      children?: Record<string, unknown>
+    }
+    const query = async (search: string): Promise<Body> => {
+      const { res, captured } = fakeResponse()
+      await route.handler(fakeRequest({ url: STATS_PATH + search }), res)
+      expect(captured.status).toBe(200)
+      return JSON.parse(captured.body) as Body
+    }
+    const session = await query('?root=alpha&scope=subtree&fields=session')
+    expect(session.subagents).toEqual({
+      teamMode: true,
+      children: [
+        { id: 'child', name: 'researcher', label: 'Research pricing', mode: 'continuable' },
+        { id: 'ext-1', name: 'codex-helper', label: 'Codex migration', mode: 'external' },
+      ],
+    })
+    // The roster states identity only: the external child owns no session,
+    // so it joins neither the aggregated range nor the figure groups.
+    expect(session.sessionIds).toEqual(['alpha', 'child', 'grandchild'])
+    expect(Object.keys(session.children)).toEqual(['child'])
+    // Drilled into the child, the block still reads the ROOT's team mode
+    // and lists that child's own direct children.
+    const drilled = await query('?root=child&fields=session')
+    expect(drilled.subagents).toEqual({
+      teamMode: true,
+      children: [{ id: 'grandchild', name: 'checker', label: 'Check' }],
+    })
+    // The chip, the session-scoped full read, the whole-log read and the
+    // legacy explicit-id form never render the subagent table's names.
+    for (const search of [
+      '?root=alpha&scope=subtree&fields=chip',
+      '?root=alpha&scope=subtree&fields=full',
+      '',
+      '?sessionId=alpha&sessionId=child&childId=child&fields=session',
+    ]) {
+      expect((await query(search)).subagents).toBeUndefined()
+    }
   })
 })
