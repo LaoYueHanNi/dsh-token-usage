@@ -80,15 +80,56 @@ export function scaleSeries(series: ChartSeries, leftEdge: number, rightEdge: nu
   return { xs, xEnds, innerWidth }
 }
 
+/** Approximate 11px tabular-nums character width and minimum pixel clearance
+ * between adjacent x-axis tick labels. */
+const TICK_CHAR_WIDTH = 6.6
+const MIN_TICK_GAP = 16
+
+function tickWidth(label: string): number {
+  return label.length * TICK_CHAR_WIDTH
+}
+
 /**
- * The x-axis label positions: first, middle, and last point for long
- * ranges. Short ranges (≤3 points) label every point so a 1- or 2- day
- * window does not skip the only "middle" data.
+ * Pick non-overlapping x-axis label indices from scaled coordinates and
+ * label strings. Anchors start (left-aligned) and end (right-aligned)
+ * when both fit without colliding, then picks the candidate closest to
+ * the geometric midpoint that keeps {@link MIN_TICK_GAP} clearance from
+ * both endpoints — skipping the middle label when temporal clustering
+ * leaves no point safely centered.
+ *
+ * @param xs - scaled x coordinates of the plotted points.
+ * @param labels - rendered x-axis tick strings matching `xs`.
+ * @returns sorted indices into `xs` / `labels` to render.
  */
-export function labelIndices(length: number): number[] {
-  if (length <= 3) return Array.from({ length }, (_, index) => index)
-  const middle = Math.floor((length - 1) / 2)
-  return [...new Set([0, middle, length - 1])]
+export function labelIndices(xs: readonly number[], labels: readonly string[]): number[] {
+  const length = xs.length
+  if (length === 0) return []
+  if (length === 1) return [0]
+
+  const last = length - 1
+  const leftEnd = xs[0]! + tickWidth(labels[0] ?? '')
+  const rightStart = xs[last]! - tickWidth(labels[last] ?? '')
+  if (leftEnd + MIN_TICK_GAP > rightStart) return [0]
+  if (length === 2) return [0, 1]
+
+  const midTarget = (xs[0]! + xs[last]!) / 2
+  const minCenterLeft = leftEnd + MIN_TICK_GAP
+  const maxCenterRight = rightStart - MIN_TICK_GAP
+
+  let bestIndex = -1
+  let bestDistance = Infinity
+  for (let i = 1; i < last; i += 1) {
+    const halfWidth = tickWidth(labels[i] ?? '') / 2
+    const x = xs[i]!
+    if (x - halfWidth < minCenterLeft || x + halfWidth > maxCenterRight) continue
+    const distance = Math.abs(x - midTarget)
+    if (distance < bestDistance) {
+      bestDistance = distance
+      bestIndex = i
+    }
+  }
+
+  return bestIndex === -1 ? [0, last] : [0, bestIndex, last]
 }
 
 /** Choose a dot radius that survives dense point clouds without

@@ -6,7 +6,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   MAX_BUCKETS, areaPath, bucketSeries, bucketWidth, buildChartPoints, cumulateSeries, gapAfter,
-  gapPatchedPoints, monotoneSplinePath, scaleSeries, scaleToSpan, seriesPath, smoothSeriesPath,
+  gapPatchedPoints, labelIndices, monotoneSplinePath, scaleSeries, scaleToSpan, seriesPath, smoothSeriesPath,
 } from '../src/client/TrendChart.tsx'
 
 import type { ChartSeries } from '../src/client/TrendChart.tsx'
@@ -381,6 +381,48 @@ describe('smoothSeriesPath', () => {
     expect(path).toMatch(/^M0\.0,10\.0 C/)
     // Middle hold segment (20->60 at y=90) must have horizontal tangents at y=90
     expect(path).toContain('90.0')
+  })
+})
+
+describe('labelIndices', () => {
+  it('handles 0, 1, and 2 points cleanly', () => {
+    expect(labelIndices([], [])).toEqual([])
+    expect(labelIndices([200], ['10-30 21:00'])).toEqual([0])
+    expect(labelIndices([44, 784], ['10-30 21:00', '10-31 11:04'])).toEqual([0, 1])
+  })
+
+  it('picks the point closest to the geometric midpoint for equidistant layouts', () => {
+    const xs = [44, 192, 340, 488, 636, 784]
+    const labels = ['10-01', '10-02', '10-03', '10-04', '10-05', '10-06']
+    // Geometric midpoint is (44 + 784) / 2 = 414 → index 2 (340) and index 3 (488) are equidistant;
+    // the loop picks the first closest (index 2).
+    expect(labelIndices(xs, labels)).toEqual([0, 2, 5])
+  })
+
+  it('drops the middle tick when temporal clustering leaves only endpoints safe', () => {
+    // Cluster at the left edge (10-30 21:xx) + an overnight gap + one tail point (10-31 11:04).
+    const xs = [44, 52, 60, 68, 76, 84, 484]
+    const labels = [
+      '10-30 21:15',
+      '10-30 21:20',
+      '10-30 21:30',
+      '10-30 21:49',
+      '10-30 21:55',
+      '10-30 22:00',
+      '10-31 11:04',
+    ]
+    expect(labelIndices(xs, labels)).toEqual([0, 6])
+  })
+
+  it('picks a centered candidate rather than the array median when points are skewed', () => {
+    // 5 points bunched on the left, 1 point near the middle, 1 at the right edge.
+    const xs = [44, 50, 56, 62, 70, 280, 484]
+    const labels = Array.from({ length: 7 }, () => '10-30 21:00')
+    expect(labelIndices(xs, labels)).toEqual([0, 5, 6])
+  })
+
+  it('falls back to start only when even start and end would collide', () => {
+    expect(labelIndices([44, 120], ['10-30 21:00', '10-31 11:04'])).toEqual([0])
   })
 })
 

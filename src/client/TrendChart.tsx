@@ -344,7 +344,7 @@ export function TrendChart({ rows, hours, requests, from, to, mode = 'interval',
           )
         })()
         : null}
-      {labelIndices(points.length).map(index => (
+      {labelIndices(xs, points.map(point => point.label)).map(index => (
         <text
           key={index}
           x={xs[index]}

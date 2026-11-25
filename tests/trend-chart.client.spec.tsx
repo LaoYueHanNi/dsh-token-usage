@@ -101,4 +101,27 @@ describe('TrendChart Theme Adaptations', () => {
     expect(stops[0]?.getAttribute('stop-opacity')).toBe('0.045')
     expect(container.querySelectorAll('path').length).toBe(2)
   })
+
+  it('omits overlapping middle x-axis ticks on skewed cross-day request series', () => {
+    const day1 = new Date(2026, 9, 30, 21, 0, 0).getTime()
+    const day2 = new Date(2026, 9, 31, 11, 4, 0).getTime()
+    const { container } = render(
+      <TrendChart
+        rows={SAMPLE_ROWS}
+        requests={[
+          { time: day1, tokens: 100 },
+          { time: day1 + 600_000, tokens: 120 },
+          { time: day1 + 1_200_000, tokens: 80 },
+          { time: day1 + 1_800_000, tokens: 60 },
+          { time: day2, tokens: 300 },
+        ]}
+        t={t}
+      />,
+    )
+    // X-axis ticks live at y = height - 6 (= 184) whereas Y-axis ticks sit at x < 44.
+    const xTicks = Array.from(container.querySelectorAll('text')).filter(node => node.getAttribute('y') === '184')
+    expect(xTicks).toHaveLength(2)
+    expect(xTicks[0]?.textContent).toBe('10-30 21:00')
+    expect(xTicks[1]?.textContent).toBe('10-31 11:00')
+  })
 })
