@@ -1,129 +1,213 @@
+<div align="center">
+
+<img src="./icon.svg" width="64" height="64" alt="dsh-token-usage icon" />
+
 # dsh-token-usage
 
-[![awesome · DSH plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
+**All-in-one token usage, cost accounting, model performance & provider quota plugin for [DeepSeek Harness (dsh)][dsh].**
 
-![Token Usage dashboard](docs/images/token-usage.png)
+<p>
+  <a href="https://awesome-dsh-plugin.com"><img src="https://awesome-dsh-plugin.com/badge.svg" alt="awesome · DSH plugin" height="20" /></a>
+  <a href="https://www.npmjs.com/package/@laoyuehanni/dsh-token-usage"><img src="https://img.shields.io/npm/v/%40laoyuehanni%2Fdsh-token-usage?color=cb3837" alt="npm version" height="20" /></a>
+  <a href="https://www.npmjs.com/package/@laoyuehanni/dsh-token-usage"><img src="https://img.shields.io/npm/dm/%40laoyuehanni%2Fdsh-token-usage?color=0ea5e9" alt="npm downloads" height="20" /></a>
+  <a href="https://github.com/deepseek-ai/deepseek-harness"><img src="https://img.shields.io/badge/dsh-%3E%3D0.2.1--rc.3-6366f1" alt="dsh >= 0.2.1-rc.3" height="20" /></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/github/license/LaoYueHanNi/dsh-token-usage" alt="MIT License" height="20" /></a>
+</p>
 
-[简体中文](./README.zh.md) | English
+[简体中文](./README.zh.md) · **English**
 
-A dsh usage plugin that displays model token usage right in the Web UI. The sidebar's **Token Usage** entry opens a full-width dashboard — summary cards (with cost), a trend chart, and five detail boards (projects / sessions, models / providers, runtime overhead); the same statistics live in **Settings → Token Usage** behind five detail tabs (by project / by model / by session / by provider / runtime overhead). Both surfaces share date-range and model filters; a single-day range uses an hourly trend and wider ranges use daily points.
+[Install](#install) · [Features](#features) · [Provider Quota](#provider-quota) · [Model Pricing](#4-cost-figures--model-pricing) · [Configuration](#configuration) · [Development](#development)
 
-[dsh]: https://github.com/cordiverse/dsh
+</div>
 
-Repo: <https://github.com/LaoYueHanNi/dsh-token-usage>
+<p align="center">
+  <img src="docs/images/token-usage.png" alt="Token Usage dashboard" width="100%" />
+</p>
 
-> [!IMPORTANT]
-> **GitHub direct installs have ended** — the repository no longer carries prebuilt output. Install from npm instead:
->
-> ```sh
-> dsh plugin --profile web add @laoyuehanni/dsh-token-usage
-> ```
->
-> **Upgrading from a legacy `github:` install (≤ 0.3.7, package name `dsh-token-usage`)?** An in-place `update` fails to load — remove the old name first, then add again. Usage data under `$DSH_HOME/token-usage/` carries over untouched.
+---
 
-## Features
+## Highlights
 
-- **Live recording**: every provider-billed model call is recorded as it happens — tokens, cost, model, session — conversation requests, context-compaction calls, and auxiliary system calls included: the Auto review authorization reviewer, session-title generation, timeline report synthesis, and reasoning translation. **Web tools** are recorded separately per `web_search` and `web_fetch` tool call: invocation count, query count, duration, and failure state; when the host reports tokens for a search's model turn they bill into the totals and cost; when it does not, the runtime-overhead row shows only the call counts, never a per-search price. Auxiliary calls bill into the totals and the model breakdown. The ones the host proves belong to a session (such as session-title generation, Auto review, and session-scoped timeline reports on supporting hosts) also join that session's totals, trend and request pool, tagged with their kind; the rest stay global and are broken out by kind in the **Runtime overhead** board. That history cannot be backfilled — the host keeps no usage record of those calls, and recording starts with the first request after upgrading.
-- **Web stats page**: filters (date range + model + `1d`/`7d`/`30d` shortcuts), eight compact summary cards in two rows, and a trend chart (hourly for one day, daily for wider ranges; hover a point for its total). The request card carries **failed** and **overhead** pills. The detail block is a five-tab switcher — **projects / models / sessions / providers / runtime overhead** — sharing the dashboard's row layout: project rows aggregate every matching root session before the session list is capped; directory-tail grouping intentionally merges folders with the same final segment. Rows sort by total tokens or cost (sessions also by last activity), and **Ctrl+click** on a listed session row opens that conversation (the host restores its last-selected view tab). The runtime-overhead tab breaks auxiliary calls down by kind and lists a collapsible web-tools row beside them (breaking down web search and web fetch calls); the by-provider tab lists each provider's usage by its route key — see the next entry, **Provider usage dimension**.
+| Capability | What you get |
+| --- | --- |
+| **Usage & Cost Dashboard** | Full-width sidebar dashboard + **Settings → Token Usage** across 5 dimensions: projects, sessions, models, providers, and runtime overhead. |
+| **Per-Session & Live Pool** | Dedicated **Usage** tab beside Chat / Trajectory with subagent drill-down, live in-flight request pool, failure breakdown, and low cache-hit alerts. |
+| **Model Speed & Latency** | Streaming output speed (tok/s), time-to-first-token (TTFT), and request latency rankings across models. |
+| **Cloud Pricing Engine** | Automatic timestamp-accurate cost calculation synced from [model-price-table](https://github.com/LaoYueHanNi/model-price-table) with ¥ / $ support and local alias mapping. |
+| **Provider Quota Monitor** | Input-bar quota ring & panel for Zhipu GLM, Kimi, MiniMax, OpenCode Go, Command Code, DeepSeek, OpenRouter, and Magpie gateway. |
 
-![Token Usage settings page](docs/images/settings-usage.png)
-
-- **Main-column dashboard**: the sidebar's **Token Usage** entry opens the same metrics as a five-board dashboard (projects / sessions, models / providers, runtime overhead). The boards collapse to one column when the available content width is narrow; **Pin to sidebar** on this plugin's **configuration card** in the host's **Plugins** page moves the entry out of the **More** menu into a resident sidebar row (switch it off to move it back) — the two never coexist. The same configuration card also lets you turn off **Show Token Usage in Settings** (on by default) to hide the **Settings → Token Usage** section.
-- **Provider usage dimension**: the settings panel gains a **By provider** tab and the dashboard a **Providers** card, listing each provider route key's usage — display name · relative bar · total tokens · cache hit rate · billed cost (cost comes from the same rates as the by-model view and reprices when the price table updates). The sort switches between total tokens and cost, and each of the two entries remembers its own sort choice (changing it in the settings panel leaves the dashboard untouched). Usage without a route key is never folded into a named provider: it stays a single **Missing provider** remainder row, sorted last and dimmed (a question mark beside the name explains why on hover) — a **known difference**, not lost data: sessions whose logs were deleted, history older than the route-key field, and runtime overhead such as title generation or approval requests naturally carry no route key.
-- **Model performance view**: the model list can switch from usage to mean output speed, time to first token, and request latency. Untimed requests do not enter performance evaluation; speed and first-token means use streaming samples, and models with fewer than five streaming samples are marked rather than ranked. Historical timing is backfilled automatically when the rollup format changes.
-- **Session usage tab**: the conversation pane gains a **Usage** view tab (beside Chat / Trajectory) with the active session's dashboard — six stat cards (successful requests with a failure pill, cost, cache hit rate, average time-to-first-token, generation throughput, total tokens), a 4-bucket token strip, a trend chart (per-interval or cumulative), and a per-model table. A scope switch toggles **Session / With subagents**, and the subagent table drills into each child and back. Hovering the failure pill breaks failures down per class (rate limited, server error, context exceeded, …). The subagent table also knows each subagent's **semantic name** (DSH 0.2.2+, such as `researcher` or the auto-assigned `agent-1`): each row keeps the concise delegation label inline (falling back to title, semantic name, or session id), while the hover identifies the semantic name, subagent id, and lifecycle mode. A **Team mode** badge sits beside the block heading when the root session has agent-team collaboration enabled, and an **external subagent** — run elsewhere, with no local session — is listed as a dimmed row that states it is not counted in the local ledger.
-- **Live request pool**: the same tab adds a **Latest request** panel (cache hit, input, output, first token, latency, speed — cost and cache buckets demoted to the footer) and a **Live requests** table (up to 19 earlier rows; origin, state, time, model, cache hit, input, output, cache read, first token, latency, speed, cost). Waiting, streaming, failed and cancelled requests are visible while they run, every provider attempt is its own row, and a low cache-hit rate is flagged inline with an explanation.
-
-![Session Usage tab](docs/images/usage-tab.png)
-
-- **Cost figures & model pricing**: per-request cost is computed live from per-model rates (¥ per million tokens); unpriced models warn and count as ¥0. Click a priced model name in the dashboard to open its full price table; holding Ctrl while clicking a priced model filters the view to that model. The filter row carries a **pricing table** entry opening an overview of every model in the cloud feed — searchable, with simulated billing and expandable effective rates; the **Model alias associations** button next to the dialog title opens a separate dialog that manages the local alias→model associations and lets you revoke them. Rates sync from the cloud feed on every startup — see [Model pricing](#model-pricing).
-
-![Pricing table](docs/images/pricing-table.png)
-
-- **Provider quota**: an input-bar button (left of the model chip) shows the selected provider's remaining quota. See [Provider quota](#provider-quota).
-- **History backfill**: the first startup syncs requests that happened before installation (idempotent); unreadable session logs are skipped and counted, never fatal to the sync.
-
-## Model pricing
-
-Costs are billed per record at its own timestamp. Identification or pricing-rule changes reselect historical rates from raw records on the next read. Models resolve through full original ID matching, provider-prefix ID matching, then upstream aliasPatterns (deprecated aliases are ignored), all ignoring case while preserving versions and model variants. Unknown or ambiguous names have no inferred price. The single source is a cloud mirror auto-synced on every startup — pricing corrections belong upstream in the [model-price-table](https://github.com/LaoYueHanNi/model-price-table) feed, so every user benefits at once. A hand-edited `pricing.json` is no longer read; if you maintain one it is silently ignored after upgrading (the file is left on disk). Upgrading from 0.4.1 or earlier to 0.4.2 triggers a one-time full rebuild of the usage rollup the first time the stats page is read — the larger the history, the longer it takes; this is expected. An invalid new feed keeps the previous valid mirror. If pricing is unavailable or history cannot be fully repriced, available usage remains visible while unreliable costs are hidden with a reason. Missing entries in a valid feed are warned separately. Unpriced names offer local search, full rule preview and explicit association to an existing cloud model ID. Folded rows retain original sources; Manage model associations also lists inactive or unused choices and supports revocation. Associations preserve upstream billing rules and reprice history. An upstream Issue entry opens a draft for you to complete; it never submits automatically. Default location: `~/.dsh/token-usage/`. Billing rule chain, cloud feed format, and self-hosted mirror URLs: [docs/pricing.md](./docs/pricing.md).
-
-## Configuration
-
-### Data directory
-
-Editable on this plugin's **configuration card** in the host's **Plugins** page: saving an absolute path takes effect immediately — history migrates automatically, no restart, no manual move. Blank keeps the default `~/.dsh/token-usage/`. A save is refused while a conversation is in progress; wait for it to end, then save again. Or set it directly:
-
-```yml
-plugins:
-  token-usage:
-    path: D:/data/token-usage   # default: ~/.dsh/token-usage/
-```
-
-### Pricing region
-
-The pricing mirror follows your region: **Gitee** by default (fast inside mainland China) or the **GitHub mirror** of the same table — pick once on the **Pricing region** dropdown of that configuration card in the host's Plugins page, or via config. The pick also drives the display currency (¥ RMB vs $ USD at the table's exchange rate).
-
-```yml
-plugins:
-  token-usage:
-    pricingRegion: overseas   # default: domestic
-```
-
-## Provider quota
-
-The input-bar button follows the currently selected provider and opens a panel with remaining quota (API-key providers share the inference key; the DeepSeek account reads the signed-in balance):
-
-<img src="docs/images/zhipu-plan-usage.png" width="520" alt="Zhipu GLM quota panel">
-
-<img src="docs/images/opencode-go-plan-usage.png" width="520" alt="OpenCode Go quota panel">
-
-| Provider | Shows |
-|---|---|
-| Zhipu GLM Coding Plan (CN / international) | 5-hour, weekly (some plans also monthly) |
-| Kimi For Coding | 5-hour, monthly (legacy responses: weekly) |
-| MiniMax Coding Plan (CN / international) | 5-hour, weekly |
-| OpenCode Go | 5-hour, weekly, monthly |
-| Command Code | 5-hour, weekly, monthly |
-| DeepSeek (official API key) | ¥ account balance |
-| DeepSeek account | topped-up balance, granted balance |
-| OpenRouter | $ remaining credits |
-| Magpie gateway | every upstream account's quota cards, scoped to the selected model's provider (routing groups show the whole fleet) |
-
-Unsupported providers hide the button; a failed query can be retried from the panel. On by default; turn it off with `quota.enabled: false`. Not supported yet: Volcengine, ZenMux, Zhipu Team plan, Claude / Codex / Gemini / Grok official subscriptions, GitHub Copilot.
-
-A magpie route needs no setup: declare any OpenAI-compatible provider whose base URL points at the gateway (`http://127.0.0.1:3425/v1` by default) — the plugin probes the gateway's hello and reads its aggregated quota report. The gateway key goes in the provider's API key when the gateway is shared from another machine; a loopback gateway needs none.
-
-Magpie cards follow the selected model immediately, before sending a request. Reads always use `?kept=1`: polling, opening the panel and retrying only read Magpie's own cache, never trigger upstream quota refreshes. Refresh quotas in Magpie when newer readings are needed; an empty cache does not fall back to a live vendor query.
-
-Several keys and accounts of one vendor back each other up inside the gateway: the input-bar ring shows that vendor pool's **mean level** and colors it by the pool's availability (one spent account turns it yellow, only a fully spent pool turns it red), while the panel still lists every account's own share. Routing groups (no determinable request model) keep one level per vendor.
+---
 
 ## Install
 
-Requires dsh `0.2.1-rc.3` or newer.
+Requires **dsh `0.2.1-rc.3`** or newer.
 
 ```sh
 dsh plugin --profile web add @laoyuehanni/dsh-token-usage
 ```
 
-> The package declares `dsh.bundle`, so `add` wires the plugin into the profile automatically — installs work out of the box, and the first startup backfills pre-install history.
+> [!TIP]
+> The package declares `dsh.bundle`, so `add` wires the plugin into the profile automatically — works out of the box, and the first startup idempotently backfills pre-install history (unreadable session logs are skipped and counted without interrupting sync).
 
-## Update
+**Update & Remove**
 
 ```sh
+# Update
 dsh plugin --profile web update @laoyuehanni/dsh-token-usage
-```
 
-## Remove
-
-```sh
+# Remove (keeps data under $DSH_HOME/token-usage/ — delete manually if no longer needed)
 dsh plugin --profile web remove @laoyuehanni/dsh-token-usage
 ```
 
-Data files under `$DSH_HOME/token-usage/` are kept — delete them manually if you no longer need them.
+<details>
+<summary>Upgrading from a legacy <code>github:</code> install (≤ 0.3.7, package name <code>dsh-token-usage</code>)?</summary>
+
+GitHub direct installs have ended — the repository no longer carries prebuilt output. An in-place `update` from `github:` fails to load; remove the old name first, then install from npm:
+
+```sh
+dsh plugin --profile web remove dsh-token-usage
+dsh plugin --profile web add @laoyuehanni/dsh-token-usage
+```
+
+Existing usage data under `$DSH_HOME/token-usage/` carries over untouched.
+
+</details>
+
+---
+
+## Features
+
+### 1. Full-Width Dashboard & Web Settings Page
+
+- **Two synchronized surfaces**: the sidebar **Token Usage** entry opens a five-board full-width dashboard (auto-collapses to one column on narrow viewports); the same statistics live in **Settings → Token Usage** behind five tabs (**Projects / Models / Sessions / Providers / Runtime overhead**).
+- **Flexible filtering & navigation**: shared date range + model filter + `1d` / `7d` / `30d` shortcuts, eight compact summary cards (with **failed** and **overhead** pills), and an hourly (single-day) or daily (multi-day) trend chart. Sort rows by tokens, cost, or last activity; **Ctrl+click** a session row to jump directly to that conversation.
+- **Sidebar & visibility toggles**: in the host **Plugins** page configuration card, enable **Pin to sidebar** to move the entry out of **More** into a resident sidebar row (mutually exclusive), or toggle **Show Token Usage in Settings** (on by default).
+
+<p align="center">
+  <img src="docs/images/settings-usage.png" alt="Token Usage settings page" width="100%" />
+</p>
+
+<details>
+<summary>Details: Provider dimension, project grouping & runtime overhead</summary>
+
+- **Provider usage dimension**: lists each provider route key with display name, relative bar, total tokens, cache hit rate, and billed cost. Dashboard and Settings remember their sort order (`tokens` vs `cost`) independently. Usage without a route key (deleted logs, pre-route-key history, or global runtime overhead) stays in a dimmed **Missing provider** remainder row at the bottom with an explanatory tooltip — a known difference, not lost data.
+- **Project grouping**: project rows aggregate every matching root session before the session list is capped; directory-tail grouping intentionally merges folders with the same final segment.
+- **Live recording & runtime overhead**: records every provider-billed call in real time — main turns, context compaction, and auxiliary calls (Auto review, session-title generation, timeline report synthesis, reasoning translation). **Web tools** (`web_search`, `web_fetch`) record invocation count, query count, duration, and failure state; reported model tokens bill into totals/cost, while untokenized calls appear as counts only in the collapsible web-tools row. Session-attributed auxiliary calls also join that session's totals, trend, and request pool; the rest stay global under **Runtime overhead**. Auxiliary history starts recording after upgrading and cannot be backfilled.
+
+</details>
+
+---
+
+### 2. Session Usage Tab & Live Request Pool
+
+The conversation pane gains a **Usage** view tab beside **Chat** and **Trajectory**:
+
+- **Session dashboard**: six metric cards (successful requests with a hoverable per-class failure pill, cost, cache hit rate, mean TTFT, throughput, total tokens), a 4-bucket token strip, per-interval/cumulative trend chart, and per-model breakdown.
+- **Subagent & Team drill-down**: toggle **Session / With subagents** and drill into any child session. Recognizes subagent **semantic names** (DSH 0.2.2+, e.g. `researcher`, `agent-1`), shows a **Team mode** badge when agent-team collaboration is active, and marks remote **external subagents** as dimmed non-local rows.
+- **Live request pool**: **Latest request** card plus a **Live requests** table (up to 19 recent attempts) tracking waiting, streaming, failed, and cancelled requests in real time, with inline low cache-hit diagnostics.
+
+<p align="center">
+  <img src="docs/images/usage-tab.png" alt="Session Usage tab" width="100%" />
+</p>
+
+---
+
+### 3. Model Performance View
+
+Switch any model table from usage to **mean output speed**, **time to first token (TTFT)**, and **request latency**:
+
+- Untimed requests are excluded from performance metrics.
+- Speed and TTFT means use streaming samples only; models with fewer than 5 streaming samples are flagged rather than ranked.
+- Historical timing backfills automatically whenever the rollup format updates.
+
+---
+
+### 4. Cost Figures & Model Pricing
+
+Per-request cost is calculated live at each record's own timestamp (`¥` or `$` per million tokens); unpriced models warn clearly and count as 0.
+
+- Click a priced model name to view its full rate table, or **Ctrl+click** to filter by that model.
+- Use the **Pricing table** button in the filter bar to browse/search all cloud models, run simulated billing, and manage local **Model alias associations** (with revocation).
+
+<p align="center">
+  <img src="docs/images/pricing-table.png" alt="Pricing table" width="100%" />
+</p>
+
+<details>
+<summary>Details: Resolution order, cloud sync & upgrade notes</summary>
+
+- **Resolution order**: full original ID → provider-prefix-stripped ID → upstream `aliasPatterns` (case-insensitive, preserving versions/variants; deprecated `aliases` ignored; unknown or ambiguous names are never guessed).
+- **Cloud-first sync**: rates auto-sync on startup from [model-price-table](https://github.com/LaoYueHanNi/model-price-table) — submit pricing PRs upstream so every user benefits. Legacy hand-edited `pricing.json` files are ignored (kept on disk). An invalid feed retains the last valid mirror; when costs cannot be reliably repriced, usage remains visible while unreliable costs are hidden with a reason.
+- **Unpriced models**: offer in-place search, full rule preview, explicit local alias association (which reprices history), and a prefilled upstream Issue draft (never auto-submitted).
+- **Upgrading from ≤ 0.4.1 to ≥ 0.4.2**: triggers a one-time full rollup rebuild on first read.
+- Full billing rule chain, feed format, and self-hosted mirror setup: [docs/pricing.md](./docs/pricing.md).
+
+</details>
+
+---
+
+## Provider Quota
+
+An input-bar button (left of the model chip) follows the currently selected provider and opens a live remaining-quota panel (API-key providers reuse the inference key; DeepSeek account reads the signed-in balance):
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/images/zhipu-plan-usage.png" alt="Zhipu GLM quota panel" />
+      <br />
+      <sub>Zhipu GLM Coding Plan</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/images/opencode-go-plan-usage.png" alt="OpenCode Go quota panel" />
+      <br />
+      <sub>OpenCode Go Plan</sub>
+    </td>
+  </tr>
+</table>
+
+| Provider | Quota metrics shown |
+| --- | --- |
+| **Zhipu GLM Coding Plan** (CN / International) | 5-hour, weekly (some plans also monthly) |
+| **Kimi For Coding** | 5-hour, monthly (legacy responses: weekly) |
+| **MiniMax Coding Plan** (CN / International) | 5-hour, weekly |
+| **OpenCode Go** | 5-hour, weekly, monthly |
+| **Command Code** | 5-hour, weekly, monthly |
+| **DeepSeek** (official API key) | ¥ account balance |
+| **DeepSeek Account** | Topped-up balance, granted balance |
+| **OpenRouter** | $ remaining credits |
+| **Magpie Gateway** | Aggregated upstream account quota cards scoped to the selected model's provider |
+
+> Unsupported providers hide the button automatically; failed queries can be retried inline. Enabled by default (`quota.enabled: false` to disable). Not supported yet: Volcengine, ZenMux, Zhipu Team plan, Claude / Codex / Gemini / Grok official subscriptions, GitHub Copilot.
+
+<details>
+<summary>Magpie Gateway integration details</summary>
+
+- **Zero config**: declare any OpenAI-compatible provider pointing at your Magpie gateway (`http://127.0.0.1:3425/v1` by default) — the plugin probes the gateway's `hello` endpoint automatically. Shared remote gateways read the gateway key from the provider's API key; loopback gateways need none.
+- **Cache-only reads (`?kept=1`)**: cards follow model selection immediately before sending a request. Polling, opening the panel, and retrying only read Magpie's cache and never trigger upstream quota refreshes (refresh in Magpie when newer readings are needed).
+- **Multi-account pools**: the input-bar ring displays the vendor pool's **mean level** colored by availability (yellow when one account is spent, red only when the entire pool is spent), while the panel lists every account's own share. Routing groups keep one level per vendor.
+
+</details>
+
+---
+
+## Configuration
+
+All options can be edited directly on this plugin's **configuration card** in the host **Plugins** page (changes apply immediately), or configured in `cordis.yml`:
+
+```yml
+plugins:
+  token-usage:
+    path: D:/data/token-usage   # default: ~/.dsh/token-usage/ (migrates history automatically)
+    pricingRegion: overseas     # domestic (Gitee, ¥ RMB) | overseas (GitHub mirror, $ USD)
+    quota:
+      enabled: true             # set false to hide the input-bar quota button
+```
+
+> Changing `path` via the Plugins page migrates existing history automatically with no restart (blocked while a conversation is actively streaming).
+
+---
 
 ## Development
-
-Build once, install a symlink, iterate:
 
 ```sh
 pnpm install
@@ -132,6 +216,21 @@ pnpm test                # vitest
 dsh plugin --profile web add link:D:/plugins/dsh-token-usage
 ```
 
-Rebuild and restart `dsh web` to apply changes (`pnpm watch:client` in the plugin directory hot-reloads the client). No `prepare` script by design — `lib/` never enters the repo; `pnpm publish` builds it fresh into the tarball.
+Rebuild and restart `dsh web` to apply host changes, or run `pnpm watch:client` for client hot reload. `lib/` is intentionally excluded from git and built fresh on `pnpm publish`.
 
-Temporary host-only mount (this launch only, no profile changes): copy `cordis.example.yml` to `cordis.yml`, point `name` at the absolute `file://` URL of your `lib/index.js`, then `dsh web --patch <plugin-dir>/cordis.yml`. Data recording works in this mode; for UI work use the `link:` install above.
+<details>
+<summary>Temporary host-only mount (without modifying profile)</summary>
+
+Copy `cordis.example.yml` to `cordis.yml`, point `name` at the absolute `file://` URL of your `lib/index.js`, then run:
+
+```sh
+dsh web --patch <plugin-dir>/cordis.yml
+```
+
+Data recording works in this mode; for UI development use the `link:` install above.
+
+</details>
+
+---
+
+[dsh]: https://github.com/deepseek-ai/deepseek-harness
