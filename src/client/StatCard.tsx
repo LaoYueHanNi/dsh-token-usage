@@ -21,6 +21,7 @@ import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { UsageAuxKindRow } from '../wire.ts'
 import { failuresTooltip, overheadTooltip } from './format.ts'
 import styles from './StatCard.module.css'
+import surface from './surface.module.css'
 
 /** Shared 12px linear icons for headline KPI cards across both the session
  * view and the cross-session overview board (inline SVG, theme-inherited). */
@@ -82,7 +83,7 @@ export function StatCard({ label, value, size, labelExtra, icon, accent }: StatC
     : size === 'sm' ? styles['cardSm'] : undefined
   const accentClass = accent === 'cost' ? styles['cardAccentCost']
     : accent === 'hit' ? styles['cardAccentHit'] : undefined
-  const card = [styles['card'], sizeClass, accentClass].filter(Boolean).join(' ')
+  const card = [surface['surface'], styles['card'], sizeClass, accentClass].filter(Boolean).join(' ')
   const labelNode = (
     <span className={styles['cardLabel']}>
       {icon !== undefined && <span className={styles['cardLabelIcon']} aria-hidden="true">{icon}</span>}

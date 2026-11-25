@@ -225,10 +225,13 @@
   border-radius: 8px;
   cursor: pointer;
   white-space: nowrap;
+  transition: border-color 0.18s ease, color 0.18s ease, background-color 0.18s ease;
 }
 
+/* Hover lifts the border to border-l2, the same step the card surfaces take. */
 .perfToggle:hover {
   color: var(--dsw-alias-label-primary);
+  border-color: var(--dsw-alias-border-l2);
 }
 
 .perfToggle:focus-visible {
@@ -241,7 +244,8 @@
   line-height: 1;
 }
 
-.perfOn {
+.perfOn,
+.perfOn:hover {
   background: color-mix(in srgb, var(--dsw-alias-label-primary) 10%, transparent);
   border-color: transparent;
   color: var(--dsw-alias-label-primary);
@@ -321,6 +325,11 @@
   padding: 2px;
   border: 1px solid var(--dsw-alias-border-l1);
   border-radius: 8px;
+  transition: border-color 0.18s ease;
+}
+
+.segmented:hover {
+  border-color: var(--dsw-alias-border-l2);
 }
 
 .segBtn {
@@ -334,6 +343,7 @@
   border-radius: 6px;
   cursor: pointer;
   white-space: nowrap;
+  transition: color 0.18s ease, background-color 0.18s ease;
 }
 
 .segBtn:hover {

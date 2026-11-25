@@ -256,7 +256,7 @@ describe('PricingOverviewDialog', () => {
 
   it('prefills the buckets compact (2M / 98M / 457K / 0) with the case pressed', async () => {
     const { dialog } = await renderReady()
-    const button = within(dialog).getByRole('button', { name: '案例1' })
+    const button = within(dialog).getByRole('button', { name: /^案例1.*极高缓存$/ })
     expect(button.getAttribute('aria-pressed')).toBe('true')
     // The refill is compact: an amount under a fitting unit, not raw token
     // counts (2 / 98 in M, 457 / 0 in K).
@@ -276,7 +276,7 @@ describe('PricingOverviewDialog', () => {
   it('fills the buckets from the case button; a manual edit un-presses it', async () => {
     const { dialog } = await renderReady()
     const row = within(dialog).getByRole('button', { name: '查看 deepseek-chat 定价' })
-    const button = within(dialog).getByRole('button', { name: '案例1' })
+    const button = within(dialog).getByRole('button', { name: /^案例1/ })
     // A manual edit recalculates (¥2/8/1/4: 2M×2 + 98M×1 + 1000K×8 =
     // ¥110.00) and the button stops reading pressed — the highlight tracks
     // the buckets, not the last click.
@@ -293,8 +293,8 @@ describe('PricingOverviewDialog', () => {
 
   it('fills the second case (95% hit, 600K out); the press follows the switch', async () => {
     const { dialog } = await renderReady()
-    const first = within(dialog).getByRole('button', { name: '案例1' })
-    const second = within(dialog).getByRole('button', { name: '案例2' })
+    const first = within(dialog).getByRole('button', { name: /^案例1/ })
+    const second = within(dialog).getByRole('button', { name: /^案例2.*高缓存$/ })
     expect(second.getAttribute('aria-pressed')).toBe('false')
     // The hover title derives from the buckets: input-side total 100M at
     // 95% cache hit, 600K output.
@@ -316,7 +316,7 @@ describe('PricingOverviewDialog', () => {
 
   it('fills the third case (translation, no cache); the press follows the switch', async () => {
     const { dialog } = await renderReady()
-    const third = within(dialog).getByRole('button', { name: '案例3' })
+    const third = within(dialog).getByRole('button', { name: /^案例3.*翻译场景$/ })
     // The translation case's picture: a 100M input side with zero cache
     // hit, a roughly equal output.
     expect(third.title).toBe('输入 100M（缓存 0%） 输出 100M')
@@ -338,7 +338,7 @@ describe('PricingOverviewDialog', () => {
     // the costs and the pressed case — stands still.
     fireEvent.click(within(dialog).getByRole('button', { name: '缓存读（K）' }))
     expect((within(dialog).getByLabelText('缓存读') as HTMLInputElement).value).toBe('98000')
-    expect(within(dialog).getByRole('button', { name: '案例1' }).getAttribute('aria-pressed')).toBe('true')
+    expect(within(dialog).getByRole('button', { name: /^案例1/ }).getAttribute('aria-pressed')).toBe('true')
     const row = within(dialog).getByRole('button', { name: '查看 kimi-k2 定价' })
     expect(within(row).getByText('100.91￥')).toBeTruthy()
     // Further up to B: 98000K reads 0.098B — same tokens again.

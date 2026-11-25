@@ -190,6 +190,7 @@
   align-items: stretch;
 }
 
+/* Paired with surface.module.css `.surface` (border, wash, hover lift). */
 .chartCol,
 .modelCol {
   display: flex;
@@ -197,25 +198,7 @@
   gap: 8px;
   min-width: 0;
   padding: 12px 14px;
-  border: 1px solid var(--dsw-alias-border-l1);
   border-radius: 9px;
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--dsw-alias-label-primary) 2.6%, transparent) 0%,
-      transparent 55%
-    ),
-    var(--dsw-alias-fill-container, transparent);
-  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--dsw-alias-label-primary) 4%, transparent);
-  transition: border-color 0.18s ease, box-shadow 0.18s ease;
-}
-
-.chartCol:hover,
-.modelCol:hover {
-  border-color: var(--dsw-alias-border-l2);
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, var(--dsw-alias-label-primary) 7%, transparent),
-    0 2px 10px color-mix(in srgb, var(--dsw-alias-label-primary) 3%, transparent);
 }
 
 .subagents {
@@ -543,90 +526,56 @@
   color: var(--dsw-alias-label-secondary);
 }
 
+/* Paired with surface.module.css `.surface`; the headline request card sits
+ * one step brighter and lifts further than the other panels. */
 .latestPanel {
+  --dtu-surface-tint: 3.2%;
+  --dtu-surface-edge: 5%;
+  --dtu-surface-edge-hover: 8.5%;
+  --dtu-surface-lift: 3px 14px;
+  --dtu-surface-glow: 4%;
   position: relative;
-  border: 1px solid var(--dsw-alias-border-l1);
   border-radius: 9px;
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--dsw-alias-label-primary) 3.2%, transparent) 0%,
-      transparent 55%
-    ),
-    var(--dsw-alias-fill-container, transparent);
-  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--dsw-alias-label-primary) 5%, transparent);
   padding: 14px 16px;
   min-width: 0;
-  transition: border-color 0.18s ease, box-shadow 0.18s ease;
-}
-
-.latestPanel:hover {
-  border-color: var(--dsw-alias-border-l2);
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, var(--dsw-alias-label-primary) 8.5%, transparent),
-    0 3px 14px color-mix(in srgb, var(--dsw-alias-label-primary) 4%, transparent);
 }
 
 /* Soft top-left ambient wash keyed to the latest request's state/cache tone. */
 .latestGlowGood {
-  background:
-    radial-gradient(
-      380px 130px at 8% 0%,
-      color-mix(in srgb, var(--dsw-alias-state-success-primary, #16a34a) 8%, transparent),
-      transparent 72%
-    ),
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--dsw-alias-label-primary) 2.8%, transparent) 0%,
-      transparent 55%
-    ),
-    var(--dsw-alias-fill-container, transparent);
+  --dtu-surface-tint: 2.8%;
+  --dtu-surface-wash: radial-gradient(
+    380px 130px at 8% 0%,
+    color-mix(in srgb, var(--dsw-alias-state-success-primary, #16a34a) 8%, transparent),
+    transparent 72%
+  );
 }
 
 .latestGlowLive {
-  background:
-    radial-gradient(
-      380px 130px at 8% 0%,
-      color-mix(in srgb, var(--dsw-alias-link-primary, #3b82f6) 10%, transparent),
-      transparent 72%
-    ),
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--dsw-alias-label-primary) 2.8%, transparent) 0%,
-      transparent 55%
-    ),
-    var(--dsw-alias-fill-container, transparent);
-  border-color: color-mix(in srgb, var(--dsw-alias-link-primary, #3b82f6) 28%, var(--dsw-alias-border-l1));
+  --dtu-surface-tint: 2.8%;
+  --dtu-surface-wash: radial-gradient(
+    380px 130px at 8% 0%,
+    color-mix(in srgb, var(--dsw-alias-link-primary, #3b82f6) 10%, transparent),
+    transparent 72%
+  );
+  --dtu-surface-border: color-mix(in srgb, var(--dsw-alias-link-primary, #3b82f6) 28%, var(--dsw-alias-border-l1));
 }
 
 .latestGlowWarn {
-  background:
-    radial-gradient(
-      380px 130px at 8% 0%,
-      color-mix(in srgb, light-dark(#b45309, #d9ac64) 9%, transparent),
-      transparent 72%
-    ),
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--dsw-alias-label-primary) 2.8%, transparent) 0%,
-      transparent 55%
-    ),
-    var(--dsw-alias-fill-container, transparent);
+  --dtu-surface-tint: 2.8%;
+  --dtu-surface-wash: radial-gradient(
+    380px 130px at 8% 0%,
+    color-mix(in srgb, light-dark(#b45309, #d9ac64) 9%, transparent),
+    transparent 72%
+  );
 }
 
 .latestGlowError {
-  background:
-    radial-gradient(
-      380px 130px at 8% 0%,
-      color-mix(in srgb, var(--dsw-alias-state-error-primary, #dc2626) 9%, transparent),
-      transparent 72%
-    ),
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--dsw-alias-label-primary) 2.8%, transparent) 0%,
-      transparent 55%
-    ),
-    var(--dsw-alias-fill-container, transparent);
+  --dtu-surface-tint: 2.8%;
+  --dtu-surface-wash: radial-gradient(
+    380px 130px at 8% 0%,
+    color-mix(in srgb, var(--dsw-alias-state-error-primary, #dc2626) 9%, transparent),
+    transparent 72%
+  );
 }
 
 /* Identity row: origin badge, state pill, model + cache label (one

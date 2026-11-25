@@ -19,6 +19,10 @@ import type { RowSort } from './UsageRows.tsx'
 import type { ProjectUsageRow } from './project-rows.ts'
 import type { CurrencyView } from './format.ts'
 import styles from './DashboardCards.module.css'
+import surface from './surface.module.css'
+
+/** Every dashboard card: the shared raised surface over the panel layout. */
+const PANEL_CLASS = `${surface['surface']} ${styles['panel']}`
 
 /** The cards' fixed sort options: projects, models and providers pick
  * between token size and billed cost; sessions add last activity. The
@@ -116,7 +120,7 @@ export function DashboardCards({
   const namedProviderCount = providerRows.filter(row => row.provider !== '').length
   return (
     <div className={styles['grid2']}>
-      <div className={styles['panel']}>
+      <div className={PANEL_CLASS}>
         <div className={styles['panelHead']}>
           <span className={styles['panelTitle']}>
             {t('board.projects')}
@@ -144,7 +148,7 @@ export function DashboardCards({
           t={t}
         />
       </div>
-      <div className={styles['panel']}>
+      <div className={PANEL_CLASS}>
         <div className={styles['panelHead']}>
           <span className={styles['panelTitle']}>
             {t('board.sessions')}
@@ -171,7 +175,7 @@ export function DashboardCards({
           onSessionOpen={onSessionOpen}
         />
       </div>
-      <div className={styles['panel']}>
+      <div className={PANEL_CLASS}>
         <div className={styles['panelHead']}>
           <span className={styles['panelHeadLeft']}>
             <span className={styles['panelTitle']}>
@@ -211,7 +215,7 @@ export function DashboardCards({
           onModelName={onModelName}
         />
       </div>
-      <div className={styles['panel']}>
+      <div className={PANEL_CLASS}>
         <div className={styles['panelHead']}>
           <span className={styles['panelTitle']}>
             {t('board.providers')}
@@ -242,7 +246,7 @@ export function DashboardCards({
           t={t}
         />
       </div>
-      <div ref={overheadCardRef} className={overheadFlash ? `${styles['panel']} ${styles['flash']}` : styles['panel']}>
+      <div ref={overheadCardRef} className={overheadFlash ? `${PANEL_CLASS} ${styles['flash']}` : PANEL_CLASS}>
         <div className={styles['panelHead']}>
           <span className={styles['panelTitle']}>
             {t('aux.tab')}

@@ -56,6 +56,7 @@ import { TrendChart } from './TrendChart.tsx'
 import type { TrendChartMode } from './TrendChart.tsx'
 import { useColorSchemeMirror } from './use-color-scheme.ts'
 import styles from './UsageView.module.css'
+import surface from './surface.module.css'
 
 /** The view's scope switch: the session alone, or its whole subagent subtree. */
 export type UsageScope = 'session' | 'tree'
@@ -453,7 +454,7 @@ export function UsageView({ useSessions, useProjection, sessionId, t }: UsageVie
               )
               : null}
             <div className={styles['mid']}>
-              <section className={styles['chartCol']}>
+              <section className={`${surface['surface']} ${styles['chartCol']}`}>
                 <div className={styles['chartHead']}>
                   <h3 className={styles['subtitle']}>{t('view.chart.title')}</h3>
                   <div className={styles['segmented']} role="group" aria-label={t('chart.mode.label')}>
@@ -487,7 +488,7 @@ export function UsageView({ useSessions, useProjection, sessionId, t }: UsageVie
                   {...summary.byDay.length === 1 ? { hours: summary.byHour } : {}}
                 />
               </section>
-              <section className={styles['modelCol']}>
+              <section className={`${surface['surface']} ${styles['modelCol']}`}>
                 <h3 className={styles['subtitle']}>{t('byModel.title')}</h3>
                 {summary.byModel.length > 0
                   ? (

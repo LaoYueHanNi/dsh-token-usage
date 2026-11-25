@@ -48,6 +48,7 @@ import { totalTokens } from './day.ts'
 import { currencyViewOf, formatCost, formatTokens, hitRateDisplay } from './format.ts'
 import { PricingStatus, costsAvailable } from './PricingStatus.tsx'
 import { ModelAssociationBadge, PricingAssociationProvider, UnpricedModelTag } from './PricingAssociations.tsx'
+import { KPI_ICONS } from './StatCard.tsx'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import { usePricingAssociationRefresh } from './pricing-associations.ts'
 import { buildChildIndex, buildStatsFreshnessKey, subtreeIds } from './session-stats.ts'
@@ -305,9 +306,15 @@ export function CostPill({ sessionId, useSessions, useProjection, t }: CostPillP
             <span className={styles.panelTotal}>{costText}</span>
           </span>
           <span className={styles.usageLine}>
-            <span>{t('panel.tokens', { value: tokensValue })}</span>
+            <span className={styles.usageItem}>
+              <span className={styles.lineIcon} aria-hidden="true">{KPI_ICONS.tokens}</span>
+              {t('panel.tokens', { value: tokensValue })}
+            </span>
             <span className={styles.dot}>·</span>
-            <span>{t('panel.hitRate', { value: hit.text })}</span>
+            <span className={styles.usageItem}>
+              <span className={styles.lineIcon} aria-hidden="true">{KPI_ICONS.hit}</span>
+              {t('panel.hitRate', { value: hit.text })}
+            </span>
           </span>
           <div className={styles.rows}>
             <PricingStatus costState={summary.costState} pricingUnavailableReason={summary.pricingUnavailableReason} associationStorageError={summary.associationStorageError} t={t} />

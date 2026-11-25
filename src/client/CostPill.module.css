@@ -111,6 +111,28 @@ button.pill[aria-expanded='true'] {
   color: var(--dsw-alias-separator-primary);
 }
 
+/* A usage figure led by the KPI cards' linear icon (StatCard `KPI_ICONS`). */
+.usageItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.lineIcon {
+  display: inline-flex;
+  flex: none;
+  width: 12px;
+  height: 12px;
+  color: var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary));
+  opacity: 0.8;
+}
+
+.lineIcon svg {
+  display: block;
+  width: 12px;
+  height: 12px;
+}
+
 .rows {
   margin-top: 8px;
   display: flex;

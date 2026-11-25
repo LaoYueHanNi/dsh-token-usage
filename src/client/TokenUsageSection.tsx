@@ -37,6 +37,7 @@ import type { RowSort } from './UsageRows.tsx'
 import { projectRowsOf } from './project-rows.ts'
 import { useColorSchemeMirror } from './use-color-scheme.ts'
 import styles from './TokenUsageSection.module.css'
+import surface from './surface.module.css'
 
 /** The detail tabs' fixed sort options: projects, models and providers pick
  * between token size and billed cost; sessions add last activity. */
@@ -438,7 +439,7 @@ export function TokenUsageSection({ t, close, sessionListed, openSession, varian
               )
               : state.value.byModel.length > 0 || (state.value.sessionRows?.length ?? 0) > 0 || auxRequests > 0 || webCalls > 0
               ? (
-                <section className={styles['detailPanel']}>
+                <section className={`${surface['surface']} ${styles['detailPanel']}`}>
                   <div className={styles['detailToolbar']}>
                     <div className={styles['segmented']} role="group" aria-label={t('detail.switch.label')}>
                       {DETAIL_MODES.map(mode => (

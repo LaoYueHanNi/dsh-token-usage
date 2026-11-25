@@ -27,6 +27,7 @@ import { bandClassOf } from './HitRateText.tsx'
 import type { CompactionAttributionItem, RequestDetailCache, RequestDetailView, SessionRequestDetails } from '../wire.ts'
 import type { ConversationStatus } from '../wire.ts'
 import styles from './UsageView.module.css'
+import surface from './surface.module.css'
 
 export interface RequestPoolProps {
   details: SessionRequestDetails
@@ -408,7 +409,7 @@ export function RequestPoolSections({ details, focusId, view, staleAt, t }: Requ
         <span className={styles['poolContext']}>{t('pool.latest.context')}</span>
       </div>
       {latest === undefined
-        ? <div className={styles['latestPanel']}><div className={styles['poolEmpty']}>{t('pool.empty')}</div></div>
+        ? <div className={`${surface['surface']} ${styles['latestPanel']}`}><div className={styles['poolEmpty']}>{t('pool.empty')}</div></div>
         : (
             (() => {
               const inFlight = latest.state === 'waiting' || latest.state === 'streaming'
@@ -426,6 +427,7 @@ export function RequestPoolSections({ details, focusId, view, staleAt, t }: Requ
                   ? styles['requestNoteNeutral'] ?? ''
                   : ''}`
               const latestClass = [
+                surface['surface'],
                 styles['latestPanel'],
                 latestGlowClassOf(latest),
                 latestArriveSlot === 1 ? styles['latestArriveA'] : latestArriveSlot === 2 ? styles['latestArriveB'] : '',

@@ -27,7 +27,7 @@
 
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
+import type { LocaleKeysOf, TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ContextTier, DailySlot, ModelPricing, ModelRates, PricingOverviewModel, PricingOverviewPayload } from '../wire.ts'
 import { PRICING_PATH } from '../wire.ts'
 import { useAsyncResource } from './async-resource.ts'
@@ -39,14 +39,13 @@ import { formatCost, formatRate, formatTokens } from './format.ts'
 import { billedRates, PricingDialog, windowText } from './PricingDialog.tsx'
 import shared from './PricingDialog.module.css'
 import styles from './PricingOverviewDialog.module.css'
+import surface from './surface.module.css'
+import { BUCKET_DOTS } from './StatCard.tsx'
 
 import { matchesPricingSearch, sortPricingModels } from './pricing-search.ts'
 export { matchesPricingSearch, sortPricingModels } from './pricing-search.ts'
 
-/** One preset usage case of the simulated-cost column: raw token buckets.
- * A case button's hover title derives from the data (input-side total,
- * cache-hit share, output), so adding a case is one array entry and
- * nothing else. */
+/** One simulated-cost bucket vector: raw token counts. */
 interface SimScenario {
   inputTokens: number
   cacheReadTokens: number
@@ -54,19 +53,26 @@ interface SimScenario {
   cacheWriteTokens: number
 }
 
+/** One preset usage case of the simulated-cost column: raw token buckets
+ * plus its short scenario description key. A case button's hover title
+ * derives from the data (input-side total, cache-hit share, output). */
+interface PresetScenario extends SimScenario {
+  descKey: LocaleKeysOf<'token-usage'>
+}
+
 /** The preset cases the buttons fill the inputs with (maintainer-curated
  * classic workloads). The first prefills the inputs on open. */
-const SIM_SCENARIOS: readonly SimScenario[] = [
+const SIM_SCENARIOS: readonly PresetScenario[] = [
   // 「输入 100M（缓存 98%）输出 457K」: an input side of 100M tokens, 98%
   // of it served from cache, 457K generated.
-  { inputTokens: 2_000_000, cacheReadTokens: 98_000_000, outputTokens: 457_000, cacheWriteTokens: 0 },
+  { inputTokens: 2_000_000, cacheReadTokens: 98_000_000, outputTokens: 457_000, cacheWriteTokens: 0, descKey: 'pricing.simCaseUltraCache' },
   // 「输入 100M（缓存 95%）输出 600K」: the same 100M input side at a 95%
   // cache hit, 600K generated.
-  { inputTokens: 5_000_000, cacheReadTokens: 95_000_000, outputTokens: 600_000, cacheWriteTokens: 0 },
+  { inputTokens: 5_000_000, cacheReadTokens: 95_000_000, outputTokens: 600_000, cacheWriteTokens: 0, descKey: 'pricing.simCaseHighCache' },
   // 「输入 100M（缓存 0%）输出 100M」: translation at corpus scale — fresh
   // text both ways, no cache in play, the output roughly as long as the
   // input.
-  { inputTokens: 100_000_000, cacheReadTokens: 0, outputTokens: 100_000_000, cacheWriteTokens: 0 },
+  { inputTokens: 100_000_000, cacheReadTokens: 0, outputTokens: 100_000_000, cacheWriteTokens: 0, descKey: 'pricing.simCaseTranslation' },
 ]
 
 /** The four bucket fields of a case, in table order. */
@@ -392,9 +398,9 @@ export function PricingOverviewDialog({ usedModels, view, onClose, t }: {
               value={search}
               onChange={event => setSearch(event.target.value)}
             />
-            <div className={styles['buckets']}>
+            <div className={`${surface['surface']} ${styles['buckets']}`}>
               <div className={styles['bucket']}>
-                <span className={styles['bucketLabel']}>{t('pricing.simBucketInput')}</span>
+                <span className={styles['bucketLabel']}>{BUCKET_DOTS.input}{t('pricing.simBucketInput')}</span>
                 <input
                   type="number"
                   min={0}
@@ -418,7 +424,7 @@ export function PricingOverviewDialog({ usedModels, view, onClose, t }: {
                 />
               </div>
               <div className={styles['bucket']}>
-                <span className={styles['bucketLabel']}>{t('pricing.simBucketCacheRead')}</span>
+                <span className={styles['bucketLabel']}>{BUCKET_DOTS.cacheRead}{t('pricing.simBucketCacheRead')}</span>
                 <input
                   type="number"
                   min={0}
@@ -442,7 +448,7 @@ export function PricingOverviewDialog({ usedModels, view, onClose, t }: {
                 />
               </div>
               <div className={styles['bucket']}>
-                <span className={styles['bucketLabel']}>{t('pricing.simBucketOutput')}</span>
+                <span className={styles['bucketLabel']}>{BUCKET_DOTS.output}{t('pricing.simBucketOutput')}</span>
                 <input
                   type="number"
                   min={0}
@@ -466,7 +472,7 @@ export function PricingOverviewDialog({ usedModels, view, onClose, t }: {
                 />
               </div>
               <div className={styles['bucket']}>
-                <span className={styles['bucketLabel']}>{t('pricing.simBucketCacheWrite')}</span>
+                <span className={styles['bucketLabel']}>{BUCKET_DOTS.cacheWrite}{t('pricing.simBucketCacheWrite')}</span>
                 <input
                   type="number"
                   min={0}
@@ -502,7 +508,9 @@ export function PricingOverviewDialog({ usedModels, view, onClose, t }: {
                     title={`${label.inputLine} ${label.outputLine}`}
                     onClick={() => { setBuckets(bucketsOfCase(candidate)) }}
                   >
-                    {t('pricing.simCase', { index: String(index + 1) })}
+                    <span className={styles['scenarioDot']} aria-hidden="true" />
+                    <span className={styles['scenarioName']}>{t('pricing.simCase', { index: String(index + 1) })}</span>
+                    <span className={styles['scenarioDesc']}>{t(candidate.descKey)}</span>
                   </button>
                 )
               })}

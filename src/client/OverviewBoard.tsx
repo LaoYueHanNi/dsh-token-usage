@@ -22,6 +22,7 @@ import type { CurrencyView } from './format.ts'
 import { formatCost, formatTokens, auxCallCount } from './format.ts'
 import { totalTokens } from './day.ts'
 import styles from './OverviewBoard.module.css'
+import surface from './surface.module.css'
 
 /** Props for the overview board — every field is derived data the section
  * (which owns the fetch and the filter state) passes down; the board never
@@ -131,7 +132,7 @@ export function OverviewBoard({
         <StatCard size={cardSize} icon={BUCKET_DOTS.cacheWrite} label={t('stat.cacheWrite')} value={formatTokens(total.cacheWriteTokens)} />
       </div>
       <PricingStatus costState={costState} pricingUnavailableReason={pricingUnavailableReason} associationStorageError={associationStorageError} t={t} />
-      <div className={styles['trendCard']}>
+      <div className={`${surface['surface']} ${styles['trendCard']}`}>
         <span className={styles['trendTitle']}>{t('trend.title')}</span>
         <TrendChart
           rows={byDay}
