@@ -18,8 +18,10 @@
  * @module token-usage/client/card-form
  */
 
-import type { DirectoryGuardView } from '../wire.ts'
-import { DIR_GUARD_PATH, MIGRATION_PATH } from '../wire.ts'
+import {
+  DIR_GUARD_PATH, MIGRATION_PATH, REQUEST_POOL_LIMIT_MAX, REQUEST_POOL_LIMIT_MIN,
+  type DirectoryGuardView,
+} from '../wire.ts'
 
 /**
  * Minimal snapshot contract of a configuration form (the host's
@@ -78,6 +80,25 @@ export interface SectionValue {
   pricingRegion?: string
   sidebarPinned?: boolean
   settingsSectionEnabled?: boolean
+  requestPoolLimit?: number
+}
+
+type ParsedPoolLimit =
+  | { kind: 'unset' }
+  | { kind: 'invalid' }
+  | { kind: 'value'; value: number }
+
+/** Parse the request-pool limit input: blank clears the override back to the
+ * default; otherwise an integer inside `[1, 1000]` is accepted. */
+function parseRequestPoolLimitInput(raw: string): ParsedPoolLimit {
+  const trimmed = raw.trim()
+  if (trimmed === '') return { kind: 'unset' }
+  if (!/^\d+$/.test(trimmed)) return { kind: 'invalid' }
+  const value = Number(trimmed)
+  if (!Number.isSafeInteger(value) || value < REQUEST_POOL_LIMIT_MIN || value > REQUEST_POOL_LIMIT_MAX) {
+    return { kind: 'invalid' }
+  }
+  return { kind: 'value', value }
 }
 
 /** Live migration progress the card polls after saving a directory change. */
@@ -135,6 +156,12 @@ export interface CardState {
   /** Staged settings-section toggle; undefined while untouched. A staged edit
    * shows in the checkbox and commits only on save. */
   settingsSectionDraft: boolean | undefined
+  /** Draft or resolved text for the request-pool display cap ('' means default). */
+  requestPoolLimitText: string
+  /** Whether saving the current request-pool cap leaves a user override. */
+  requestPoolLimitOverridden: boolean
+  /** Whether the staged request-pool cap text is outside `[1, 1000]` or non-integer. */
+  requestPoolLimitInvalid: boolean
   /** Draft text per field ('' marks the inherited/default option). */
   fields: Record<CardField, string>
   /** Whether saving each field would leave a user-layer entry. */
@@ -164,6 +191,8 @@ export interface CardActions {
   editPinned: (value: boolean) => void
   /** Stage the settings-section toggle; it commits only on save. */
   editSettingsSection: (value: boolean) => void
+  /** Stage draft text for the request-pool display cap ('' restores default). */
+  editRequestPoolLimit: (text: string) => void
   /** Stage a clear for one field, so saving lets it re-inherit the composition layer. */
   clearField: (field: CardField) => void
   /** Write every staged edit, then re-seed from what the Host accepted. */
@@ -189,6 +218,8 @@ export class CardForm {
   private draftPinned: boolean | undefined
   /** Staged settings-section toggle; undefined while untouched. */
   private draftSettingsSection: boolean | undefined
+  /** Staged request-pool cap text; undefined while untouched. */
+  private draftPoolLimit: string | undefined
   private saving = false
   private failed = false
   private refusal: SaveRefusal | undefined
@@ -239,6 +270,12 @@ export class CardForm {
         this.refusal = undefined
         this.publish()
       },
+      editRequestPoolLimit: (text) => {
+        this.draftPoolLimit = text
+        this.failed = false
+        this.refusal = undefined
+        this.publish()
+      },
       clearField: (field) => {
         this.drafts[field] = ''
         this.failed = false
@@ -247,10 +284,15 @@ export class CardForm {
       },
       save: () => { void this.save() },
       discard: () => {
-        if (Object.keys(this.drafts).length === 0 && this.draftPinned === undefined && this.draftSettingsSection === undefined && !this.failed) return
+        if (Object.keys(this.drafts).length === 0
+          && this.draftPinned === undefined
+          && this.draftSettingsSection === undefined
+          && this.draftPoolLimit === undefined
+          && !this.failed) return
         this.drafts = {}
         this.draftPinned = undefined
         this.draftSettingsSection = undefined
+        this.draftPoolLimit = undefined
         this.failed = false
         this.refusal = undefined
         this.publish()
@@ -282,7 +324,16 @@ export class CardForm {
     // can still be switched from the card.
     const pinEdit = this.draftPinned
     const sectionEdit = this.draftSettingsSection
-    if ((edited.length === 0 && pinEdit === undefined && sectionEdit === undefined) || this.saving) return
+    const poolEffective = this.effectivePoolLimit()
+    const poolChanged = this.draftPoolLimit !== undefined && this.draftPoolLimit.trim() !== poolEffective
+    const poolEdit = poolChanged ? parseRequestPoolLimitInput(this.draftPoolLimit!) : undefined
+    if ((edited.length === 0 && pinEdit === undefined && sectionEdit === undefined && poolEdit === undefined) || this.saving) return
+    if (poolEdit?.kind === 'invalid') {
+      this.failed = true
+      this.refusal = undefined
+      this.publish()
+      return
+    }
     // Snapshot the intended writes: a keystroke mid-await must not change what
     // this save commits.
     const intended = edited.map(field => [field, this.drafts[field]!.trim()] as const)
@@ -311,6 +362,8 @@ export class CardForm {
       }
       if (pinEdit !== undefined) await this.target.set('sidebarPinned', pinEdit)
       if (sectionEdit !== undefined) await this.target.set('settingsSectionEnabled', sectionEdit)
+      if (poolEdit?.kind === 'unset') await this.target.unset('requestPoolLimit')
+      else if (poolEdit?.kind === 'value') await this.target.set('requestPoolLimit', poolEdit.value)
       // Read back: the Host's validators own the constraints no schema
       // expresses, so acceptance is judged from the stored layers.
       for (const [field, text] of intended) {
@@ -321,6 +374,8 @@ export class CardForm {
       }
       if (pinEdit !== undefined && this.storedValue('sidebarPinned') !== pinEdit) landed = false
       if (sectionEdit !== undefined && this.storedValue('settingsSectionEnabled') !== sectionEdit) landed = false
+      if (poolEdit?.kind === 'unset' && this.stored('requestPoolLimit')) landed = false
+      if (poolEdit?.kind === 'value' && this.storedValue('requestPoolLimit') !== poolEdit.value) landed = false
     } catch (_settingsWriteFailure) {
       landed = false
     }
@@ -335,6 +390,7 @@ export class CardForm {
       for (const [field, _text] of intended) delete this.drafts[field]
       this.draftPinned = undefined
       this.draftSettingsSection = undefined
+      if (poolChanged) this.draftPoolLimit = undefined
     }
     this.saving = false
     this.failed = !landed
@@ -421,9 +477,15 @@ export class CardForm {
     return this.userLayer()?.[field]
   }
 
-  private stored(field: CardField): boolean {
+  private stored(field: string): boolean {
     const user = this.userLayer()
     return user !== undefined && Object.hasOwn(user, field)
+  }
+
+  /** The resolved (draft-free) request-pool display cap text; '' means default. */
+  private effectivePoolLimit(): string {
+    const value = this.snapshot().value?.requestPoolLimit
+    return typeof value === 'number' && Number.isInteger(value) ? String(value) : ''
   }
 
   /** The resolved (draft-free) text of one field; '' means inherited. */
@@ -441,6 +503,13 @@ export class CardForm {
     const snapshot = this.snapshot()
     const pinnedEffective = snapshot.value?.sidebarPinned === true
     const sectionEffective = snapshot.value?.settingsSectionEnabled !== false
+    const poolEffective = this.effectivePoolLimit()
+    const poolText = this.draftPoolLimit ?? poolEffective
+    const poolDirty = this.draftPoolLimit !== undefined && this.draftPoolLimit.trim() !== poolEffective
+    const poolInvalid = this.draftPoolLimit !== undefined && parseRequestPoolLimitInput(this.draftPoolLimit).kind === 'invalid'
+    const poolOverridden = this.draftPoolLimit !== undefined
+      ? this.draftPoolLimit.trim() !== ''
+      : this.stored('requestPoolLimit')
     const fields = {} as Record<CardField, string>
     const overridden = {} as Record<CardField, boolean>
     let textDirty = false
@@ -462,11 +531,15 @@ export class CardForm {
       pinnedDraft: this.draftPinned,
       settingsSectionEnabled: sectionEffective,
       settingsSectionDraft: this.draftSettingsSection,
+      requestPoolLimitText: poolText,
+      requestPoolLimitOverridden: poolOverridden,
+      requestPoolLimitInvalid: poolInvalid,
       fields,
       overridden,
       dirty: textDirty
         || (this.draftPinned !== undefined && this.draftPinned !== pinnedEffective)
-        || (this.draftSettingsSection !== undefined && this.draftSettingsSection !== sectionEffective),
+        || (this.draftSettingsSection !== undefined && this.draftSettingsSection !== sectionEffective)
+        || poolDirty,
       textDirty,
       saving: this.saving,
       failed: this.failed,

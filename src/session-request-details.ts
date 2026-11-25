@@ -9,7 +9,7 @@
  * (cold-start / model-switch marks never depend on the display window),
  * then sort by the order anchor descending, promote the newest active request
  * (or a just-settled live request during its one-second handoff window) to
- * the panel seat, and only then cut to REQUEST_POOL_LIMIT.
+ * the panel seat, and only then cut to the configured request-pool limit.
  * The window limits DISPLAY — totals, trends, and the log never shrink.
  *
  * @module token-usage/session-request-details
@@ -22,7 +22,7 @@ import { effectiveModelOf, type AuxKind, type UsageRecord } from './usage-record
 import type { CompactionAttributionItem } from './compaction-attribution.ts'
 import { assessRequestCache, routeExclusionsOf, settledSpeedOf } from './request-details.ts'
 import type { LiveAttempt } from './request-observe.ts'
-import { REQUEST_POOL_LIMIT, type ConversationStatus, type RequestDetailView, type SessionRequestDetails } from './wire.ts'
+import { resolveRequestPoolLimit, type ConversationStatus, type RequestDetailView, type SessionRequestDetails } from './wire.ts'
 
 /** How per-record pricing reaches the builder: the route's own resolver
  * (request-time pricing, context tiers, currency stay the server's job). */
@@ -250,8 +250,10 @@ export function buildSessionRequestDetails(input: {
   pricing: RequestPricing
   asOf: number
   liveCapability: SessionRequestDetails['liveCapability']
+  limit?: number
 }): SessionRequestDetails {
   const { records, live, pricing, asOf, liveCapability } = input
+  const limit = resolveRequestPoolLimit(input.limit)
   // The in-place merge, keyed by the durable request id: a live attempt
   // whose settlement already landed in the log FOLDS INTO the persisted row
   // (same request — its start anchor and single-attempt clock survive, the
@@ -386,8 +388,8 @@ export function buildSessionRequestDetails(input: {
   const conversation = headline !== undefined ? live.conversations?.get(headline.sessionId) : undefined
 
   return {
-    items: items.slice(0, REQUEST_POOL_LIMIT),
-    limit: REQUEST_POOL_LIMIT,
+    items: items.slice(0, limit),
+    limit,
     asOf,
     activeCount: live.activeCount,
     liveCapability,

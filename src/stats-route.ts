@@ -120,6 +120,9 @@ export interface StatsRouteOptions {
   providerNames?: () => Promise<Readonly<Record<string, string>>>
   /** Diagnostic sink for data reads; defaults to console. */
   logger?: LoggerLike
+  /** Reads the live request-pool display cap (default `REQUEST_POOL_LIMIT` = 20)
+   * per request, so a settings update lands without re-registering the route. */
+  requestPoolLimit?: () => number
   /** The live request observer backing the usage tab's request pool. A host
    * without an observer (headless, or attached before this seam existed)
    * omits it and `fields=session` reads degrade to settled-only details. */
@@ -612,6 +615,7 @@ export function createStatsRoute(dir: () => string, options: StatsRouteOptions =
             },
             asOf: Date.now(),
             liveCapability: liveObserver?.capability ?? 'settled-only',
+            ...(options.requestPoolLimit !== undefined ? { limit: options.requestPoolLimit() } : {}),
           })
           : undefined
         const timing = scoped !== undefined && filter.fields !== 'chip'

@@ -261,6 +261,48 @@ describe('CardForm', () => {
     })
   })
 
+  it('stages, saves as a number, and unsets requestPoolLimit when cleared', async () => {
+    const scope = new FakeScope(ready({ value: { requestPoolLimit: 50 }, user: { requestPoolLimit: 50 } }))
+    const { form, read } = formOf(scope)
+    expect(read()).toMatchObject({
+      dirty: false,
+      requestPoolLimitText: '50',
+      requestPoolLimitOverridden: true,
+      requestPoolLimitInvalid: false,
+    })
+
+    form.actions().editRequestPoolLimit('100')
+    expect(read()).toMatchObject({ dirty: true, textDirty: false, requestPoolLimitText: '100', requestPoolLimitInvalid: false })
+    form.actions().save()
+    await vi.waitFor(() => {
+      expect(scope.set).toHaveBeenCalledWith('requestPoolLimit', 100)
+      expect(read()).toMatchObject({ dirty: false, failed: false, requestPoolLimitText: '100', requestPoolLimitOverridden: true })
+    })
+
+    form.actions().editRequestPoolLimit('')
+    expect(read()).toMatchObject({ dirty: true, requestPoolLimitOverridden: false })
+    form.actions().save()
+    await vi.waitFor(() => {
+      expect(scope.unset).toHaveBeenCalledWith('requestPoolLimit')
+      expect(read()).toMatchObject({ dirty: false, requestPoolLimitText: '', requestPoolLimitOverridden: false })
+    })
+  })
+
+  it('flags invalid requestPoolLimit drafts and blocks saving them', async () => {
+    const scope = new FakeScope(ready({}))
+    const { form, read } = formOf(scope)
+    for (const bad of ['0', '1001', '12.5', 'abc']) {
+      form.actions().editRequestPoolLimit(bad)
+      expect(read()).toMatchObject({ dirty: true, requestPoolLimitInvalid: true })
+      form.actions().save()
+      await new Promise(resolve => setTimeout(resolve, 0))
+      expect(scope.set).not.toHaveBeenCalled()
+      expect(read().failed).toBe(true)
+    }
+    form.actions().discard()
+    expect(read()).toMatchObject({ dirty: false, failed: false, requestPoolLimitText: '', requestPoolLimitInvalid: false })
+  })
+
   it('reports no migration while the endpoint stays quiet', () => {
     const { read } = formOf(new FakeScope(ready({})))
     expect(read().migration).toBeUndefined()
@@ -289,6 +331,7 @@ describe('TokenUsageCard', () => {
       editField: actions.editField,
       editPinned: actions.editPinned,
       editSettingsSection: actions.editSettingsSection,
+      editRequestPoolLimit: actions.editRequestPoolLimit,
       clearField: actions.clearField,
       save: actions.save,
       discard: actions.discard,
@@ -531,5 +574,29 @@ describe('TokenUsageCard', () => {
     expect(discard).not.toHaveBeenCalled()
     unmount()
     expect(discard).toHaveBeenCalledTimes(1)
+  })
+
+  it('edits requestPoolLimit without blocking pricing sync and gates save on invalid values', () => {
+    const fetch = vi.fn(async () => Response.json({ version: 12, updatedAt: 1, models: 3, aliasPatterns: 1, usdExchangeRate: 7 }))
+    vi.stubGlobal('fetch', fetch)
+    render(<TokenUsageCard {...propsOf(new FakeScope(ready({})))} view="page" />)
+
+    const input = screen.getByLabelText('实时请求保留条数') as HTMLInputElement
+    expect(input.value).toBe('')
+    expect(input.placeholder).toBe('20')
+
+    fireEvent.change(input, { target: { value: '80' } })
+    expect(screen.getByText(t('card.unsaved'))).not.toBeNull()
+    expect((screen.getByRole('button', { name: '保存' }) as HTMLButtonElement).disabled).toBe(false)
+    expect((screen.getByRole('button', { name: '同步定价表' }) as HTMLButtonElement).disabled).toBe(false)
+
+    fireEvent.change(input, { target: { value: '0' } })
+    expect((screen.getByRole('alert')).textContent).toBe(t('card.requestPoolLimit.invalid'))
+    expect((screen.getByRole('button', { name: '保存' }) as HTMLButtonElement).disabled).toBe(true)
+    const discard = screen.getByRole('button', { name: '放弃' }) as HTMLButtonElement
+    expect(discard.disabled).toBe(false)
+    fireEvent.click(discard)
+    expect(input.value).toBe('')
+    expect(screen.queryByRole('alert')).toBeNull()
   })
 })

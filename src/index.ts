@@ -59,7 +59,10 @@ import { autoSyncIfNeeded, isOwnSessionEvent, subagentCatalogOfEvent, subagentDe
 import { clearRecordCache, warmRecordCache } from './record-cache.ts'
 import { invalidateSummary } from './stats.ts'
 import { createDirectoryGuardRoute, createFullSyncRoute, createMigrationRoute, createPricingRoute, createPricingSyncRoute, createStatsRoute, type FullSyncTrigger } from './stats-route.ts'
-import { currencyOfRegion, type DirectoryGuardView, type FullSyncView, type QuotaPayload } from './wire.ts'
+import {
+  REQUEST_POOL_LIMIT_MAX, REQUEST_POOL_LIMIT_MIN, currencyOfRegion, resolveRequestPoolLimit,
+  type DirectoryGuardView, type FullSyncView, type QuotaPayload,
+} from './wire.ts'
 import { createQuotaRoute } from './quota/quota-route.ts'
 import { QuotaService } from './quota/quota-service.ts'
 import { ProviderTracker, resolveCurrentSighting } from './quota/provider-tracking.ts'
@@ -125,6 +128,10 @@ export interface Config {
    * browser half registers/unregisters the `settings.section` entry without
    * a reload; the host only stores the field. */
   settingsSectionEnabled?: Volatile<boolean | undefined> | boolean
+  /** Maximum number of requests retained in the session usage request pool
+   * (default `20`, integer within `1–1000`). Volatile so a settings edit
+   * commits live and the next stats fetch uses it without a reload. */
+  requestPoolLimit?: Volatile<number | undefined> | number
 }
 
 /** Composition knobs of the quota feature (cordis.yml level). */
@@ -160,6 +167,7 @@ export const Config: z<any> = z.object({
   recordAux: z.boolean(),
   sidebarPinned: z.boolean().volatile(),
   settingsSectionEnabled: z.boolean().volatile(),
+  requestPoolLimit: z.number().min(REQUEST_POOL_LIMIT_MIN).max(REQUEST_POOL_LIMIT_MAX).volatile(),
   quota: z.object({
     enabled: z.boolean(),
     intervalSec: z.number().min(15).max(3600),
@@ -173,6 +181,7 @@ export function validateConfig(config: Config): void {
     && key !== 'pricingUrlOverseas' && key !== 'pricingRegion'
     && key !== 'recordCompaction' && key !== 'recordAux'
     && key !== 'sidebarPinned' && key !== 'settingsSectionEnabled'
+    && key !== 'requestPoolLimit'
     && key !== 'quota')
   if (unknown !== undefined) {
     throw new Error(`TokenUsageConfig: unknown key "${unknown}"`)
@@ -210,6 +219,14 @@ export function validateConfig(config: Config): void {
   const settingsSectionEnabled = readVolatile(config.settingsSectionEnabled)
   if (settingsSectionEnabled !== undefined && typeof settingsSectionEnabled !== 'boolean') {
     throw new Error('TokenUsageConfig: "settingsSectionEnabled" must be a boolean')
+  }
+  const requestPoolLimit = readVolatile(config.requestPoolLimit)
+  if (requestPoolLimit !== undefined
+      && (typeof requestPoolLimit !== 'number' || !Number.isInteger(requestPoolLimit)
+        || requestPoolLimit < REQUEST_POOL_LIMIT_MIN || requestPoolLimit > REQUEST_POOL_LIMIT_MAX)) {
+    throw new Error(
+      `TokenUsageConfig: "requestPoolLimit" must be an integer within ${String(REQUEST_POOL_LIMIT_MIN)}–${String(REQUEST_POOL_LIMIT_MAX)}`,
+    )
   }
   if (config.quota !== undefined) {
     if (typeof config.quota !== 'object' || config.quota === null) {
@@ -1327,6 +1344,7 @@ export function apply(ctx: Context, config: Config = {}) {
       webCtx.effect(() => webCtx.webServer.register(
         createStatsRoute(currentDir, {
           currency: () => currencyOfRegion(effectiveInput().pricingRegion),
+          requestPoolLimit: () => resolveRequestPoolLimit(readVolatile(currentConfig().requestPoolLimit)),
           // The provider dimension's display names: the running directory's
           // registry, read per request so a relocation serves the moved file.
           providerNames: () => current?.names.read() ?? Promise.resolve({}),

@@ -91,6 +91,22 @@ describe('buildSessionRequestDetails — window and order', () => {
     expect(details.items[19]!.id).toBe('r20')
   })
 
+  it('honours a configured pool limit above or below the default and falls back when invalid', () => {
+    const records = Array.from({ length: 40 }, (_, i) => record({ requestId: `r${String(i)}`, time: 1_000 + i }))
+    const expanded = buildSessionRequestDetails({ records, live: { attempts: [], activeCount: 0 }, pricing: NO_PRICING, asOf: 99_000, liveCapability: 'lifecycle', limit: 30 })
+    expect(expanded.items).toHaveLength(30)
+    expect(expanded.limit).toBe(30)
+    expect(expanded.items[29]!.id).toBe('r10')
+
+    const narrowed = buildSessionRequestDetails({ records, live: { attempts: [], activeCount: 0 }, pricing: NO_PRICING, asOf: 99_000, liveCapability: 'lifecycle', limit: 5 })
+    expect(narrowed.items).toHaveLength(5)
+    expect(narrowed.limit).toBe(5)
+
+    const fallback = buildSessionRequestDetails({ records, live: { attempts: [], activeCount: 0 }, pricing: NO_PRICING, asOf: 99_000, liveCapability: 'lifecycle', limit: 0 })
+    expect(fallback.items).toHaveLength(20)
+    expect(fallback.limit).toBe(20)
+  })
+
   it('carries the headline session’s conversation state into the snapshot', () => {
     const details = buildSessionRequestDetails({
       records: [record({ requestId: 'r1', sessionId: 's1' }), record({ requestId: 'r2', sessionId: 's2', time: 2_000 })],

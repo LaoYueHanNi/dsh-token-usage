@@ -20,7 +20,10 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { IconChevronDownOutlineMedium } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { InjectFace, PropsLocale, TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { CardActions, CardStore } from './card-form.ts'
-import { FULL_SYNC_PATH, PRICING_SYNC_PATH, type FullSyncView, type PricingSyncResult } from '../wire.ts'
+import {
+  FULL_SYNC_PATH, PRICING_SYNC_PATH, REQUEST_POOL_LIMIT, REQUEST_POOL_LIMIT_MAX, REQUEST_POOL_LIMIT_MIN,
+  type FullSyncView, type PricingSyncResult,
+} from '../wire.ts'
 import { pricingTableChanged } from './pricing-associations.ts'
 import css from './TokenUsageCard.module.css'
 
@@ -72,7 +75,8 @@ export function TokenUsageCard(props: TokenUsageCardProps) {
   }
   const migrating = state.migration !== undefined
   const lockInput = !state.writable || migrating
-  const lockActions = !state.dirty || state.saving || migrating
+  const lockDiscard = !state.dirty || state.saving || migrating
+  const lockSave = lockDiscard || state.requestPoolLimitInvalid
 
   /**
    * Open the shell's native folder dialog and stage the chosen path — the
@@ -270,6 +274,41 @@ export function TokenUsageCard(props: TokenUsageCardProps) {
               </label>
               <p className={css.hint}>{t('card.settingsSectionEnabled.hint')}</p>
             </div>
+            <label className={css.field} htmlFor="token-usage-card-pool-limit">
+              <span className={css.fieldLabel}>{t('card.requestPoolLimit.label')}</span>
+              <input
+                id="token-usage-card-pool-limit"
+                className={css.input}
+                type="number"
+                min={REQUEST_POOL_LIMIT_MIN}
+                max={REQUEST_POOL_LIMIT_MAX}
+                step={1}
+                placeholder={String(REQUEST_POOL_LIMIT)}
+                value={state.requestPoolLimitText}
+                disabled={lockInput}
+                aria-invalid={state.requestPoolLimitInvalid || undefined}
+                onChange={event => { props.editRequestPoolLimit(event.target.value) }}
+              />
+            </label>
+            {state.requestPoolLimitInvalid
+              ? (
+                <p className={css.failed} role="alert">
+                  {t('card.requestPoolLimit.invalid', {
+                    min: String(REQUEST_POOL_LIMIT_MIN),
+                    max: String(REQUEST_POOL_LIMIT_MAX),
+                  })}
+                </p>
+              )
+              : (
+                <p className={css.hint}>
+                  {t('card.requestPoolLimit.hint', {
+                    default: String(REQUEST_POOL_LIMIT),
+                    min: String(REQUEST_POOL_LIMIT_MIN),
+                    max: String(REQUEST_POOL_LIMIT_MAX),
+                  })}
+                  {state.requestPoolLimitOverridden ? ` ${t('card.overridden')}` : ''}
+                </p>
+              )}
             {state.migration !== undefined
               ? (
                 <div className={css.migration} role="status">
@@ -365,7 +404,7 @@ export function TokenUsageCard(props: TokenUsageCardProps) {
               <button
                 type="button"
                 className={css.discard}
-                disabled={lockActions}
+                disabled={lockDiscard}
                 onClick={props.discard}
               >
                 {t('card.discard')}
@@ -373,7 +412,7 @@ export function TokenUsageCard(props: TokenUsageCardProps) {
               <button
                 type="button"
                 className={css.save}
-                disabled={lockActions}
+                disabled={lockSave}
                 onClick={props.save}
               >
                 {t(state.saving ? 'card.saving' : 'card.save')}

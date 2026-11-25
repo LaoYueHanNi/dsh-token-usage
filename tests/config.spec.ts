@@ -64,6 +64,17 @@ describe('validateConfig', () => {
     expect(() => validateConfig({ settingsSectionEnabled: 'no' } as unknown as Config)).toThrow(/settingsSectionEnabled/)
   })
 
+  it('accepts an integer requestPoolLimit within 1–1000 and rejects out-of-range or non-integer values', () => {
+    expect(() => validateConfig({ requestPoolLimit: 1 })).not.toThrow()
+    expect(() => validateConfig({ requestPoolLimit: 20 })).not.toThrow()
+    expect(() => validateConfig({ requestPoolLimit: 1000 })).not.toThrow()
+    expect(() => validateConfig({ requestPoolLimit: 0 })).toThrow(/requestPoolLimit/)
+    expect(() => validateConfig({ requestPoolLimit: 1001 })).toThrow(/requestPoolLimit/)
+    expect(() => validateConfig({ requestPoolLimit: 12.5 })).toThrow(/requestPoolLimit/)
+    expect(() => validateConfig({ requestPoolLimit: Number.NaN })).toThrow(/requestPoolLimit/)
+    expect(() => validateConfig({ requestPoolLimit: '20' } as unknown as Config)).toThrow(/requestPoolLimit/)
+  })
+
   it('rejects a blank path', () => {
     expect(() => validateConfig({ path: '' })).toThrow(/non-empty string/)
   })

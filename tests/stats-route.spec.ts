@@ -251,6 +251,38 @@ describe('createStatsRoute', () => {
     expect(degraded.requestDetails.activeCount).toBe(0)
   })
 
+  it('applies the live requestPoolLimit option per session stats request', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'token-usage-pool-limit-'))
+    const base = new Date(2026, 3, 1, 12).getTime()
+    const lines = Array.from({ length: 30 }, (_, i) => JSON.stringify({
+      requestId: `req-${String(i)}`,
+      sessionId: 'alpha',
+      model: 'deepseek-chat',
+      time: base + i * 1_000,
+      inputTokens: 10,
+      outputTokens: 5,
+    })).join('\n') + '\n'
+    await writeFile(join(dir, 'usage-2026-04-01.jsonl'), lines)
+    let poolLimit = 25
+    const route = createStatsRoute(() => dir, {
+      requestPoolLimit: () => poolLimit,
+    })
+    const query = async () => {
+      const { res, captured } = fakeResponse()
+      await route.handler(fakeRequest({ url: `${STATS_PATH}?sessionId=alpha&fields=session` }), res)
+      expect(captured.status).toBe(200)
+      return JSON.parse(captured.body) as { requestDetails: SessionRequestDetails }
+    }
+    const expanded = await query()
+    expect(expanded.requestDetails.limit).toBe(25)
+    expect(expanded.requestDetails.items).toHaveLength(25)
+
+    poolLimit = 12
+    const reduced = await query()
+    expect(reduced.requestDetails.limit).toBe(12)
+    expect(reduced.requestDetails.items).toHaveLength(12)
+  })
+
   it('promotes an older active child only in tree scope, including when the parent has no requests', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'token-usage-active-child-'))
     const route = createStatsRoute(() => dir, {

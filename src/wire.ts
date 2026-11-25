@@ -953,10 +953,25 @@ export type StatsPayload = (CostedSummaryWire & {
 })
 
 /**
- * 会话用量页「最新请求 / 实时请求」区的请求池上限。池包含顶部最新一条与
- * 下方最多 19 条历史；上限只约束展示，从不截断日志、汇总或趋势。
+ * 会话用量页「最新请求 / 实时请求」区的请求池默认上限。池包含顶部最新一条
+ * 与下方最多 19 条历史；上限只约束展示，从不截断日志、汇总或趋势。
  */
 export const REQUEST_POOL_LIMIT = 20
+
+/** 插件配置允许设置的请求池上限下界与上界（闭区间）。 */
+export const REQUEST_POOL_LIMIT_MIN = 1
+export const REQUEST_POOL_LIMIT_MAX = 1000
+
+/**
+ * 将请求池上限解析为合法整数，缺失或越界时回退到默认值 {@link REQUEST_POOL_LIMIT}。
+ * @param value - 来自配置或参数的可选数值。
+ * @returns 落在 `[1, 1000]` 内的整数上限。
+ */
+export function resolveRequestPoolLimit(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isInteger(value)) return REQUEST_POOL_LIMIT
+  if (value < REQUEST_POOL_LIMIT_MIN || value > REQUEST_POOL_LIMIT_MAX) return REQUEST_POOL_LIMIT
+  return value
+}
 
 /** 一次 provider 请求尝试的生命周期状态。`interrupted` 是取消时已交付部分
  * 用量的结算（宿主 `assistant/message` 的 `interrupted` 事实）；`cancelled`
