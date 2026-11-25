@@ -66,13 +66,28 @@
  * daily rows, no pick in either. */
 .trendCard {
   border: 1px solid var(--dsw-alias-border-l1);
-  border-radius: 8px;
-  background: var(--dsw-alias-fill-container, transparent);
+  border-radius: 9px;
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--dsw-alias-label-primary) 2.6%, transparent) 0%,
+      transparent 55%
+    ),
+    var(--dsw-alias-fill-container, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--dsw-alias-label-primary) 4%, transparent);
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
   padding: 12px 14px;
   display: flex;
   flex-direction: column;
   gap: 8px;
   min-width: 0;
+}
+
+.trendCard:hover {
+  border-color: var(--dsw-alias-border-l2);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--dsw-alias-label-primary) 7%, transparent),
+    0 2px 10px color-mix(in srgb, var(--dsw-alias-label-primary) 3%, transparent);
 }
 
 .trendTitle {

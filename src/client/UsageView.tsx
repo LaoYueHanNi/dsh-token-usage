@@ -51,7 +51,7 @@ import { HitRateText } from './HitRateText.tsx'
 import { RequestPoolSections } from './RequestPool.tsx'
 import { aggregateScopedProjections, buildChildIndex, buildStatsFreshnessKey, buildSubagentRows, directSubagentIds, resolveHeaderTiming, subagentParentOf, subagentRowText, subtreeIds } from './session-stats.ts'
 import type { SubagentRow } from './session-stats.ts'
-import { RequestsCell, RequestsStatCard, StatCard } from './StatCard.tsx'
+import { KPI_ICONS, RequestsCell, RequestsStatCard, StatCard } from './StatCard.tsx'
 import { TrendChart } from './TrendChart.tsx'
 import type { TrendChartMode } from './TrendChart.tsx'
 import { useColorSchemeMirror } from './use-color-scheme.ts'
@@ -420,19 +420,25 @@ export function UsageView({ useSessions, useProjection, sessionId, t }: UsageVie
                 requests={total.requests}
                 failures={total.failures ?? 0}
                 failuresByCode={total.failuresByCode}
+                icon={KPI_ICONS.requests}
                 t={t}
               />
-              <StatCard label={t('stat.cost')} value={costsAvailable(summary.costState) ? formatCost(summary.totalCost, view) : '—'} />
-              <StatCard label={t('stat.totalTokens')} value={formatTokens(totalTokens(total))} />
-              <StatCard label={t('stat.hitRate')} value={<HitRateText totals={total} />} />
-              <StatCard label={t('view.ttft')} value={ttftText} />
-              <StatCard label={t('view.speed')} value={`${speedText} tok/s`} />
+              <StatCard
+                label={t('stat.cost')}
+                value={costsAvailable(summary.costState) ? formatCost(summary.totalCost, view) : '—'}
+                icon={KPI_ICONS.cost}
+                accent="cost"
+              />
+              <StatCard label={t('stat.totalTokens')} value={formatTokens(totalTokens(total))} icon={KPI_ICONS.tokens} />
+              <StatCard label={t('stat.hitRate')} value={<HitRateText totals={total} />} icon={KPI_ICONS.hit} accent="hit" />
+              <StatCard label={t('view.ttft')} value={ttftText} icon={KPI_ICONS.ttft} />
+              <StatCard label={t('view.speed')} value={`${speedText} tok/s`} icon={KPI_ICONS.speed} />
             </div>
             <div className={styles['tokenStrip']}>
-              <span>{t('stat.input')} <b>{formatTokens(total.inputTokens)}</b></span>
-              <span>{t('stat.output')} <b>{formatTokens(total.outputTokens)}</b></span>
-              <span>{t('stat.cacheRead')} <b>{formatTokens(total.cacheReadTokens)}</b></span>
-              <span>{t('stat.cacheWrite')} <b>{formatTokens(total.cacheWriteTokens)}</b></span>
+              <span className={styles['bucketItem']}><span className={`${styles['bucketDot']} ${styles['bucketDotInput']}`} aria-hidden="true" />{t('stat.input')} <b>{formatTokens(total.inputTokens)}</b></span>
+              <span className={styles['bucketItem']}><span className={`${styles['bucketDot']} ${styles['bucketDotOutput']}`} aria-hidden="true" />{t('stat.output')} <b>{formatTokens(total.outputTokens)}</b></span>
+              <span className={styles['bucketItem']}><span className={`${styles['bucketDot']} ${styles['bucketDotCacheRead']}`} aria-hidden="true" />{t('stat.cacheRead')} <b>{formatTokens(total.cacheReadTokens)}</b></span>
+              <span className={styles['bucketItem']}><span className={`${styles['bucketDot']} ${styles['bucketDotCacheWrite']}`} aria-hidden="true" />{t('stat.cacheWrite')} <b>{formatTokens(total.cacheWriteTokens)}</b></span>
             </div>
             <PricingStatus costState={summary.costState} pricingUnavailableReason={summary.pricingUnavailableReason} associationStorageError={summary.associationStorageError} t={t} />
             {costsAvailable(summary.costState) && summary.unpricedModels.length > 0
@@ -500,30 +506,55 @@ export function UsageView({ useSessions, useProjection, sessionId, t }: UsageVie
                           </tr>
                         </thead>
                         <tbody>
-                          {summary.byModel.map(row => (
-                            <tr key={row.model}>
-                              <td className={styles['modelCell']}>
-                                <span className={styles.modelIdentity}><span className={styles.modelName}>{row.model}</span>
-                                  {summary.unpricedModels.includes(row.model) && <UnpricedModelTag model={row.model} t={t} />}
-                                  <ModelAssociationBadge model={row.model} t={t} />
-                                </span>
-                              </td>
-                              <td>
-                                <RequestsCell
-                                  requests={row.totals.requests}
-                                  failures={row.totals.failures ?? 0}
-                                  failuresByCode={row.totals.failuresByCode}
-                                  t={t}
-                                />
-                              </td>
-                              <td className={row.totals.inputTokens === 0 ? styles['zeroDim'] : undefined}>{formatTokens(row.totals.inputTokens)}</td>
-                              <td className={row.totals.outputTokens === 0 ? styles['zeroDim'] : undefined}>{formatTokens(row.totals.outputTokens)}</td>
-                              <td className={row.totals.cacheReadTokens === 0 ? styles['zeroDim'] : undefined}>{formatTokens(row.totals.cacheReadTokens)}</td>
-                              <td className={row.totals.cacheWriteTokens === 0 ? styles['zeroDim'] : undefined}>{formatTokens(row.totals.cacheWriteTokens)}</td>
-                              <td><HitRateText totals={row.totals} /></td>
-                              <td className={styles['costCol']}>{costsAvailable(summary.costState) && !summary.unpricedModels.includes(row.model) ? formatCost(row.cost, view) : '—'}</td>
-                            </tr>
-                          ))}
+                          {(() => {
+                            const sortedModels = [...summary.byModel].sort((left, right) =>
+                              totalTokens(right.totals) - totalTokens(left.totals)
+                              || right.totals.requests - left.totals.requests
+                              || left.model.localeCompare(right.model),
+                            )
+                            const shareTotal = sortedModels.reduce((sum, row) => sum + totalTokens(row.totals), 0)
+                            const showShare = sortedModels.length > 1 && shareTotal > 0
+                            return sortedModels.map(row => {
+                              const sharePct = shareTotal > 0
+                                ? Math.max(0, Math.min(100, (totalTokens(row.totals) / shareTotal) * 100))
+                                : 0
+                              return (
+                                <tr key={row.model}>
+                                  <td className={styles['modelCell']}>
+                                    <div className={styles['modelCellStack']}>
+                                      <span className={styles.modelIdentity}><span className={styles.modelName}>{row.model}</span>
+                                        {summary.unpricedModels.includes(row.model) && <UnpricedModelTag model={row.model} t={t} />}
+                                        <ModelAssociationBadge model={row.model} t={t} />
+                                      </span>
+                                      {showShare && (
+                                        <span
+                                          className={styles['modelShareTrack']}
+                                          title={t('byModel.share', { pct: String(Math.round(sharePct)) })}
+                                          aria-hidden="true"
+                                        >
+                                          <span className={styles['modelShareFill']} style={{ width: `${sharePct.toFixed(1)}%` }} />
+                                        </span>
+                                      )}
+                                    </div>
+                                  </td>
+                                  <td>
+                                    <RequestsCell
+                                      requests={row.totals.requests}
+                                      failures={row.totals.failures ?? 0}
+                                      failuresByCode={row.totals.failuresByCode}
+                                      t={t}
+                                    />
+                                  </td>
+                                  <td className={row.totals.inputTokens === 0 ? styles['zeroDim'] : undefined}>{formatTokens(row.totals.inputTokens)}</td>
+                                  <td className={row.totals.outputTokens === 0 ? styles['zeroDim'] : undefined}>{formatTokens(row.totals.outputTokens)}</td>
+                                  <td className={row.totals.cacheReadTokens === 0 ? styles['zeroDim'] : undefined}>{formatTokens(row.totals.cacheReadTokens)}</td>
+                                  <td className={row.totals.cacheWriteTokens === 0 ? styles['zeroDim'] : undefined}>{formatTokens(row.totals.cacheWriteTokens)}</td>
+                                  <td><HitRateText totals={row.totals} /></td>
+                                  <td className={styles['costCol']}>{costsAvailable(summary.costState) && !summary.unpricedModels.includes(row.model) ? formatCost(row.cost, view) : '—'}</td>
+                                </tr>
+                              )
+                            })
+                          })()}
                         </tbody>
                       </table>
                     </div>

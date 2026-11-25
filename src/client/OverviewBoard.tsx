@@ -15,7 +15,7 @@ import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { AssociationStorageError, AuxSummary, CostState, PricingUnavailableReason, UsageDayRow, UsageHourRow, UsageTotals } from '../wire.ts'
 import { costsAvailable } from './PricingStatus.tsx'
 import { PricingStatus } from './PricingStatus.tsx'
-import { StatCard, RequestsStatCard, OverheadPill } from './StatCard.tsx'
+import { BUCKET_DOTS, KPI_ICONS, StatCard, RequestsStatCard, OverheadPill } from './StatCard.tsx'
 import { TrendChart } from './TrendChart.tsx'
 import { HitRateText } from './HitRateText.tsx'
 import type { CurrencyView } from './format.ts'
@@ -118,16 +118,17 @@ export function OverviewBoard({
                   onOverheadActivate,
                 })}
             size={cardSize}
+            icon={KPI_ICONS.requests}
             t={t}
           />
         </div>
-        <StatCard size={cardSize} label={t('stat.cost')} value={costsAvailable(costState) ? formatCost(totalCost, view) : '—'} />
-        <StatCard size={cardSize} label={t('stat.totalTokens')} value={formatTokens(totalTokens(total))} />
-        <StatCard size={cardSize} label={t('stat.hitRate')} value={<HitRateText totals={total} />} />
-        <StatCard size={cardSize} label={t('stat.input')} value={formatTokens(total.inputTokens)} />
-        <StatCard size={cardSize} label={t('stat.output')} value={formatTokens(total.outputTokens)} />
-        <StatCard size={cardSize} label={t('stat.cacheRead')} value={formatTokens(total.cacheReadTokens)} />
-        <StatCard size={cardSize} label={t('stat.cacheWrite')} value={formatTokens(total.cacheWriteTokens)} />
+        <StatCard size={cardSize} icon={KPI_ICONS.cost} accent="cost" label={t('stat.cost')} value={costsAvailable(costState) ? formatCost(totalCost, view) : '—'} />
+        <StatCard size={cardSize} icon={KPI_ICONS.tokens} label={t('stat.totalTokens')} value={formatTokens(totalTokens(total))} />
+        <StatCard size={cardSize} icon={KPI_ICONS.hit} accent="hit" label={t('stat.hitRate')} value={<HitRateText totals={total} />} />
+        <StatCard size={cardSize} icon={BUCKET_DOTS.input} label={t('stat.input')} value={formatTokens(total.inputTokens)} />
+        <StatCard size={cardSize} icon={BUCKET_DOTS.output} label={t('stat.output')} value={formatTokens(total.outputTokens)} />
+        <StatCard size={cardSize} icon={BUCKET_DOTS.cacheRead} label={t('stat.cacheRead')} value={formatTokens(total.cacheReadTokens)} />
+        <StatCard size={cardSize} icon={BUCKET_DOTS.cacheWrite} label={t('stat.cacheWrite')} value={formatTokens(total.cacheWriteTokens)} />
       </div>
       <PricingStatus costState={costState} pricingUnavailableReason={pricingUnavailableReason} associationStorageError={associationStorageError} t={t} />
       <div className={styles['trendCard']}>

@@ -8,14 +8,67 @@
  * shrink inside a grid without overflowing (a fixed min-width would
  * break the responsive collapse the section's grid relies on). */
 .card {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 2px;
   padding: 10px 12px;
   border: 1px solid var(--dsw-alias-border-l1);
   border-radius: 8px;
-  background: var(--dsw-alias-fill-container, transparent);
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--dsw-alias-label-primary) 3.2%, transparent) 0%,
+      transparent 65%
+    ),
+    var(--dsw-alias-fill-container, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--dsw-alias-label-primary) 4.5%, transparent);
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, background-color 0.18s ease;
   min-width: 0;
+}
+
+.card:hover {
+  border-color: var(--dsw-alias-border-l2);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--dsw-alias-label-primary) 8%, transparent),
+    0 2px 10px color-mix(in srgb, var(--dsw-alias-label-primary) 3.5%, transparent);
+}
+
+/* Subtle top-left ambient wash for headline KPI cards so the six-tile row
+ * gains quiet visual hierarchy without breaking the host's muted palette. */
+.cardAccentCost {
+  background:
+    radial-gradient(
+      150px 72px at 14% 0%,
+      color-mix(in srgb, light-dark(#b45309, #f59e0b) 8.5%, transparent),
+      transparent 75%
+    ),
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--dsw-alias-label-primary) 3.2%, transparent) 0%,
+      transparent 65%
+    ),
+    var(--dsw-alias-fill-container, transparent);
+  border-color: color-mix(in srgb, light-dark(#b45309, #f59e0b) 22%, var(--dsw-alias-border-l1));
+}
+
+.cardAccentCost:hover {
+  border-color: color-mix(in srgb, light-dark(#b45309, #f59e0b) 36%, var(--dsw-alias-border-l2));
+}
+
+.cardAccentHit {
+  background:
+    radial-gradient(
+      150px 72px at 14% 0%,
+      color-mix(in srgb, var(--dsw-alias-state-success-primary, #16a34a) 8%, transparent),
+      transparent 75%
+    ),
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--dsw-alias-label-primary) 3.2%, transparent) 0%,
+      transparent 65%
+    ),
+    var(--dsw-alias-fill-container, transparent);
 }
 
 /* The page's wide-column variant, at the v3 demo's figures: 20px values
@@ -64,6 +117,18 @@
   padding-inline: 4px;
 }
 
+.cardSm .cardLabelIcon {
+  width: 10px;
+  height: 10px;
+  margin-right: 4px;
+  vertical-align: -1.5px;
+}
+
+.cardSm .cardLabelIcon svg {
+  width: 10px;
+  height: 10px;
+}
+
 .cardSm .failBare {
   font-size: 10px;
 }
@@ -83,6 +148,42 @@
   flex: 0 1 auto;
   min-width: 0;
 }
+
+.cardLabelIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  vertical-align: -2px;
+  margin-right: 5px;
+  width: 12px;
+  height: 12px;
+  color: var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary));
+  opacity: 0.72;
+  transition: opacity 0.18s ease, color 0.18s ease;
+}
+
+.cardLabelIcon svg {
+  width: 12px;
+  height: 12px;
+  display: block;
+}
+
+.card:hover .cardLabelIcon {
+  opacity: 0.95;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.bucketDot {
+  display: block;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+}
+
+.bucketDotInput { background: light-dark(#2563eb, #60a5fa); }
+.bucketDotOutput { background: light-dark(#7c3aed, #a78bfa); }
+.bucketDotCacheRead { background: var(--dsw-alias-state-success-primary, #16a34a); }
+.bucketDotCacheWrite { background: light-dark(#b45309, #d9ac64); }
 
 /* The label: small, secondary color, ellipsized when the card narrows. */
 .cardLabel {

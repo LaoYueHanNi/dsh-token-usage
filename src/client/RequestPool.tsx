@@ -17,7 +17,7 @@
  * @module token-usage/client/RequestPool
  */
 
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
@@ -295,13 +295,13 @@ const POOL_COL_FLOOR_CACHE_WRITE = 56
 /** One history row: the metrics stay in the visible order cache hit, input,
  * output, cache read, optional cache write, first token, latency, speed, cost.
  * Numbers right-aligned via the shared table CSS. */
-function PoolRow({ detail, focusId, view, showCacheWrite, t }: { detail: RequestDetailView; focusId: string; view: CurrencyView; showCacheWrite: boolean; t: TranslateNS<'token-usage'> }): ReactNode {
+function PoolRow({ detail, focusId, view, showCacheWrite, fresh, t }: { detail: RequestDetailView; focusId: string; view: CurrencyView; showCacheWrite: boolean; fresh: boolean; t: TranslateNS<'token-usage'> }): ReactNode {
   const origin = detail.sessionId === focusId
   const time = detail.orderBasis === 'record'
     ? detail.recordTime ?? detail.orderAt
     : detail.startedAt ?? detail.orderAt
   return (
-    <tr>
+    <tr className={fresh ? styles['poolRowFresh'] : undefined}>
       <td data-label={t('pool.col.origin')} className={styles['poolOrigin']}>{t(origin ? 'pool.origin.self' : 'pool.origin.child')}</td>
       <td data-label={t('pool.col.state')} className={`${styles['poolState']} ${stateClassOf(detail.state)}`}>{stateTextOf(detail, t)}</td>
       <td data-label={t('pool.col.time')} className={styles['poolTime']}><time dateTime={new Date(time).toISOString()}>{formatTimeOfDay(time)}</time></td>
@@ -319,6 +319,21 @@ function PoolRow({ detail, focusId, view, showCacheWrite, t }: { detail: Request
   )
 }
 
+/** Ambient glow class for the latest-request hero card: reflects lifecycle
+ * and cache-hit tone without adding extra chrome. */
+function latestGlowClassOf(detail: RequestDetailView): string {
+  if (detail.state === 'failed') return styles['latestGlowError'] ?? ''
+  if (detail.state === 'waiting' || detail.state === 'streaming') return styles['latestGlowLive'] ?? ''
+  if (detail.cache.band === 'loss' || detail.state === 'cancelled' || detail.state === 'interrupted') {
+    return styles['latestGlowWarn'] ?? ''
+  }
+  if (detail.cache.rate !== undefined) {
+    const band = bandOf(detail.cache.rate)
+    if (band === 'healthy' || band === 'lime') return styles['latestGlowGood'] ?? ''
+  }
+  return ''
+}
+
 /**
  * Both request-pool sections: the latest panel and the history table. The
  * panel renders even for an empty pool (the empty prompt) — a session with
@@ -332,6 +347,43 @@ export function RequestPoolSections({ details, focusId, view, staleAt, t }: Requ
   const showCacheWrite = items.some(item => item.cacheWriteTokens !== undefined)
   const colFloors = showCacheWrite ? [...POOL_COL_FLOORS, POOL_COL_FLOOR_CACHE_WRITE] : POOL_COL_FLOORS
   const beyond = Math.max(0, activeCount - items.filter(item => item.state === 'waiting' || item.state === 'streaming').length)
+  // Arrival micro-motion: ignore the initial snapshot and focus switches,
+  // then highlight newly demoted history rows and gently lift a new latest
+  // request without unmounting the panel DOM.
+  const seenFocusRef = useRef<string | undefined>(undefined)
+  const seenHistoryRef = useRef<Set<string>>(new Set())
+  const prevLatestIdRef = useRef<string | undefined>(undefined)
+  const freshTimerRef = useRef<number | undefined>(undefined)
+  const [freshIds, setFreshIds] = useState<ReadonlySet<string>>(() => new Set())
+  const [latestArriveSlot, setLatestArriveSlot] = useState<0 | 1 | 2>(0)
+  const latestId = latest?.id
+  const historyKey = history.map(item => item.id).join('\n')
+  useEffect(() => () => window.clearTimeout(freshTimerRef.current), [])
+  useEffect(() => {
+    const ids = historyKey === '' ? [] : historyKey.split('\n')
+    if (seenFocusRef.current !== focusId) {
+      seenFocusRef.current = focusId
+      seenHistoryRef.current = new Set(ids)
+      prevLatestIdRef.current = latestId
+      window.clearTimeout(freshTimerRef.current)
+      setFreshIds(prev => (prev.size === 0 ? prev : new Set()))
+      setLatestArriveSlot(0)
+      return
+    }
+    const newlyAdded = ids.filter(id => !seenHistoryRef.current.has(id))
+    for (const id of ids) seenHistoryRef.current.add(id)
+    if (newlyAdded.length > 0) {
+      setFreshIds(new Set(newlyAdded))
+      window.clearTimeout(freshTimerRef.current)
+      freshTimerRef.current = window.setTimeout(() => {
+        setFreshIds(new Set())
+      }, 1_200)
+    }
+    if (latestId !== undefined && prevLatestIdRef.current !== undefined && latestId !== prevLatestIdRef.current) {
+      setLatestArriveSlot(slot => (slot === 1 ? 2 : 1))
+    }
+    prevLatestIdRef.current = latestId
+  }, [focusId, latestId, historyKey])
   // Scrollbar fade: the wrapper's thumb tints in only while the pane is
   // being scrolled, then fades back 800ms after the last event (the timer
   // dies with the component). Direct classList writes — no re-render.
@@ -373,11 +425,19 @@ export function RequestPoolSections({ details, focusId, view, staleAt, t }: Requ
                 : notice?.tone === 'neutral'
                   ? styles['requestNoteNeutral'] ?? ''
                   : ''}`
+              const latestClass = [
+                styles['latestPanel'],
+                latestGlowClassOf(latest),
+                latestArriveSlot === 1 ? styles['latestArriveA'] : latestArriveSlot === 2 ? styles['latestArriveB'] : '',
+              ].filter(Boolean).join(' ')
+              const dotClass = inFlight
+                ? `${styles['statusDot']} ${styles['statusDotLive']}`
+                : styles['statusDot']
               return (
-                <div className={styles['latestPanel']}>
+                <div className={latestClass}>
                   <div className={styles['requestIdentity']}>
                     <span className={styles['poolBadge']}>{t(origin ? 'pool.origin.self' : 'pool.origin.child')}</span>
-                    <span className={`${styles['poolState']} ${stateClassOf(latest.state)}`}><span className={styles['statusDot']} aria-hidden="true" />{stateTextOf(latest, t)}</span>
+                    <span className={`${styles['poolState']} ${stateClassOf(latest.state)}`}><span className={dotClass} aria-hidden="true" />{stateTextOf(latest, t)}</span>
                     <ModelCell detail={latest} cache={latest.cache} t={t} />
                     <span className={styles['poolContext']}><time dateTime={new Date(time).toISOString()}>{formatTimeOfDay(time)}</time></span>
                   </div>
@@ -477,7 +537,7 @@ export function RequestPoolSections({ details, focusId, view, staleAt, t }: Requ
                   </tr>
                 </thead>
                 <tbody>
-                  {history.map(detail => <PoolRow key={detail.id} detail={detail} focusId={focusId} view={view} showCacheWrite={showCacheWrite} t={t} />)}
+                  {history.map(detail => <PoolRow key={detail.id} detail={detail} focusId={focusId} view={view} showCacheWrite={showCacheWrite} fresh={freshIds.has(detail.id)} t={t} />)}
                 </tbody>
               </table>
             </div>

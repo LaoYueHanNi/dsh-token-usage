@@ -147,31 +147,77 @@
   gap: 10px;
 }
 
-/* Band 1b: the four token buckets as one strip. */
+/* Band 1b: the four token buckets as one strip with quiet semantic dots. */
 .tokenStrip {
   display: flex;
-  gap: 18px;
+  gap: 8px 18px;
   flex-wrap: wrap;
   font-size: 12px;
   color: var(--dsw-alias-label-secondary);
-  padding: 6px 2px 0;
+  padding: 2px 2px 0;
 }
+
+.bucketItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.bucketDot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  flex: none;
+  opacity: 0.78;
+}
+
+.bucketDotInput { background: light-dark(#2563eb, #60a5fa); }
+.bucketDotOutput { background: light-dark(#7c3aed, #a78bfa); }
+.bucketDotCacheRead { background: var(--dsw-alias-state-success-primary, #16a34a); }
+.bucketDotCacheWrite { background: light-dark(#b45309, #d9ac64); }
 
 .tokenStrip b {
   color: var(--dsw-alias-label-primary);
   font-variant-numeric: tabular-nums;
 }
 
-/* Band 2: chart (left, wider) + per-model table (right) on a wide pane. */
+/* Band 2: chart (left, wider) + per-model table (right) as paired Bento cards
+ * sharing the same tile chrome and top-edge highlight as the KPI and latest cards. */
 .mid {
   display: grid;
   grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
-  gap: 24px;
-  align-items: start;
+  gap: 12px;
+  align-items: stretch;
 }
 
 .chartCol,
-.modelCol,
+.modelCol {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 9px;
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--dsw-alias-label-primary) 2.6%, transparent) 0%,
+      transparent 55%
+    ),
+    var(--dsw-alias-fill-container, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--dsw-alias-label-primary) 4%, transparent);
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.chartCol:hover,
+.modelCol:hover {
+  border-color: var(--dsw-alias-border-l2);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--dsw-alias-label-primary) 7%, transparent),
+    0 2px 10px color-mix(in srgb, var(--dsw-alias-label-primary) 3%, transparent);
+}
+
 .subagents {
   display: flex;
   flex-direction: column;
@@ -350,8 +396,39 @@
   text-overflow: ellipsis;
 }
 
+.modelCellStack {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
 .modelIdentity { display: inline-flex; align-items: center; gap: 4px; max-width: 180px; }
 .modelName { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+
+/* Inline share bar under each model name: fills proportionally to cost
+ * (or token) share so single- and multi-model cards both carry visual weight. */
+.modelShareTrack {
+  display: block;
+  width: 100%;
+  max-width: 120px;
+  height: 2px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--dsw-alias-label-primary) 9%, transparent);
+  overflow: hidden;
+}
+
+.modelShareFill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--dsw-alias-link-primary, var(--dsw-alias-label-primary)) 58%, transparent);
+  transition: width 0.25s ease, background-color 0.18s ease;
+}
+
+.table tbody tr:hover .modelShareFill {
+  background: color-mix(in srgb, var(--dsw-alias-link-primary, var(--dsw-alias-label-primary)) 82%, transparent);
+}
 
 /* The subagent table's name column. Wider than the model table's
  * `.modelCell`: descriptions fit cleanly on one line and ellipsis when they
@@ -467,11 +544,89 @@
 }
 
 .latestPanel {
+  position: relative;
   border: 1px solid var(--dsw-alias-border-l1);
   border-radius: 9px;
-  background: var(--dsw-alias-fill-container, transparent);
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--dsw-alias-label-primary) 3.2%, transparent) 0%,
+      transparent 55%
+    ),
+    var(--dsw-alias-fill-container, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--dsw-alias-label-primary) 5%, transparent);
   padding: 14px 16px;
   min-width: 0;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.latestPanel:hover {
+  border-color: var(--dsw-alias-border-l2);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--dsw-alias-label-primary) 8.5%, transparent),
+    0 3px 14px color-mix(in srgb, var(--dsw-alias-label-primary) 4%, transparent);
+}
+
+/* Soft top-left ambient wash keyed to the latest request's state/cache tone. */
+.latestGlowGood {
+  background:
+    radial-gradient(
+      380px 130px at 8% 0%,
+      color-mix(in srgb, var(--dsw-alias-state-success-primary, #16a34a) 8%, transparent),
+      transparent 72%
+    ),
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--dsw-alias-label-primary) 2.8%, transparent) 0%,
+      transparent 55%
+    ),
+    var(--dsw-alias-fill-container, transparent);
+}
+
+.latestGlowLive {
+  background:
+    radial-gradient(
+      380px 130px at 8% 0%,
+      color-mix(in srgb, var(--dsw-alias-link-primary, #3b82f6) 10%, transparent),
+      transparent 72%
+    ),
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--dsw-alias-label-primary) 2.8%, transparent) 0%,
+      transparent 55%
+    ),
+    var(--dsw-alias-fill-container, transparent);
+  border-color: color-mix(in srgb, var(--dsw-alias-link-primary, #3b82f6) 28%, var(--dsw-alias-border-l1));
+}
+
+.latestGlowWarn {
+  background:
+    radial-gradient(
+      380px 130px at 8% 0%,
+      color-mix(in srgb, light-dark(#b45309, #d9ac64) 9%, transparent),
+      transparent 72%
+    ),
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--dsw-alias-label-primary) 2.8%, transparent) 0%,
+      transparent 55%
+    ),
+    var(--dsw-alias-fill-container, transparent);
+}
+
+.latestGlowError {
+  background:
+    radial-gradient(
+      380px 130px at 8% 0%,
+      color-mix(in srgb, var(--dsw-alias-state-error-primary, #dc2626) 9%, transparent),
+      transparent 72%
+    ),
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--dsw-alias-label-primary) 2.8%, transparent) 0%,
+      transparent 55%
+    ),
+    var(--dsw-alias-fill-container, transparent);
 }
 
 /* Identity row: origin badge, state pill, model + cache label (one
@@ -500,8 +655,25 @@
   white-space: nowrap;
 }
 
-.requestIdentity .poolState { display: inline-flex; align-items: center; gap: 5px; }
-.statusDot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; flex: none; }
+.requestIdentity .poolState { display: inline-flex; align-items: center; gap: 6px; }
+.statusDot {
+  position: relative;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 6px color-mix(in srgb, currentColor 42%, transparent);
+  flex: none;
+}
+.statusDotLive::after {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  border: 1.5px solid currentColor;
+  opacity: 0;
+  pointer-events: none;
+}
 .latestPanel .modelName { font-size: 13px; font-weight: 500; }
 
 .stateDone { color: var(--dsw-alias-state-success-primary, #16a34a); }
@@ -727,16 +899,69 @@
   background-color: var(--dsw-interactive-bg-hover);
 }
 
-/* A new arrival lifts in gently; reduced-motion users get the plain swap.
- * The table itself never re-renders as a whole-flash. */
+/* A new arrival lifts in gently, live status dots pulse softly, and newly
+ * demoted history rows flash once; reduced-motion users get the plain swap. */
 @media (prefers-reduced-motion: no-preference) {
   .latestPanel {
     animation: pool-arrive 0.25s ease-out;
   }
 
+  .latestArriveA {
+    animation: pool-arrive-a 0.45s ease-out;
+  }
+
+  .latestArriveB {
+    animation: pool-arrive-b 0.45s ease-out;
+  }
+
+  .statusDotLive::after {
+    animation: status-dot-pulse 1.8s cubic-bezier(0.2, 0.7, 0.3, 1) infinite;
+  }
+
+  .poolRowFresh {
+    animation: pool-row-fresh 1.1s ease-out;
+  }
+
   @keyframes pool-arrive {
-    from { opacity: 0.4; }
+    from { opacity: 0.45; }
     to { opacity: 1; }
+  }
+
+  @keyframes pool-arrive-a {
+    0% {
+      opacity: 0.78;
+      border-color: color-mix(in srgb, var(--dsw-alias-link-primary, var(--dsw-alias-label-primary)) 45%, var(--dsw-alias-border-l1));
+    }
+    100% { opacity: 1; }
+  }
+
+  @keyframes pool-arrive-b {
+    0% {
+      opacity: 0.78;
+      border-color: color-mix(in srgb, var(--dsw-alias-link-primary, var(--dsw-alias-label-primary)) 45%, var(--dsw-alias-border-l1));
+    }
+    100% { opacity: 1; }
+  }
+
+  @keyframes status-dot-pulse {
+    0% {
+      transform: scale(0.75);
+      opacity: 0.7;
+    }
+    75%,
+    100% {
+      transform: scale(2.1);
+      opacity: 0;
+    }
+  }
+
+  @keyframes pool-row-fresh {
+    0% {
+      background-color: color-mix(in srgb, var(--dsw-alias-link-primary, var(--dsw-alias-label-primary)) 13%, transparent);
+    }
+    100% {
+      background-color: transparent;
+    }
   }
 }
 

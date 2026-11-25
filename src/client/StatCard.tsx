@@ -22,6 +22,34 @@ import type { UsageAuxKindRow } from '../wire.ts'
 import { failuresTooltip, overheadTooltip } from './format.ts'
 import styles from './StatCard.module.css'
 
+/** Shared 12px linear icons for headline KPI cards across both the session
+ * view and the cross-session overview board (inline SVG, theme-inherited). */
+const KPI_ICON_PROPS = {
+  viewBox: '0 0 16 16',
+  fill: 'none',
+  stroke: 'currentColor',
+  strokeWidth: '1.5',
+  strokeLinecap: 'round' as const,
+  strokeLinejoin: 'round' as const,
+}
+
+export const KPI_ICONS = {
+  requests: <svg {...KPI_ICON_PROPS}><path d="M2 8h2.5l1.8-4.2 3.2 8.4L11.5 8H14" /></svg>,
+  cost: <svg {...KPI_ICON_PROPS}><circle cx="8" cy="8" r="5.5" /><path d="M8 5v6M6.2 6.8h3.1a1.2 1.2 0 0 1 0 2.4H6.5" /></svg>,
+  tokens: <svg {...KPI_ICON_PROPS}><path d="M8 2.5 13.5 5.5 8 8.5 2.5 5.5 8 2.5Z" /><path d="M2.5 8.5 8 11.5l5.5-3" /><path d="M2.5 11.2 8 14.2l5.5-3" /></svg>,
+  hit: <svg {...KPI_ICON_PROPS}><path d="M9 1.8 3.5 9h4.2L7 14.2 12.5 7H8.3L9 1.8Z" /></svg>,
+  ttft: <svg {...KPI_ICON_PROPS}><circle cx="8" cy="9" r="5" /><path d="M8 6.5V9l1.8 1.2M6.2 2h3.6" /></svg>,
+  speed: <svg {...KPI_ICON_PROPS}><path d="M3 11.5a5.5 5.5 0 1 1 10 0" /><path d="m8 9.5 2.6-2.8" /><circle cx="8" cy="10" r="1" fill="currentColor" stroke="none" /></svg>,
+} as const
+
+/** Quiet 5px semantic dots for the four token-bucket cards on the overview board. */
+export const BUCKET_DOTS = {
+  input: <span className={`${styles['bucketDot']} ${styles['bucketDotInput']}`} />,
+  output: <span className={`${styles['bucketDot']} ${styles['bucketDotOutput']}`} />,
+  cacheRead: <span className={`${styles['bucketDot']} ${styles['bucketDotCacheRead']}`} />,
+  cacheWrite: <span className={`${styles['bucketDot']} ${styles['bucketDotCacheWrite']}`} />,
+} as const
+
 /** One labelled figure inside a card. */
 export interface StatCardProps {
   /** The small secondary line ("token cost", "hit rate", "总 token"). */
@@ -39,22 +67,35 @@ export interface StatCardProps {
    * card's overhead pill. The narrow tile would wrap a pill on the
    * value line and stretch the whole grid row; up here it fits. */
   labelExtra?: ReactNode | undefined
+  /** Optional subtle 12px linear icon leading the label line. */
+  icon?: ReactNode | undefined
+  /** Optional subtle visual hierarchy accent for primary KPI cards. */
+  accent?: 'cost' | 'hit' | undefined
 }
 
 /**
  * Render one stat card. The value uses the standard label-primary color.
  * The label clamps to one line and ellipsizes if the column is squeezed.
  */
-export function StatCard({ label, value, size, labelExtra }: StatCardProps): ReactNode {
-  const card = size === 'lg' ? `${styles['card']} ${styles['cardLg']}`
-    : size === 'sm' ? `${styles['card']} ${styles['cardSm']}` : styles['card']
+export function StatCard({ label, value, size, labelExtra, icon, accent }: StatCardProps): ReactNode {
+  const sizeClass = size === 'lg' ? styles['cardLg']
+    : size === 'sm' ? styles['cardSm'] : undefined
+  const accentClass = accent === 'cost' ? styles['cardAccentCost']
+    : accent === 'hit' ? styles['cardAccentHit'] : undefined
+  const card = [styles['card'], sizeClass, accentClass].filter(Boolean).join(' ')
+  const labelNode = (
+    <span className={styles['cardLabel']}>
+      {icon !== undefined && <span className={styles['cardLabelIcon']} aria-hidden="true">{icon}</span>}
+      {label}
+    </span>
+  )
   return (
     <div className={card}>
       {labelExtra === undefined
-        ? <span className={styles['cardLabel']}>{label}</span>
+        ? labelNode
         : (
           <span className={styles['cardLabelRow']}>
-            <span className={styles['cardLabel']}>{label}</span>
+            {labelNode}
             {labelExtra}
           </span>
         )}
@@ -142,6 +183,8 @@ export interface RequestsStatCardProps {
   /** Bare-text failure count (no capsule): the compact lead card's value
    * line — a six-digit count plus a capsule overruns the narrow tile. */
   failureBare?: boolean | undefined
+  /** Optional subtle 12px linear icon leading the label line. */
+  icon?: ReactNode | undefined
 }
 
 /**
@@ -161,12 +204,14 @@ export function RequestsStatCard({
   size,
   labelExtra,
   failureBare = false,
+  icon,
 }: RequestsStatCardProps): ReactNode {
   return (
     <StatCard
       label={t('stat.requests')}
       size={size}
       labelExtra={labelExtra}
+      icon={icon}
       value={(
         <>
           <span className={styles['cardValueMain']}>{requests.toLocaleString()}</span>
