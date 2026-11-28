@@ -1,4 +1,6 @@
-# 推送版本 tag 触发 npm 发布：校验 tag 与 package.json 版本一致，rc 版自动挂 next 标签，启用 provenance。
+# 推送版本 tag 触发 npm 发布并同步创建 GitHub Release：
+# 校验 tag 与 package.json 版本一致，rc 版自动挂 next 标签，启用 provenance；
+# 发布成功后优先从 CHANGELOG.md 提取对应版本说明创建 GitHub Release（缺失时自动降级为 --generate-notes）。
 # 认证走 npm Trusted Publishing（OIDC）：包侧已信任本仓库的 publish.yml，无需在 Secrets 存 NPM_TOKEN。
 name: publish
 
@@ -9,7 +11,7 @@ on:
       - "[0-9]*"
 
 permissions:
-  contents: read
+  contents: write # 创建或更新 GitHub Release
   id-token: write # npm provenance 需要 OIDC
 
 concurrency:
@@ -63,3 +65,33 @@ jobs:
             ARGS+=(--tag next)
           fi
           npm publish "${ARGS[@]}"
+
+      - name: 创建或更新 GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          TITLE="v${PKG_VERSION}"
+          NOTES_FILE="$(mktemp)"
+          USE_NOTES_FILE=false
+          if node scripts/release-notes.mjs "$PKG_VERSION" > "$NOTES_FILE"; then
+            USE_NOTES_FILE=true
+          else
+            echo "::warning::CHANGELOG.md 中未找到版本 ${PKG_VERSION} 的更新说明，已降级使用 GitHub 自动生成的 Release Notes"
+          fi
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            if [ "$USE_NOTES_FILE" = "true" ]; then
+              gh release edit "$TAG" --title "$TITLE" --notes-file "$NOTES_FILE"
+            fi
+          else
+            ARGS=("$TAG" --title "$TITLE")
+            if [[ "$PKG_VERSION" == *-* ]]; then
+              ARGS+=(--prerelease)
+            fi
+            if [ "$USE_NOTES_FILE" = "true" ]; then
+              ARGS+=(--notes-file "$NOTES_FILE")
+            else
+              ARGS+=(--generate-notes)
+            fi
+            gh release create "${ARGS[@]}"
